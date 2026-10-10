@@ -1,0 +1,185 @@
+package postgres_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/edgar/inventario/backend/internal/identity/adapters/postgres"
+	"github.com/edgar/inventario/backend/internal/identity/app"
+	"github.com/edgar/inventario/backend/internal/identity/domain"
+	"github.com/edgar/inventario/backend/internal/platform/db"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func setup(t *testing.T) (*postgres.Repo, *pgxpool.Pool) {
+	t.Helper()
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping PostgreSQL integration tests")
+	}
+	ctx := context.Background()
+	if err := db.Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `TRUNCATE refresh_tokens, users CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	return postgres.New(pool), pool
+}
+
+func mkUser(t *testing.T, r *postgres.Repo, email string, role domain.Role) domain.User {
+	t.Helper()
+	u := domain.User{Name: "N", Email: email, PasswordHash: "hash", Role: role, Active: true}
+	if err := r.Create(context.Background(), &u); err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func TestUserCRUDAndUniqueness(t *testing.T) {
+	r, _ := setup(t)
+	ctx := context.Background()
+	u := mkUser(t, r, "ana@example.com", domain.RoleViewer)
+	if !domain.ValidID(u.ID) || u.CreatedAt.IsZero() {
+		t.Fatalf("created = %+v", u)
+	}
+	dup := domain.User{Name: "X", Email: "ANA@example.com", PasswordHash: "h", Role: domain.RoleViewer, Active: true}
+	if err := r.Create(ctx, &dup); !errors.Is(err, domain.ErrEmailTaken) {
+		t.Fatalf("duplicate: %v", err)
+	}
+	got, err := r.GetByEmail(ctx, "Ana@Example.com")
+	if err != nil || got.ID != u.ID {
+		t.Fatalf("by email: %+v %v", got, err)
+	}
+	if _, err := r.GetByID(ctx, "00000000-0000-4000-8000-000000000000"); !errors.Is(err, domain.ErrUserNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+	if n, _ := r.Count(ctx); n != 1 {
+		t.Fatalf("count = %d", n)
+	}
+	list, _ := r.List(ctx)
+	if len(list) != 1 {
+		t.Fatalf("list = %d", len(list))
+	}
+}
+
+func TestMutateEnforcesInvariantAtomically(t *testing.T) {
+	r, _ := setup(t)
+	ctx := context.Background()
+	a1 := mkUser(t, r, "a1@example.com", domain.RoleAdmin)
+	a2 := mkUser(t, r, "a2@example.com", domain.RoleAdmin)
+
+	// Two admins try to demote each other concurrently: exactly one may win.
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, id := range []string{a1.ID, a2.ID} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = r.Mutate(ctx, id, func(u *domain.User, admins int) error {
+				if err := u.CanChangeTo(domain.RoleViewer, true, admins); err != nil {
+					return err
+				}
+				u.Role = domain.RoleViewer
+				return nil
+			})
+		}()
+	}
+	wg.Wait()
+	failures := 0
+	for _, err := range errs {
+		if errors.Is(err, domain.ErrLastAdmin) {
+			failures++
+		} else if err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	}
+	if failures != 1 {
+		t.Fatalf("expected exactly one ErrLastAdmin, got %d (%v)", failures, errs)
+	}
+	list, _ := r.List(ctx)
+	admins := 0
+	for _, u := range list {
+		if u.Role == domain.RoleAdmin {
+			admins++
+		}
+	}
+	if admins != 1 {
+		t.Fatalf("admins left = %d, want 1", admins)
+	}
+}
+
+func TestMutateRollbackOnError(t *testing.T) {
+	r, _ := setup(t)
+	ctx := context.Background()
+	u := mkUser(t, r, "ana@example.com", domain.RoleViewer)
+	boom := errors.New("boom")
+	if _, err := r.Mutate(ctx, u.ID, func(x *domain.User, _ int) error { x.Name = "Changed"; return boom }); !errors.Is(err, boom) {
+		t.Fatal(err)
+	}
+	got, _ := r.GetByID(ctx, u.ID)
+	if got.Name != "N" {
+		t.Fatalf("name = %q, change leaked", got.Name)
+	}
+	if _, err := r.Mutate(ctx, "00000000-0000-4000-8000-000000000000", func(*domain.User, int) error { return nil }); !errors.Is(err, domain.ErrUserNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+}
+
+func TestRefreshTokenLifecycle(t *testing.T) {
+	r, pool := setup(t)
+	ctx := context.Background()
+	u := mkUser(t, r, "ana@example.com", domain.RoleViewer)
+	tokens := r.Tokens()
+	exp := time.Now().Add(time.Hour)
+
+	if err := tokens.Create(ctx, app.RefreshToken{UserID: u.ID, TokenHash: "h1", ExpiresAt: exp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tokens.Create(ctx, app.RefreshToken{UserID: u.ID, TokenHash: "h2", ExpiresAt: exp}); err != nil {
+		t.Fatal(err)
+	}
+	t1, err := tokens.GetByHash(ctx, "h1")
+	if err != nil || t1.RevokedAt != nil || t1.UserID != u.ID {
+		t.Fatalf("get: %+v %v", t1, err)
+	}
+	if _, err := tokens.GetByHash(ctx, "missing"); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("missing: %v", err)
+	}
+	if ok, err := tokens.Revoke(ctx, t1.ID, time.Now()); !ok || err != nil {
+		t.Fatalf("first revoke: %v %v", ok, err)
+	}
+	if ok, _ := tokens.Revoke(ctx, t1.ID, time.Now()); ok {
+		t.Fatal("second revoke must report false")
+	}
+	if err := tokens.RevokeAllForUser(ctx, u.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	t2, _ := tokens.GetByHash(ctx, "h2")
+	if t2.RevokedAt == nil {
+		t.Fatal("h2 not revoked")
+	}
+	// Deleting the user cascades to tokens.
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1::uuid`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tokens.GetByHash(ctx, "h1"); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("token should cascade-delete: %v", err)
+	}
+}
+
+func TestMigrateIsIdempotent(t *testing.T) {
+	setup(t)
+	if err := db.Migrate(context.Background(), os.Getenv("TEST_DATABASE_URL")); err != nil {
+		t.Fatal(err)
+	}
+}
