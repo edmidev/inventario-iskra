@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-inventario}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inventario}
+      POSTGRES_DB: ${POSTGRES_DB:-inventario}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-inventario}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-inventario}:${POSTGRES_PASSWORD:-inventario}@db:5432/${POSTGRES_DB:-inventario}?sslmode=disable
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    depends_on:
+      - api
+
+volumes:
+  db-data:

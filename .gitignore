@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.xlsx
+backend/bin/
+*.test
+coverage/
+.DS_Store
