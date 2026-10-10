@@ -91,6 +91,19 @@ Loans and returns live in the `custody` module (`POST /api/v1/items/{id}/assign`
 - While an item is on loan custody owns its location: deleting it or changing `location_id` through `PATCH /items/{id}` returns 409 `item_on_loan`.
 - Operators and admins assign and return (`items:write`); every role reads an item's history and `GET /custody/active` (overdue first, then oldest; filters `assignee_location_id`, `overdue=true`, `q`; `limit` max 100, default 25, `offset`).
 
+## Maintenance
+
+Preventive maintenance and the failure/repair flow live in the `maintenance` module (`POST|GET /api/v1/items/{id}/maintenance`, `PATCH /maintenance/{id}`, `POST /maintenance/{id}/close`, `GET /maintenance`, `GET /maintenance/due`; see `openapi/openapi.yaml`). No new environment variables; migration `00006` creates `maintenance_records`. It replaces the "Inactivos y Reparación" sheet: failure date, description and destination (for example "Taller de Reparación Interno" or "Espera de Repuestos") are fields of a failure record.
+
+- Only `asset` items have maintenance (consumables: 422 `not_applicable`); soft-deleted items return 404. Records are never deleted.
+- **Report failure** (`kind: corrective`): creates an *open* record (`reported_at` defaults to now and cannot be in the future) and sets the item to `inoperative` (default) or `in_repair` (`item_status`). A second open failure for the same item is 409 `open_failure_exists`; a partial unique index (`maintenance_records_one_open_failure_per_item`) guarantees at most one, so parallel reports yield exactly one 201. Reporting works while the item is on loan: custody is not touched and the item can still be returned.
+- **Edit** (`PATCH`): description, destination (`null` clears it) and moving the item between `inoperative` and `in_repair`. **Close** (`POST .../close`): optional `closed_at`, `cost`, `resolution_note` and `item_status_after` (`functional` by default, or `inoperative`); a functional item gets `last_maintenance_at = closed_at`. Closed records are immutable (409 `record_closed`).
+- **Register preventive** (`kind: preventive`): created closed with `performed_at` (default now, not in the future), optional `cost` and `next_due_at` (derived as `performed_at` + `maintenance_interval_days` when omitted); sets `last_maintenance_at` (never moving it backwards) and does not change the item's status.
+- Every write locks the item row (`SELECT ... FOR UPDATE`) and updates the record and the `items` row (`status` / `last_maintenance_at`) in one transaction; maintenance writes the `items` columns with adapter-level SQL and never imports the catalog domain or app.
+- Due maintenance is derived, never stored: an asset with `maintenance_interval_days` is due at `COALESCE(last_maintenance_at, created_at) + interval` (24-hour days) and overdue once that is in the past. Item responses add `maintenance_due_at` (null without an interval) and `maintenance_overdue`. `GET /maintenance/due` lists overdue assets plus those due within `within_days` (0 to 365, default 0 = overdue only), most overdue first; filters `category_id`, `q`; `limit` max 100.
+- `GET /maintenance` lists records across items, open first then newest, with item code/description and user names; filters `status`, `kind`, `destination` (exact, case-insensitive), `item_id`, `q` (item code/description and record description).
+- Operators and admins write (`items:write`); every role reads. Validation errors return 422 `validation_failed` with `error.fields`.
+
 ## Test
 
 ```sh

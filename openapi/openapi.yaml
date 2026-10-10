@@ -645,6 +645,142 @@ paths:
               schema: { $ref: "#/components/schemas/AssignmentPage" }
         "401": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /items/{id}/maintenance:
+    post:
+      operationId: createMaintenance
+      summary: Report a failure or register a preventive service (operator or admin)
+      description: |
+        `kind` selects the flow; fields that belong to the other kind are rejected with 422 naming the field. The item row is locked and the record and the item are written in one transaction. Works while the item is on loan (custody is not touched).
+        - **corrective** (failure report): creates an *open* record. `reported_at` is the failure date (default now, never in the future); `destination` is free text such as "Taller de Reparación Interno" or "Espera de Repuestos". The item becomes `inoperative` (default) or `in_repair` (`item_status`). An item with an open failure rejects another with 409 `open_failure_exists`; the database guarantees at most one open failure per item, so parallel reports yield exactly one 201.
+        - **preventive**: created already closed. `performed_at` (default now, never in the future), optional `cost`, optional `next_due_at` (after `performed_at`; derived as `performed_at` plus the item's `maintenance_interval_days` when omitted and the item has an interval). Sets the item's `last_maintenance_at` (never moving it backwards) and leaves its status untouched.
+        - Only assets (422 `not_applicable` for consumables). Soft-deleted items return 404.
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMaintenanceRequest" }
+      responses:
+        "201":
+          description: Record created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecord" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    get:
+      operationId: listItemMaintenance
+      summary: Maintenance history of an item (any role)
+      description: Newest first (`reported_at`, then id). Soft-deleted items return 404.
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: One page of records
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecordPage" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /maintenance:
+    get:
+      operationId: listMaintenance
+      summary: Maintenance records across items (any role)
+      description: Open records first, then newest first. Records of soft-deleted items are not listed. `destination` is an exact, case-insensitive match; `q` is a case-insensitive substring over item code, item description and record description.
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/MaintenanceStatus" } }
+        - { name: kind, in: query, schema: { $ref: "#/components/schemas/MaintenanceKind" } }
+        - { name: destination, in: query, schema: { type: string } }
+        - { name: item_id, in: query, schema: { type: string, format: uuid } }
+        - { name: q, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: One page of records
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecordPage" }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /maintenance/due:
+    get:
+      operationId: listDueMaintenance
+      summary: Assets whose preventive maintenance is overdue or coming due (any role)
+      description: |
+        Assets with `maintenance_interval_days` whose `maintenance_due_at` is at or before now plus `within_days` (0 to 365, default 0, so only overdue assets). Most overdue first, then by code. Soft-deleted items and consumables are never listed.
+      parameters:
+        - { name: within_days, in: query, schema: { type: integer, minimum: 0, maximum: 365, default: 0 } }
+        - { name: category_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: q, in: query, description: Case-insensitive substring over item code and description., schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: One page of due assets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DueMaintenancePage" }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /maintenance/{id}:
+    patch:
+      operationId: updateMaintenance
+      summary: Edit an open failure record (operator or admin)
+      description: |
+        Changes `description` and/or `destination` (`null` or blank clears it) and can move the item between `inoperative` and `in_repair` through `item_status`. At least one field is required. A closed record is immutable (409 `record_closed`).
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateMaintenanceRequest" }
+      responses:
+        "200":
+          description: The updated record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecord" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /maintenance/{id}/close:
+    post:
+      operationId: closeMaintenance
+      summary: Close an open failure record (operator or admin)
+      description: |
+        Closes the repair: `closed_at` (default now, between `reported_at` and now), optional `cost` and `resolution_note`, and `item_status_after` (`functional` by default, or `inoperative`). The item status is set accordingly and, when it comes back `functional`, `items.last_maintenance_at` is set to `closed_at` (never moving backwards). The request body is optional. Closing a closed record is 409 `record_closed`.
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloseMaintenanceRequest" }
+      responses:
+        "200":
+          description: The closed record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecord" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
 security:
   - bearerAuth: []
 components:
@@ -722,7 +858,7 @@ components:
       description: Derived, never stored. `available` means status is `functional` and the item has no active loan.
     Item:
       type: object
-      required: [id, code, description, category_id, kind, status, availability, unit, stock_current, stock_min, low_stock, on_loan, location_id, last_maintenance_at, maintenance_interval_days, attributes, notes, created_at, updated_at]
+      required: [id, code, description, category_id, kind, status, availability, unit, stock_current, stock_min, low_stock, on_loan, location_id, last_maintenance_at, maintenance_interval_days, maintenance_due_at, maintenance_overdue, attributes, notes, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         code: { type: string, example: ISK-HER-001 }
@@ -740,6 +876,8 @@ components:
         location_id: { type: integer, format: int64, nullable: true }
         last_maintenance_at: { type: string, format: date-time, nullable: true }
         maintenance_interval_days: { type: integer, nullable: true }
+        maintenance_due_at: { type: string, format: date-time, nullable: true, description: "Derived, never stored: `last_maintenance_at` (or `created_at` if never serviced) plus `maintenance_interval_days` 24-hour days. Null for consumables and assets without an interval." }
+        maintenance_overdue: { type: boolean, description: True when `maintenance_due_at` is in the past. }
         attributes: { type: object, additionalProperties: true, description: "Free-form JSON object (brand, color, level...), up to 8 KB." }
         notes: { type: string }
         created_at: { type: string, format: date-time }
@@ -891,6 +1029,97 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/Assignment" }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+    MaintenanceKind:
+      type: string
+      enum: [preventive, corrective]
+    MaintenanceStatus:
+      type: string
+      enum: [open, closed]
+    CreateMaintenanceRequest:
+      type: object
+      required: [kind, description]
+      properties:
+        kind: { $ref: "#/components/schemas/MaintenanceKind" }
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        reported_at: { type: string, format: date-time, description: "Corrective only: failure date. Defaults to now; not in the future." }
+        destination: { type: string, maxLength: 120, description: "Corrective only: where the asset went, for example Taller de Reparación Interno or Espera de Repuestos." }
+        item_status: { type: string, enum: [inoperative, in_repair], default: inoperative, description: "Corrective only: the status the item takes." }
+        performed_at: { type: string, format: date-time, description: "Preventive only: date performed. Defaults to now; not in the future." }
+        cost: { type: number, minimum: 0, description: "Preventive only (use close for corrective). Two decimals." }
+        next_due_at: { type: string, format: date-time, description: "Preventive only: must be after performed_at. Derived from the item's interval when omitted." }
+    UpdateMaintenanceRequest:
+      type: object
+      properties:
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        destination: { type: string, maxLength: 120, nullable: true, description: Null or blank clears it. }
+        item_status: { type: string, enum: [inoperative, in_repair] }
+    CloseMaintenanceRequest:
+      type: object
+      properties:
+        closed_at: { type: string, format: date-time, description: Defaults to now; not before reported_at and not in the future. }
+        cost: { type: number, minimum: 0 }
+        resolution_note: { type: string, maxLength: 1000 }
+        item_status_after: { type: string, enum: [functional, inoperative], default: functional }
+    MaintenanceRecord:
+      type: object
+      required: [id, item_id, item_code, item_description, item_status, kind, status, reported_at, description, destination, cost, next_due_at, closed_at, resolution_note, reported_by, reported_by_name, closed_by, closed_by_name, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        item_id: { type: string, format: uuid }
+        item_code: { type: string }
+        item_description: { type: string }
+        item_status: { type: string, enum: [functional, inoperative, in_repair], description: The item's current status (after this write when returned by a write). }
+        kind: { $ref: "#/components/schemas/MaintenanceKind" }
+        status: { $ref: "#/components/schemas/MaintenanceStatus" }
+        reported_at: { type: string, format: date-time, description: Failure date (corrective) or date performed (preventive). }
+        description: { type: string }
+        destination: { type: string, nullable: true }
+        cost: { type: number, nullable: true }
+        next_due_at: { type: string, format: date-time, nullable: true, description: Preventive only. }
+        closed_at: { type: string, format: date-time, nullable: true, description: Null while the failure is open; equals reported_at for preventive records. }
+        resolution_note: { type: string, nullable: true }
+        reported_by: { type: string, format: uuid }
+        reported_by_name: { type: string }
+        closed_by: { type: string, format: uuid, nullable: true }
+        closed_by_name: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    MaintenanceRecordPage:
+      type: object
+      required: [data, total, limit, offset]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/MaintenanceRecord" }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+    DueMaintenance:
+      type: object
+      required: [item_id, code, description, category_id, category_name, status, location_id, location_name, last_maintenance_at, maintenance_interval_days, maintenance_due_at, maintenance_overdue]
+      properties:
+        item_id: { type: string, format: uuid }
+        code: { type: string }
+        description: { type: string }
+        category_id: { type: integer, format: int64 }
+        category_name: { type: string }
+        status: { type: string, enum: [functional, inoperative, in_repair] }
+        location_id: { type: integer, format: int64, nullable: true }
+        location_name: { type: string, nullable: true }
+        last_maintenance_at: { type: string, format: date-time, nullable: true }
+        maintenance_interval_days: { type: integer }
+        maintenance_due_at: { type: string, format: date-time }
+        maintenance_overdue: { type: boolean }
+    DueMaintenancePage:
+      type: object
+      required: [data, total, limit, offset]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/DueMaintenance" }
         total: { type: integer }
         limit: { type: integer }
         offset: { type: integer }
