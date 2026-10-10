@@ -1,37 +1,43 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { LoadingState } from "./components/molecules/StateMessage";
 import { AppShell } from "./components/organisms/AppShell";
 import { RequireAuth } from "./features/auth/RequireAuth";
-import { DashboardPage } from "./pages/DashboardPage";
-import { ItemDetailPage } from "./pages/ItemDetailPage";
-import { ItemsPage } from "./pages/ItemsPage";
-import { LoginPage } from "./pages/LoginPage";
-import { LoansPage } from "./pages/LoansPage";
-import { MaintenancePage } from "./pages/MaintenancePage";
-import { MorePage } from "./pages/MorePage";
-import { PlaceholderPage } from "./pages/PlaceholderPage";
-import { StockAlertsPage } from "./pages/StockAlertsPage";
+
+// Route-level code splitting: each page (with the forms it opens) is its own chunk.
+const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })));
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const ItemsPage = lazy(() => import("./pages/ItemsPage").then((m) => ({ default: m.ItemsPage })));
+const ItemDetailPage = lazy(() => import("./pages/ItemDetailPage").then((m) => ({ default: m.ItemDetailPage })));
+const StockAlertsPage = lazy(() => import("./pages/StockAlertsPage").then((m) => ({ default: m.StockAlertsPage })));
+const LoansPage = lazy(() => import("./pages/LoansPage").then((m) => ({ default: m.LoansPage })));
+const MaintenancePage = lazy(() => import("./pages/MaintenancePage").then((m) => ({ default: m.MaintenancePage })));
+const MorePage = lazy(() => import("./pages/MorePage").then((m) => ({ default: m.MorePage })));
+const PlaceholderPage = lazy(() => import("./pages/PlaceholderPage").then((m) => ({ default: m.PlaceholderPage })));
 
 export function App() {
   return (
-    <Routes>
-      <Route path="login" element={<LoginPage />} />
-      <Route element={<RequireAuth />}>
-        <Route element={<AppShell />}>
-          <Route index element={<Navigate to="/inicio" replace />} />
-          <Route path="inicio" element={<DashboardPage />} />
-          <Route path="materiales" element={<ItemsPage />} />
-          <Route path="materiales/:id" element={<ItemDetailPage />} />
-          <Route
-            path="escanear"
-            element={<PlaceholderPage title="Escanear" description="El escaneo de códigos QR llegará en un paso posterior." />}
-          />
-          <Route path="stock-bajo" element={<StockAlertsPage />} />
-          <Route path="prestamos" element={<LoansPage />} />
-          <Route path="mantenimiento" element={<MaintenancePage />} />
-          <Route path="mas" element={<MorePage />} />
+    <Suspense fallback={<LoadingState label="Cargando" />}>
+      <Routes>
+        <Route path="login" element={<LoginPage />} />
+        <Route element={<RequireAuth />}>
+          <Route element={<AppShell />}>
+            <Route index element={<Navigate to="/inicio" replace />} />
+            <Route path="inicio" element={<DashboardPage />} />
+            <Route path="materiales" element={<ItemsPage />} />
+            <Route path="materiales/:id" element={<ItemDetailPage />} />
+            <Route path="stock-bajo" element={<StockAlertsPage />} />
+            <Route path="prestamos" element={<LoansPage />} />
+            <Route path="mantenimiento" element={<MaintenancePage />} />
+            <Route
+              path="escanear"
+              element={<PlaceholderPage title="Escanear" description="El escaneo de códigos QR llegará en un paso posterior." />}
+            />
+            <Route path="mas" element={<MorePage />} />
+          </Route>
         </Route>
-      </Route>
-      <Route path="*" element={<Navigate to="/inicio" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/inicio" replace />} />
+      </Routes>
+    </Suspense>
   );
 }
