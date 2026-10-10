@@ -1,18 +1,23 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { login, logout, refreshSession } from "../../lib/api/client";
+import { ApiError } from "../../lib/api/errors";
 import type { Role, User } from "../../lib/api/schemas";
 import { subscribeSession } from "../../lib/api/session-store";
 
 type SessionState =
   | { status: "loading"; user: null }
   | { status: "anonymous"; user: null }
+  /** The refresh call could not reach the server: the session may still be valid, so do not log out. */
+  | { status: "unreachable"; user: null }
   | { status: "authenticated"; user: User };
 
 interface SessionContextValue {
   state: SessionState;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Retries recovering the session after a network failure. */
+  retry: () => void;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -20,6 +25,23 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 export function SessionProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<SessionState>({ status: "loading", user: null });
+
+  const recover = useCallback(() => {
+    // Recover the session from the httpOnly refresh cookie; concurrent calls are deduplicated.
+    refreshSession()
+      .then((session) => {
+        if (!session) setState({ status: "anonymous", user: null });
+      })
+      .catch((error: unknown) => {
+        // Offline (or the API is down): keep the cookie and let the user retry instead of logging out.
+        setState(error instanceof ApiError && error.code === "network" ? { status: "unreachable", user: null } : { status: "anonymous", user: null });
+      });
+  }, []);
+
+  const retry = useCallback(() => {
+    setState({ status: "loading", user: null });
+    recover();
+  }, [recover]);
 
   useEffect(() => {
     const unsubscribe = subscribeSession((event) => {
@@ -30,14 +52,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         queryClient.clear();
       }
     });
-    // Recover the session from the httpOnly refresh cookie; concurrent calls are deduplicated.
-    refreshSession()
-      .then((session) => {
-        if (!session) setState({ status: "anonymous", user: null });
-      })
-      .catch(() => setState({ status: "anonymous", user: null }));
+    recover();
     return unsubscribe;
-  }, [queryClient]);
+  }, [queryClient, recover]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     await login(email, password);
@@ -47,7 +64,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     await logout();
   }, []);
 
-  const value = useMemo(() => ({ state, signIn, signOut }), [state, signIn, signOut]);
+  const value = useMemo(() => ({ state, signIn, signOut, retry }), [state, signIn, signOut, retry]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 

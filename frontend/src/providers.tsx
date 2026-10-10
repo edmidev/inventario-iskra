@@ -9,7 +9,11 @@ import { ApiError } from "./lib/api/errors";
 export function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
+      // Never pause on "offline": react-query's default would leave spinners and buttons stuck
+      // forever. Let requests fail so the normal error states (and the offline banner) explain it.
+      mutations: { networkMode: "always" },
       queries: {
+        networkMode: "always",
         staleTime: 15_000,
         refetchOnWindowFocus: false,
         // Client errors will not fix themselves; retry only network/5xx failures, twice at most.

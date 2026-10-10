@@ -112,3 +112,23 @@ describe("authentication flow", () => {
     await waitFor(() => expect(screen.queryByText("Ana Pérez")).not.toBeInTheDocument());
   });
 });
+
+describe("offline start", () => {
+  it("keeps the session and offers a retry when the server cannot be reached", async () => {
+    let online = false;
+    server.use(
+      http.post(api("/auth/refresh"), () => (online ? HttpResponse.json(session("operator")) : HttpResponse.error())),
+      http.get(api("/categories"), () => HttpResponse.json({ data: [] })),
+      http.get(api("/locations"), () => HttpResponse.json({ data: [] })),
+      http.get(api("/dashboard/summary"), () => HttpResponse.json(summary)),
+    );
+    const user = userEvent.setup();
+    renderApp("/inicio");
+    expect(await screen.findByText(/No se pudo conectar para verificar tu sesión/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Correo")).not.toBeInTheDocument();
+
+    online = true;
+    await user.click(screen.getByRole("button", { name: "Reintentar" }));
+    expect(await screen.findByRole("heading", { name: "Inicio" })).toBeInTheDocument();
+  });
+});

@@ -1,1 +1,3 @@
 *.tsbuildinfo
+e2e/.tmp/
+test-results/
