@@ -295,6 +295,8 @@ type itemDTO struct {
 	LocationID              *int64         `json:"location_id"`
 	LastMaintenanceAt       *time.Time     `json:"last_maintenance_at"`
 	MaintenanceIntervalDays *int           `json:"maintenance_interval_days"`
+	MaintenanceDueAt        *time.Time     `json:"maintenance_due_at"`
+	MaintenanceOverdue      bool           `json:"maintenance_overdue"`
 	Attributes              map[string]any `json:"attributes"`
 	Notes                   string         `json:"notes"`
 	CreatedAt               time.Time      `json:"created_at"`
@@ -326,7 +328,8 @@ func toItemDTO(it domain.Item) itemDTO {
 		Unit: it.Unit, StockCurrent: it.StockCurrent, StockMin: it.StockMin, LowStock: it.LowStock(),
 		OnLoan: it.OnLoan(), Custody: loan,
 		LocationID: it.LocationID, LastMaintenanceAt: it.LastMaintenanceAt,
-		MaintenanceIntervalDays: it.MaintenanceIntervalDays, Attributes: attrs, Notes: it.Notes,
+		MaintenanceIntervalDays: it.MaintenanceIntervalDays, MaintenanceDueAt: it.MaintenanceDueAt(),
+		MaintenanceOverdue: it.MaintenanceOverdue(time.Now()), Attributes: attrs, Notes: it.Notes,
 		CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt,
 	}
 }

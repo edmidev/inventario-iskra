@@ -104,6 +104,28 @@ func (i Item) LowStock() bool {
 	return i.Kind == KindConsumable && i.StockMin > 0 && i.StockCurrent <= i.StockMin
 }
 
+// MaintenanceDueAt is when the asset's preventive maintenance falls due: its
+// last maintenance (or, if it never had one, its creation) plus the
+// configured interval in 24-hour days. Nil without an interval and for
+// consumables.
+func (i Item) MaintenanceDueAt() *time.Time {
+	if i.Kind != KindAsset || i.MaintenanceIntervalDays == nil {
+		return nil
+	}
+	base := i.CreatedAt
+	if i.LastMaintenanceAt != nil {
+		base = *i.LastMaintenanceAt
+	}
+	due := base.Add(time.Duration(*i.MaintenanceIntervalDays) * 24 * time.Hour)
+	return &due
+}
+
+// MaintenanceOverdue reports whether the maintenance due date has passed at now.
+func (i Item) MaintenanceOverdue(now time.Time) bool {
+	due := i.MaintenanceDueAt()
+	return due != nil && due.Before(now)
+}
+
 // Availability says whether an item can be handed out right now.
 type Availability string
 

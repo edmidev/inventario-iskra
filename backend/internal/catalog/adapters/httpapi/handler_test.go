@@ -466,3 +466,38 @@ func TestItemOnLoanCannotBeDeletedOrMoved(t *testing.T) {
 		t.Errorf("delete after return: %d", r.Status)
 	}
 }
+
+func TestItemsExposeMaintenanceDueDateAndOverdueFlag(t *testing.T) {
+	e := newEnv(t)
+	cat := e.mustCreate(t, "/categories", map[string]any{"name": "Herramientas", "code_prefix": "HER"})
+	mk := func(extra map[string]any) resp {
+		body := map[string]any{"description": "Taladro", "category_id": cat.num("id"), "kind": "asset"}
+		for k, v := range extra {
+			body[k] = v
+		}
+		return e.mustCreate(t, "/items", body)
+	}
+	stale := time.Now().Add(-200 * 24 * time.Hour).UTC().Truncate(time.Second)
+	overdue := mk(map[string]any{"maintenance_interval_days": 90, "last_maintenance_at": stale.Format(time.RFC3339)})
+	fresh := mk(map[string]any{"maintenance_interval_days": 90})
+	plain := mk(nil)
+
+	if overdue.Body["maintenance_overdue"] != true || overdue.str("maintenance_due_at") != stale.Add(90*24*time.Hour).Format(time.RFC3339) {
+		t.Errorf("overdue item: %v", overdue.Body)
+	}
+	if fresh.Body["maintenance_overdue"] != false || fresh.Body["maintenance_due_at"] == nil {
+		t.Errorf("fresh item: %v", fresh.Body)
+	}
+	if v, has := plain.Body["maintenance_due_at"]; !has || v != nil || plain.Body["maintenance_overdue"] != false {
+		t.Errorf("item without interval: %v", plain.Body)
+	}
+	// The same fields come back on read and list.
+	if r := e.do(t, "GET", "/items/"+overdue.str("id"), "viewer", nil); r.Body["maintenance_overdue"] != true {
+		t.Errorf("get: %v", r.Body)
+	}
+	for _, d := range e.do(t, "GET", "/items", "viewer", nil).data() {
+		if _, has := d.(map[string]any)["maintenance_overdue"]; !has {
+			t.Errorf("list item lacks maintenance_overdue: %v", d)
+		}
+	}
+}

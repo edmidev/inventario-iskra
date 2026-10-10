@@ -290,3 +290,32 @@ func TestFilterMatchesTreatsLoanAsUnavailable(t *testing.T) {
 		t.Error("the status filter keeps ignoring loans")
 	}
 }
+
+func TestMaintenanceDueAndOverdue(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	created := now.Add(-100 * day)
+	last := now.Add(-10 * day)
+	tests := []struct {
+		name    string
+		item    Item
+		due     *time.Time
+		overdue bool
+	}{
+		{name: "no interval", item: Item{Kind: KindAsset, CreatedAt: created}},
+		{name: "consumable ignores interval", item: Item{Kind: KindConsumable, CreatedAt: created, MaintenanceIntervalDays: ptr(30)}},
+		{name: "never serviced counts from creation (overdue)", item: Item{Kind: KindAsset, CreatedAt: created, MaintenanceIntervalDays: ptr(30)}, due: ptr(created.Add(30 * day)), overdue: true},
+		{name: "never serviced, not yet due", item: Item{Kind: KindAsset, CreatedAt: created, MaintenanceIntervalDays: ptr(365)}, due: ptr(created.Add(365 * day))},
+		{name: "last maintenance wins over creation", item: Item{Kind: KindAsset, CreatedAt: created, LastMaintenanceAt: &last, MaintenanceIntervalDays: ptr(30)}, due: ptr(last.Add(30 * day))},
+		{name: "due exactly now is not overdue", item: Item{Kind: KindAsset, CreatedAt: created, LastMaintenanceAt: ptr(now.Add(-30 * day)), MaintenanceIntervalDays: ptr(30)}, due: ptr(now)},
+	}
+	for _, tc := range tests {
+		got := tc.item.MaintenanceDueAt()
+		if (tc.due == nil) != (got == nil) || (got != nil && !got.Equal(*tc.due)) {
+			t.Errorf("%s: due = %v, want %v", tc.name, got, tc.due)
+		}
+		if o := tc.item.MaintenanceOverdue(now); o != tc.overdue {
+			t.Errorf("%s: overdue = %v, want %v", tc.name, o, tc.overdue)
+		}
+	}
+}
