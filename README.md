@@ -141,10 +141,17 @@ Behavior worth knowing:
 
 - Session: the access token lives in memory only (never localStorage). On load the app calls `POST /auth/refresh` (httpOnly cookie) to restore the session. A 401 triggers one shared silent refresh and a single retry; if that fails the user is sent to the login page.
 - Errors: the API envelope `{error:{code,message,fields?}}` becomes an `ApiError`; 422 `fields` are mapped onto the matching form inputs, other codes are shown as readable Spanish messages.
-- Roles: `viewer` is read-only (no create, edit or delete controls); `operator` and `admin` write items; `admin` additionally sees the custom item code field. Catalog and user management screens arrive with the admin task.
+- Roles: `viewer` is read-only (no create, edit, delete or operation controls); `operator` and `admin` write items and run operations; `admin` additionally sees the custom item code field. Catalog and user management screens arrive with the admin task.
 - Items list: search, filters and sort live in the URL (`?q=&status=&category_id=&...`), so refresh, back and shared links keep the view; pagination is "Cargar más" with limit/offset.
+- Item detail operations (operator and admin, hidden for viewers): an action bar opens a bottom sheet per action and every action is at most three taps (open sheet, quick quantity or pick, confirm).
+  - Consumables: Entrada, Salida, Ajuste (absolute count, note required) with a large +/- stepper and quick quantities, and Trasladar. The sheet shows the resulting stock and warns when it ends at or below the minimum.
+  - Assets: Prestar (people and containers only, optional due date from today), Devolver (optional return location), Trasladar (disabled with a reason while on loan), Reportar falla, Actualizar reparación and Cerrar falla (shown instead of a new report while a failure is open), Registrar mantenimiento (preventive).
+  - API errors (`insufficient_stock`, `item_on_loan`, `already_assigned`, `not_assigned`, `item_not_available`, `open_failure_exists`, `record_closed`, `not_applicable`, 422 `fields`) become Spanish messages inside the sheet; every mutation invalidates the item, lists, dashboard, alerts, custody and maintenance queries and shows a toast.
+- Item detail tabs: Historial merges stock movements and loan/return events newest first (two paginated streams merged on the client; events older than what an unfinished stream has loaded are held back so "Cargar más" never inserts above what is shown); Mantenimiento lists failures and preventive services with a due or overdue banner (assets only).
+- Operational pages (linked from the dashboard cards and "Más"): `/stock-bajo` (alerts by severity with quick Entrada), `/prestamos` (overdue first; filters in the URL: `overdue`, `assignee`, `q`; quick Devolver), `/mantenimiento` (tabs "Fallas abiertas" with quick Cerrar falla and "Por vencer" with a `within_days` window).
+- Code splitting: every page is a lazy route chunk (`React.lazy` in `App.tsx`), so the entry chunk no longer carries the pages and forms (about 596 kB before, about 462 kB now; the rest is React, router, TanStack Query and Radix shared by all routes).
 - Theming: semantic tokens in `src/index.css` (`@theme`) switch with `prefers-color-scheme` (light and dark).
-- Not built yet: stock movements, loans, maintenance flows and the history tabs (T6c), QR scanning, admin screens and PWA (T6d).
+- Not built yet: QR scanning, admin screens and PWA (T6d). The mobile layout has not been checked visually in a real browser yet.
 
 ## Test
 
