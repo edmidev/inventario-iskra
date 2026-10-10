@@ -944,7 +944,14 @@ components:
           properties:
             code:
               type: string
-              description: "Stable machine code, e.g. invalid_request, unauthorized, forbidden, not_found, conflict, email_taken, last_admin, invalid_credentials, rate_limited, validation_failed, category_name_taken, category_prefix_taken, category_in_use, location_in_use, location_cycle, code_taken, internal_error."
+              description: >-
+                Stable machine code. Generic: invalid_request, unauthorized, forbidden, not_found, conflict,
+                rate_limited, validation_failed, internal_error. Identity: invalid_credentials,
+                invalid_current_password, email_taken, last_admin. Catalog: category_name_taken,
+                category_prefix_taken, category_in_use, location_in_use, location_cycle, code_taken.
+                Stock and custody: insufficient_stock, item_on_loan, already_assigned, not_assigned,
+                item_not_available, not_applicable. Maintenance: open_failure_exists, record_closed,
+                item_under_repair.
             message: { type: string }
             fields:
               type: object

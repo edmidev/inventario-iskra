@@ -123,7 +123,7 @@ Scripts (`cd frontend`):
 | --- | --- |
 | `npm run dev` | Vite dev server on :5173. `/api` is proxied to `http://localhost:8080` (override with `API_PROXY_TARGET`), so no CORS or app env is needed. |
 | `npm run lint` | oxlint (typescript, react, jsx-a11y, vitest rules). typescript-eslint does not support TypeScript 7 yet, hence oxlint. |
-| `npm run typecheck` | `tsc --noEmit`. |
+| `npm run typecheck` | `tsc --noEmit` for the app and for `e2e/`. |
 | `npm test -- --run` | Vitest. The API is mocked with MSW at the network level, so tests exercise the real client, hooks and pages. |
 | `npm run build` | `tsc -b && vite build` into `dist/`. In production nginx serves `dist/` and proxies `/api/` to the `api` service (`frontend/nginx.conf`); the app always calls the same-origin `/api/v1`. |
 
@@ -141,7 +141,7 @@ Behavior worth knowing:
 
 - Session: the access token lives in memory only (never localStorage). On load the app calls `POST /auth/refresh` (httpOnly cookie) to restore the session. A 401 triggers one shared silent refresh and a single retry; if that fails the user is sent to the login page.
 - Errors: the API envelope `{error:{code,message,fields?}}` becomes an `ApiError`; 422 `fields` are mapped onto the matching form inputs, other codes are shown as readable Spanish messages.
-- Roles: `viewer` is read-only (no create, edit, delete or operation controls); `operator` and `admin` write items and run operations; `admin` additionally sees the custom item code field. Catalog and user management screens arrive with the admin task.
+- Roles: `viewer` is read-only (no create, edit, delete or operation controls); `operator` and `admin` write items and run operations; `admin` additionally sees the custom item code field and the administration screens (see below).
 - Items list: search, filters and sort live in the URL (`?q=&status=&category_id=&...`), so refresh, back and shared links keep the view; pagination is "Cargar más" with limit/offset.
 - Item detail operations (operator and admin, hidden for viewers): an action bar opens a bottom sheet per action and every action is at most three taps (open sheet, quick quantity or pick, confirm).
   - Consumables: Entrada, Salida, Ajuste (absolute count, note required) with a large +/- stepper and quick quantities, and Trasladar. The sheet shows the resulting stock and warns when it ends at or below the minimum.
@@ -151,7 +151,27 @@ Behavior worth knowing:
 - Operational pages (linked from the dashboard cards and "Más"): `/stock-bajo` (alerts by severity with quick Entrada), `/prestamos` (overdue first; filters in the URL: `overdue`, `assignee`, `q`; quick Devolver), `/mantenimiento` (tabs "Fallas abiertas" with quick Cerrar falla and "Por vencer" with a `within_days` window).
 - Code splitting: every page is a lazy route chunk (`React.lazy` in `App.tsx`), so the entry chunk no longer carries the pages and forms (about 596 kB before, about 462 kB now; the rest is React, router, TanStack Query and Radix shared by all routes).
 - Theming: semantic tokens in `src/index.css` (`@theme`) switch with `prefers-color-scheme` (light and dark).
-- Not built yet: QR scanning, admin screens and PWA (T6d). The mobile layout has not been checked visually in a real browser yet.
+- Session offline: if `POST /auth/refresh` cannot reach the server the user is not logged out; the app shows "No se pudo conectar para verificar tu sesión" and retries on its own when the network returns. Queries use `networkMode: "always"` so offline failures surface as normal error states instead of endless spinners.
+
+### QR scan and labels
+
+- `/escanear` reads QR codes with the camera (native `BarcodeDetector` when present, otherwise `qr-scanner`, loaded lazily so it stays out of the entry chunk), with torch toggle, clear states for denied permission / no camera / non-HTTPS, and a manual code field that always works. A scanned value can be a bare code (`ISK-HER-001`) or a URL containing `/materiales/codigo/<code>` or `/materiales/by-code/<code>`; it is resolved through `GET /items/by-code/{code}`.
+- Labels encode `${origin}/materiales/codigo/<code>`, so a normal phone camera opens the app, which resolves the code and redirects to the item (after login if needed). Camera access needs HTTPS or `localhost`.
+- Item detail has an "Etiqueta QR" sheet (QR, code, description, Imprimir, Compartir). `/materiales/etiquetas` (operator and admin) picks several items and prints a sheet of 50 x 30 mm labels; `@media print` hides everything except the labels.
+
+### Administration (admin only)
+
+Reachable from "Más" and guarded by role (other roles see "Sin acceso" and no entries): `/admin/usuarios` (search, role/state filters, create, edit name/role/active, reset password; the last-admin rule is shown as a readable error), `/admin/categorias` (create/edit/delete; prefix is 2-8 uppercase letters or digits; `category_in_use` explained) and `/admin/ubicaciones` (tree by parent, kind storage/container/person, `location_in_use` and `location_cycle` explained). `/cuenta` ("Mi cuenta", every role) changes your own password and signs you out, since the API revokes all refresh tokens.
+
+### PWA
+
+The app is installable ("Inventario Iskra", standalone, light/dark `theme-color`, maskable icon; icons are generated from `public/icons/*.svg` with `node scripts/generate-icons.mjs`). `vite-plugin-pwa` (Workbox `generateSW`) precaches the app shell and static assets only; there is deliberately no runtime caching, `/api` is denied for navigation fallback, and API and auth responses are never cached. Offline, the shell loads and a "Sin conexión" banner is shown; data screens show their error states. Install it from the browser menu ("Instalar app" / "Añadir a pantalla de inicio") on HTTPS. The service worker only exists in production builds (`npm run build && npm run preview`), never in dev or tests. `frontend/nginx.conf` serves `index.html`, `sw.js` and the manifest with `no-cache`, hashed `/assets/*` as immutable and `/api/` as `no-store`.
+
+### End-to-end tests (Playwright, mobile 390x844)
+
+`cd frontend && npx playwright install chromium && npm run e2e`. The global setup starts a throwaway `postgres:16` container (`inv-test-pg`, port 55432), builds and runs the Go API on port 18080, seeds it through the API (needs docker, Go and Node; port 8080 is not used), and Playwright serves the production build with `vite preview` on :14173 proxying `/api`. Everything is torn down afterwards. Specs cover login/search/detail, loan and return, stock salida/entrada with the low-stock list, failure report and close, viewer restrictions, QR manual resolve and printed-label URLs, user/category/location administration and the PWA (manifest, service worker, no API in caches, offline banner). For a visual pass set `E2E_SCREENSHOTS=<dir>` to also save light/dark screenshots plus a layout audit (horizontal overflow, tap targets).
+
+Known limitation: the refresh cookie rotates on every full page load; aborting a load mid-flight (very fast navigations) can lose the rotated cookie and sign the user out.
 
 ## Test
 
@@ -160,4 +180,5 @@ make -C backend test lint
 # PostgreSQL integration tests are skipped unless TEST_DATABASE_URL points at a disposable database:
 TEST_DATABASE_URL='postgres://postgres:test@localhost:55432/inventario_test?sslmode=disable' make -C backend test
 cd frontend && npm run lint && npm run typecheck && npm test -- --run && npm run build
+cd frontend && npm run e2e   # real stack, needs docker + go + chromium
 ```
