@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/organisms/AppShell";
 import { RequireAuth } from "./features/auth/RequireAuth";
 import { DashboardPage } from "./pages/DashboardPage";
+import { ItemDetailPage } from "./pages/ItemDetailPage";
 import { ItemsPage } from "./pages/ItemsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MorePage } from "./pages/MorePage";
@@ -16,6 +17,7 @@ export function App() {
           <Route index element={<Navigate to="/inicio" replace />} />
           <Route path="inicio" element={<DashboardPage />} />
           <Route path="materiales" element={<ItemsPage />} />
+          <Route path="materiales/:id" element={<ItemDetailPage />} />
           <Route
             path="escanear"
             element={<PlaceholderPage title="Escanear" description="El escaneo de códigos QR llegará en un paso posterior." />}
