@@ -16,6 +16,9 @@ import (
 	"github.com/edgar/inventario/backend/internal/identity/adapters/postgres"
 	"github.com/edgar/inventario/backend/internal/identity/app"
 	"github.com/edgar/inventario/backend/internal/identity/domain"
+	maintenanceapi "github.com/edgar/inventario/backend/internal/maintenance/adapters/httpapi"
+	maintenancepg "github.com/edgar/inventario/backend/internal/maintenance/adapters/postgres"
+	maintenanceapp "github.com/edgar/inventario/backend/internal/maintenance/app"
 	"github.com/edgar/inventario/backend/internal/platform/config"
 	"github.com/edgar/inventario/backend/internal/platform/httpx"
 	stockapi "github.com/edgar/inventario/backend/internal/stock/adapters/httpapi"
@@ -89,6 +92,16 @@ func wireStock(pool *pgxpool.Pool, identity *httpapi.Handler) *stockapi.Handler 
 func wireCustody(pool *pgxpool.Pool, identity *httpapi.Handler) *custodyapi.Handler {
 	svc := custodyapp.NewService(custodypg.New(pool), nil)
 	return custodyapi.New(svc, identity.Authenticate(), custodyapi.Permissions{
+		Read:       string(domain.PermRead),
+		WriteItems: string(domain.PermWriteItems),
+	})
+}
+
+// wireMaintenance builds the maintenance handler with the same authentication
+// and permission names as the catalog.
+func wireMaintenance(pool *pgxpool.Pool, identity *httpapi.Handler) *maintenanceapi.Handler {
+	svc := maintenanceapp.NewService(maintenancepg.New(pool), nil)
+	return maintenanceapi.New(svc, identity.Authenticate(), maintenanceapi.Permissions{
 		Read:       string(domain.PermRead),
 		WriteItems: string(domain.PermWriteItems),
 	})
