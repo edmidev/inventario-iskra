@@ -5,7 +5,7 @@ Mobile-first inventory system for assets and consumables, with roles, basic cust
 ## Stack
 
 - Backend: Go, chi, PostgreSQL 16, goose (migrations, applied at API startup), pgx/v5. Hexagonal layout with one module per business area.
-- Frontend: React, Vite, TypeScript, Tailwind, TanStack Query, React Router, Vitest.
+- Frontend: React 19, Vite, TypeScript, Tailwind v4, Radix primitives, TanStack Query, React Router, react-hook-form + zod, Vitest + Testing Library + MSW, oxlint.
 - Contract: `openapi/openapi.yaml`.
 
 ## Layout
@@ -113,11 +113,44 @@ The home-screen summary lives in the `dashboard` module, a read-only projection 
 - It reuses the rules of the other modules: low stock is a consumable with `stock_min > 0` and `stock_current <= stock_min`; available is `functional` with no active loan; a loan is overdue when `due_at` is before now; maintenance is overdue when `COALESCE(last_maintenance_at, created_at) + interval` is before now. Time comes from an injectable app clock.
 - It costs five SQL queries (one counters query, one open-failures count, three bounded top lists), no N+1. The postgres adapter reads tables owned by catalog, custody and maintenance with adapter-level SQL; the module never imports their domain or app packages.
 
+## Frontend
+
+Mobile-first React app (one-handed use, 44px touch targets, sticky bottom nav and safe-area insets on phones; sidebar and table-like list from `md` up). UI copy is Spanish; code, comments and tests are English. No external fonts or CDN requests.
+
+Scripts (`cd frontend`):
+
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Vite dev server on :5173. `/api` is proxied to `http://localhost:8080` (override with `API_PROXY_TARGET`), so no CORS or app env is needed. |
+| `npm run lint` | oxlint (typescript, react, jsx-a11y, vitest rules). typescript-eslint does not support TypeScript 7 yet, hence oxlint. |
+| `npm run typecheck` | `tsc --noEmit`. |
+| `npm test -- --run` | Vitest. The API is mocked with MSW at the network level, so tests exercise the real client, hooks and pages. |
+| `npm run build` | `tsc -b && vite build` into `dist/`. In production nginx serves `dist/` and proxies `/api/` to the `api` service (`frontend/nginx.conf`); the app always calls the same-origin `/api/v1`. |
+
+Architecture (`frontend/src`):
+
+```
+lib/api/          fetch client, zod schemas, ApiError mapping, in-memory token store
+features/<name>/  api/ (TanStack Query hooks), feature logic (filters, form mapping), containers
+components/       atoms -> molecules -> organisms; presentational, prop-driven, no data fetching
+pages/            route-level containers that fetch and compose organisms
+test/             MSW server, fixtures, render helpers
+```
+
+Behavior worth knowing:
+
+- Session: the access token lives in memory only (never localStorage). On load the app calls `POST /auth/refresh` (httpOnly cookie) to restore the session. A 401 triggers one shared silent refresh and a single retry; if that fails the user is sent to the login page.
+- Errors: the API envelope `{error:{code,message,fields?}}` becomes an `ApiError`; 422 `fields` are mapped onto the matching form inputs, other codes are shown as readable Spanish messages.
+- Roles: `viewer` is read-only (no create, edit or delete controls); `operator` and `admin` write items; `admin` additionally sees the custom item code field. Catalog and user management screens arrive with the admin task.
+- Items list: search, filters and sort live in the URL (`?q=&status=&category_id=&...`), so refresh, back and shared links keep the view; pagination is "Cargar más" with limit/offset.
+- Theming: semantic tokens in `src/index.css` (`@theme`) switch with `prefers-color-scheme` (light and dark).
+- Not built yet: stock movements, loans, maintenance flows and the history tabs (T6c), QR scanning, admin screens and PWA (T6d).
+
 ## Test
 
 ```sh
 make -C backend test lint
 # PostgreSQL integration tests are skipped unless TEST_DATABASE_URL points at a disposable database:
 TEST_DATABASE_URL='postgres://postgres:test@localhost:55432/inventario_test?sslmode=disable' make -C backend test
-cd frontend && npm test -- --run && npm run build
+cd frontend && npm run lint && npm run typecheck && npm test -- --run && npm run build
 ```
