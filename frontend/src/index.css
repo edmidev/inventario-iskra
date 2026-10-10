@@ -1,1 +1,112 @@
 @import "tailwindcss";
+
+/*
+ * Design tokens. Semantic CSS variables switch with prefers-color-scheme;
+ * @theme inline maps them to Tailwind utilities (bg-surface, text-ink, ...).
+ */
+:root {
+  color-scheme: light dark;
+  --canvas: #f5f6f8;
+  --surface: #ffffff;
+  --sunken: #eceff3;
+  --line: #d9dee6;
+  --ink: #141a22;
+  --ink-soft: #566170;
+  --accent: #2354d4;
+  --accent-ink: #ffffff;
+  --accent-soft: #e5ecfc;
+  --ok: #17734a;
+  --ok-soft: #dff3e8;
+  --bad: #b92028;
+  --bad-soft: #fbe3e4;
+  --warn: #9a5b00;
+  --warn-soft: #fbecd0;
+  --low: #a8480a;
+  --low-soft: #fde5d3;
+  --overlay: rgb(10 14 20 / 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #0d1117;
+    --surface: #161b22;
+    --sunken: #1e252e;
+    --line: #2c3541;
+    --ink: #e7ebf0;
+    --ink-soft: #9aa5b3;
+    --accent: #7ba2ff;
+    --accent-ink: #0a1020;
+    --accent-soft: #182544;
+    --ok: #55d493;
+    --ok-soft: #12301f;
+    --bad: #ff8087;
+    --bad-soft: #3b1619;
+    --warn: #f3b755;
+    --warn-soft: #36270a;
+    --low: #ff9f5c;
+    --low-soft: #3a210d;
+    --overlay: rgb(0 0 0 / 0.65);
+  }
+}
+
+@theme inline {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-low: var(--low);
+  --color-low-soft: var(--low-soft);
+  --color-overlay: var(--overlay);
+  --radius-card: 0.875rem;
+  --shadow-sheet: 0 -8px 32px rgb(0 0 0 / 0.18);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    line-height: 1.45;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes sheet-down {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+.sheet-content[data-state="open"] { animation: sheet-up 200ms ease-out; }
+.sheet-content[data-state="closed"] { animation: sheet-down 160ms ease-in; }
+.sheet-overlay[data-state="open"] { animation: fade-in 200ms ease-out; }
+.sheet-overlay[data-state="closed"] { animation: fade-out 160ms ease-in; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet-content, .sheet-overlay { animation: none !important; }
+}
