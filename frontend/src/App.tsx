@@ -15,6 +15,8 @@ const LoansPage = lazy(() => import("./pages/LoansPage").then((m) => ({ default:
 const MaintenancePage = lazy(() => import("./pages/MaintenancePage").then((m) => ({ default: m.MaintenancePage })));
 const MorePage = lazy(() => import("./pages/MorePage").then((m) => ({ default: m.MorePage })));
 const LabelsPage = lazy(() => import("./pages/LabelsPage").then((m) => ({ default: m.LabelsPage })));
+const UsersPage = lazy(() => import("./pages/UsersPage").then((m) => ({ default: m.UsersPage })));
+const AccountPage = lazy(() => import("./pages/AccountPage").then((m) => ({ default: m.AccountPage })));
 const ScanPage = lazy(() => import("./pages/ScanPage").then((m) => ({ default: m.ScanPage })));
 const ResolveCodePage = lazy(() => import("./pages/ResolveCodePage").then((m) => ({ default: m.ResolveCodePage })));
 
@@ -38,6 +40,10 @@ export function App() {
             <Route path="mantenimiento" element={<MaintenancePage />} />
             <Route path="escanear" element={<ScanPage />} />
             <Route path="mas" element={<MorePage />} />
+            <Route path="cuenta" element={<AccountPage />} />
+            <Route path="admin" element={<RequireRole check={(p) => p.isAdmin} />}>
+              <Route path="usuarios" element={<UsersPage />} />
+            </Route>
           </Route>
         </Route>
         <Route path="*" element={<Navigate to="/inicio" replace />} />
