@@ -13,7 +13,8 @@ const StockAlertsPage = lazy(() => import("./pages/StockAlertsPage").then((m) =>
 const LoansPage = lazy(() => import("./pages/LoansPage").then((m) => ({ default: m.LoansPage })));
 const MaintenancePage = lazy(() => import("./pages/MaintenancePage").then((m) => ({ default: m.MaintenancePage })));
 const MorePage = lazy(() => import("./pages/MorePage").then((m) => ({ default: m.MorePage })));
-const PlaceholderPage = lazy(() => import("./pages/PlaceholderPage").then((m) => ({ default: m.PlaceholderPage })));
+const ScanPage = lazy(() => import("./pages/ScanPage").then((m) => ({ default: m.ScanPage })));
+const ResolveCodePage = lazy(() => import("./pages/ResolveCodePage").then((m) => ({ default: m.ResolveCodePage })));
 
 export function App() {
   return (
@@ -25,14 +26,12 @@ export function App() {
             <Route index element={<Navigate to="/inicio" replace />} />
             <Route path="inicio" element={<DashboardPage />} />
             <Route path="materiales" element={<ItemsPage />} />
+            <Route path="materiales/codigo/:code" element={<ResolveCodePage />} />
             <Route path="materiales/:id" element={<ItemDetailPage />} />
             <Route path="stock-bajo" element={<StockAlertsPage />} />
             <Route path="prestamos" element={<LoansPage />} />
             <Route path="mantenimiento" element={<MaintenancePage />} />
-            <Route
-              path="escanear"
-              element={<PlaceholderPage title="Escanear" description="El escaneo de códigos QR llegará en un paso posterior." />}
-            />
+            <Route path="escanear" element={<ScanPage />} />
             <Route path="mas" element={<MorePage />} />
           </Route>
         </Route>
