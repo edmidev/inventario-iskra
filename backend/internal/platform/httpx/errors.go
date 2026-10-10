@@ -9,6 +9,7 @@ const (
 	CodeForbidden      = "forbidden"
 	CodeNotFound       = "not_found"
 	CodeConflict       = "conflict"
+	CodeValidation     = "validation_failed"
 	CodeRateLimited    = "rate_limited"
 	CodeInternal       = "internal_error"
 )
@@ -22,9 +23,17 @@ type ErrorBody struct {
 type ErrorDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Fields maps an offending input field to a message (validation errors only).
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // WriteError writes the standard error envelope.
 func WriteError(w http.ResponseWriter, status int, code, message string) {
 	WriteJSON(w, status, ErrorBody{Error: ErrorDetail{Code: code, Message: message}})
+}
+
+// WriteFieldErrors writes a 422 validation error listing each offending field.
+func WriteFieldErrors(w http.ResponseWriter, fields map[string]string) {
+	WriteJSON(w, http.StatusUnprocessableEntity, ErrorBody{Error: ErrorDetail{
+		Code: CodeValidation, Message: "one or more fields are invalid", Fields: fields}})
 }

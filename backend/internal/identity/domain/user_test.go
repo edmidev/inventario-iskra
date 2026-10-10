@@ -10,6 +10,9 @@ func TestRolePermissions(t *testing.T) {
 	}{
 		{RoleViewer, PermRead, true},
 		{RoleViewer, PermWrite, false},
+		{RoleViewer, PermWriteItems, false},
+		{RoleOperator, PermWriteItems, true},
+		{RoleAdmin, PermWriteItems, true},
 		{RoleViewer, PermManageUsers, false},
 		{RoleOperator, PermRead, true},
 		{RoleOperator, PermWrite, true},

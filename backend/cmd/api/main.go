@@ -66,9 +66,11 @@ func main() {
 		slog.Info("bootstrap admin created", "email", cfg.BootstrapAdminEmail)
 	}
 
+	catalogHandler := wireCatalog(pool, identityHandler)
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           newRouter(identityHandler.Register),
+		Handler:           newRouter(identityHandler.Register, catalogHandler.Register),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

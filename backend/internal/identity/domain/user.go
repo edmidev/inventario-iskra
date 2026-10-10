@@ -28,7 +28,9 @@ const (
 	PermRead Permission = "inventory:read"
 	// PermWrite allows operational writes (movements, custody, maintenance).
 	PermWrite Permission = "operations:write"
-	// PermManageCatalogs allows editing categories, locations and items.
+	// PermWriteItems allows creating, editing and deleting inventory items.
+	PermWriteItems Permission = "items:write"
+	// PermManageCatalogs allows editing categories and locations, and supplying item codes.
 	PermManageCatalogs Permission = "catalogs:manage"
 	// PermManageUsers allows user administration.
 	PermManageUsers Permission = "users:manage"
@@ -36,8 +38,8 @@ const (
 
 var rolePermissions = map[Role][]Permission{
 	RoleViewer:   {PermRead},
-	RoleOperator: {PermRead, PermWrite},
-	RoleAdmin:    {PermRead, PermWrite, PermManageCatalogs, PermManageUsers},
+	RoleOperator: {PermRead, PermWrite, PermWriteItems},
+	RoleAdmin:    {PermRead, PermWrite, PermWriteItems, PermManageCatalogs, PermManageUsers},
 }
 
 // Valid reports whether r is a known role.
