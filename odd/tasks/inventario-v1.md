@@ -19,7 +19,7 @@ Mobile-first inventory system (Go backend, React frontend) replacing `inventario
 
 ## Tasks
 - [x] T0 Scaffold monorepo, Docker Compose, CI, OpenAPI base (route: delegated writer; trigger: 2+ non-trivial files)
-- [ ] T1 identity: login, roles, user management
+- [x] T1 identity: login, roles, user management
 - [ ] T2 catalog: categories, locations, items CRUD, search/filters, code generator
 - [ ] T3 stock: movements, consumable stock, min-stock alerts
 - [ ] T4 custody: loan/return with history
@@ -33,6 +33,7 @@ Per plan "Verificacion" section.
 ## Progress / evidence
 - Created feature doc; repo initialized on branch `feat/inventario-v1`.
 - T0 done (delegated writer). Commits: 904fa3d, 74ba9c9, 3926ca0, 4374ac4. Checks observed: `go vet` + `go test ./...` ok; frontend vitest 1/1 + build ok; `docker compose config -q` ok. Parent spot check re-ran go test and vitest: pass. Not verified: docker image builds, `compose up`. RDD off; no review.
+- T1 done (delegated writer). Commits: 7968566, d8d473c, f3ad735, 98fad5d. Parent spot check with throwaway postgres:16: go vet + go test ./... -p 1 all ok incl. Postgres integration tests. Deviations: plain pgx instead of sqlc (sqlc.yaml removed); `.env.example` not updated (access denied by a deny rule; user must add JWT_SECRET, COOKIE_SECURE, BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD). Known: access JWT valid up to 15m after deactivation; rate limiter in-memory; Postgres tests need `-p 1`.
 
 ## Next step
-T1 identity (needs DB layer: wire goose + pgx + sqlc first).
+T2 catalog (categories, locations, items CRUD, search/filters, code generator).
