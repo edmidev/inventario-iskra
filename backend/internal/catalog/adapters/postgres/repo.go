@@ -251,7 +251,9 @@ func (l *Locations) Update(ctx context.Context, loc *domain.Location) error {
 // Delete implements app.LocationRepository.
 func (l *Locations) Delete(ctx context.Context, id int64) error {
 	tag, err := l.pool.Exec(ctx, `DELETE FROM locations WHERE id = $1`, id)
-	if code, c := pgError(err); code == pgForeignKey && (c == "locations_parent_id_fkey" || c == "items_location_id_fkey") {
+	// Custody history also keeps its assignee location alive.
+	if code, c := pgError(err); code == pgForeignKey && (c == "locations_parent_id_fkey" || c == "items_location_id_fkey" ||
+		c == "custody_assignments_assignee_location_id_fkey") {
 		return domain.ErrLocationInUse
 	}
 	if err != nil {
