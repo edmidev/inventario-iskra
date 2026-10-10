@@ -17,6 +17,10 @@ services:
     build: ./backend
     environment:
       PORT: "8080"
+      JWT_SECRET: ${JWT_SECRET:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       DATABASE_URL: postgres://${POSTGRES_USER:-inventario}:${POSTGRES_PASSWORD:-inventario}@db:5432/${POSTGRES_DB:-inventario}?sslmode=disable
     ports:
       - "${API_PORT:-8080}:8080"

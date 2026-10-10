@@ -10,6 +10,7 @@ paths:
     get:
       operationId: getHealth
       summary: Liveness probe
+      security: []
       responses:
         "200":
           description: Service is up
@@ -22,3 +23,225 @@ paths:
                   status:
                     type: string
                     example: ok
+  /auth/login:
+    post:
+      operationId: login
+      summary: Sign in with email and password
+      description: Returns an access token and sets the httpOnly `refresh_token` cookie (path `/api/v1/auth`). Failures never reveal whether the email exists. Repeated failures return 429.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /auth/refresh:
+    post:
+      operationId: refreshSession
+      summary: Rotate the refresh cookie and get a new access token
+      description: Reads the `refresh_token` cookie. The presented token is revoked; reusing it revokes every session of the user.
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "401": { $ref: "#/components/responses/Error" }
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Revoke the refresh token and clear the cookie
+      security: []
+      responses:
+        "204": { description: Signed out (idempotent) }
+  /auth/me:
+    get:
+      operationId: getMe
+      summary: Current user
+      responses:
+        "200":
+          description: The authenticated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Error" }
+  /auth/password:
+    post:
+      operationId: changeOwnPassword
+      summary: Change the caller's password
+      description: Revokes all refresh tokens of the caller. The client must sign in again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string }
+                new_password: { type: string, minLength: 10, maxLength: 128 }
+      responses:
+        "204": { description: Password changed }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+  /users:
+    get:
+      operationId: listUsers
+      summary: List users (admin)
+      responses:
+        "200":
+          description: All users
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createUser
+      summary: Create a user (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, role]
+              properties:
+                name: { type: string, maxLength: 120 }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 10, maxLength: 128 }
+                role: { $ref: "#/components/schemas/Role" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /users/{id}:
+    patch:
+      operationId: updateUser
+      summary: Update name, role or active flag (admin)
+      description: The last active admin cannot be deactivated or demoted (409 `last_admin`). Deactivating a user revokes their sessions.
+      parameters:
+        - { $ref: "#/components/parameters/UserId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 120 }
+                role: { $ref: "#/components/schemas/Role" }
+                active: { type: boolean }
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /users/{id}/password:
+    post:
+      operationId: resetUserPassword
+      summary: Reset a user's password (admin)
+      description: Revokes all refresh tokens of the target user.
+      parameters:
+        - { $ref: "#/components/parameters/UserId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_password]
+              properties:
+                new_password: { type: string, minLength: 10, maxLength: 128 }
+      responses:
+        "204": { description: Password reset }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    Role:
+      type: string
+      enum: [admin, operator, viewer]
+    User:
+      type: object
+      required: [id, name, email, role, active, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        role: { $ref: "#/components/schemas/Role" }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: "Stable machine code, e.g. invalid_request, unauthorized, forbidden, not_found, conflict, email_taken, last_admin, invalid_credentials, rate_limited, internal_error."
+            message: { type: string }
+  responses:
+    Error:
+      description: Error envelope
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Session:
+      description: Access token and user; sets the httpOnly `refresh_token` cookie.
+      headers:
+        Set-Cookie:
+          schema: { type: string }
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [access_token, token_type, expires_in, user]
+            properties:
+              access_token: { type: string }
+              token_type: { type: string, example: Bearer }
+              expires_in: { type: integer, description: Seconds until the access token expires }
+              user: { $ref: "#/components/schemas/User" }
