@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { OfflineBanner } from "./components/molecules/OfflineBanner";
 import { LoadingState } from "./components/molecules/StateMessage";
 import { AppShell } from "./components/organisms/AppShell";
 import { RequireAuth } from "./features/auth/RequireAuth";
@@ -24,34 +25,37 @@ const ResolveCodePage = lazy(() => import("./pages/ResolveCodePage").then((m) =>
 
 export function App() {
   return (
-    <Suspense fallback={<LoadingState label="Cargando" />}>
-      <Routes>
-        <Route path="login" element={<LoginPage />} />
-        <Route element={<RequireAuth />}>
-          <Route element={<AppShell />}>
-            <Route index element={<Navigate to="/inicio" replace />} />
-            <Route path="inicio" element={<DashboardPage />} />
-            <Route path="materiales" element={<ItemsPage />} />
-            <Route path="materiales/codigo/:code" element={<ResolveCodePage />} />
-            <Route element={<RequireRole check={(p) => p.canWriteItems} />}>
-              <Route path="materiales/etiquetas" element={<LabelsPage />} />
-            </Route>
-            <Route path="materiales/:id" element={<ItemDetailPage />} />
-            <Route path="stock-bajo" element={<StockAlertsPage />} />
-            <Route path="prestamos" element={<LoansPage />} />
-            <Route path="mantenimiento" element={<MaintenancePage />} />
-            <Route path="escanear" element={<ScanPage />} />
-            <Route path="mas" element={<MorePage />} />
-            <Route path="cuenta" element={<AccountPage />} />
-            <Route path="admin" element={<RequireRole check={(p) => p.isAdmin} />}>
-              <Route path="usuarios" element={<UsersPage />} />
-              <Route path="categorias" element={<CategoriesAdminPage />} />
-              <Route path="ubicaciones" element={<LocationsAdminPage />} />
+    <>
+      <OfflineBanner />
+      <Suspense fallback={<LoadingState label="Cargando" />}>
+        <Routes>
+          <Route path="login" element={<LoginPage />} />
+          <Route element={<RequireAuth />}>
+            <Route element={<AppShell />}>
+              <Route index element={<Navigate to="/inicio" replace />} />
+              <Route path="inicio" element={<DashboardPage />} />
+              <Route path="materiales" element={<ItemsPage />} />
+              <Route path="materiales/codigo/:code" element={<ResolveCodePage />} />
+              <Route element={<RequireRole check={(p) => p.canWriteItems} />}>
+                <Route path="materiales/etiquetas" element={<LabelsPage />} />
+              </Route>
+              <Route path="materiales/:id" element={<ItemDetailPage />} />
+              <Route path="stock-bajo" element={<StockAlertsPage />} />
+              <Route path="prestamos" element={<LoansPage />} />
+              <Route path="mantenimiento" element={<MaintenancePage />} />
+              <Route path="escanear" element={<ScanPage />} />
+              <Route path="mas" element={<MorePage />} />
+              <Route path="cuenta" element={<AccountPage />} />
+              <Route path="admin" element={<RequireRole check={(p) => p.isAdmin} />}>
+                <Route path="usuarios" element={<UsersPage />} />
+                <Route path="categorias" element={<CategoriesAdminPage />} />
+                <Route path="ubicaciones" element={<LocationsAdminPage />} />
+              </Route>
             </Route>
           </Route>
-        </Route>
-        <Route path="*" element={<Navigate to="/inicio" replace />} />
-      </Routes>
-    </Suspense>
+          <Route path="*" element={<Navigate to="/inicio" replace />} />
+        </Routes>
+      </Suspense>
+    </>
   );
 }
