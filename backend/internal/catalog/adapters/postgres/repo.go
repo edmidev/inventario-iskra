@@ -15,11 +15,32 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// CreateHook runs inside the transaction that inserts a new item, after the
+// insert. Returning an error rolls the whole creation back. It lets another
+// module (stock) write its own rows atomically with the item without catalog
+// importing that module.
+type CreateHook func(ctx context.Context, tx pgx.Tx, it domain.Item) error
+
+// Option customizes a Repo.
+type Option func(*Repo)
+
+// WithCreateHook registers a hook run in the item-creation transaction.
+func WithCreateHook(h CreateHook) Option { return func(r *Repo) { r.onCreate = h } }
+
 // Repo implements the catalog repository ports on one pool.
-type Repo struct{ pool *pgxpool.Pool }
+type Repo struct {
+	pool     *pgxpool.Pool
+	onCreate CreateHook
+}
 
 // New builds a Repo on an open pool.
-func New(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
+func New(pool *pgxpool.Pool, opts ...Option) *Repo {
+	r := &Repo{pool: pool}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
+}
 
 // Categories returns the category repository view.
 func (r *Repo) Categories() *Categories { return &Categories{r.pool} }
@@ -28,7 +49,7 @@ func (r *Repo) Categories() *Categories { return &Categories{r.pool} }
 func (r *Repo) Locations() *Locations { return &Locations{r.pool} }
 
 // Items returns the item repository view.
-func (r *Repo) Items() *Items { return &Items{r.pool} }
+func (r *Repo) Items() *Items { return &Items{pool: r.pool, onCreate: r.onCreate} }
 
 // Postgres error codes and constraint names this package maps to domain errors.
 const (
@@ -245,7 +266,10 @@ func (l *Locations) Delete(ctx context.Context, id int64) error {
 // ---- items ----
 
 // Items implements app.ItemRepository.
-type Items struct{ pool *pgxpool.Pool }
+type Items struct {
+	pool     *pgxpool.Pool
+	onCreate CreateHook
+}
 
 const itemCols = `id::text, code, description, category_id, kind, status, unit, stock_current, stock_min,
 	location_id, last_maintenance_at, maintenance_interval_days, attributes, notes, created_at, updated_at`
@@ -287,7 +311,12 @@ func (r *Items) Create(ctx context.Context, it *domain.Item) error {
 	if err != nil {
 		return fmt.Errorf("encode attributes: %w", err)
 	}
-	created, err := scanItem(r.pool.QueryRow(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin create item: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	created, err := scanItem(tx.QueryRow(ctx, `
 		INSERT INTO items (code, description, category_id, kind, status, unit, stock_current, stock_min,
 			location_id, last_maintenance_at, maintenance_interval_days, attributes, notes)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
@@ -296,6 +325,14 @@ func (r *Items) Create(ctx context.Context, it *domain.Item) error {
 		it.StockMin, it.LocationID, it.LastMaintenanceAt, it.MaintenanceIntervalDays, string(attrs), it.Notes))
 	if err != nil {
 		return wrapQuery("create item", mapItemWriteErr(err))
+	}
+	if r.onCreate != nil {
+		if err := r.onCreate(ctx, tx, created); err != nil {
+			return fmt.Errorf("create item hook: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit create item: %w", err)
 	}
 	*it = created
 	return nil

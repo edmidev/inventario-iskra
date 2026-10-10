@@ -12,6 +12,7 @@ import (
 	"github.com/edgar/inventario/backend/internal/catalog/app"
 	"github.com/edgar/inventario/backend/internal/catalog/domain"
 	"github.com/edgar/inventario/backend/internal/platform/db"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -370,4 +371,41 @@ func codesOf(items []domain.Item) []string {
 		out[i] = it.Code
 	}
 	return out
+}
+
+func TestCreateHookRunsInTheCreationTransaction(t *testing.T) {
+	f := setup(t)
+	ctx := t.Context()
+	var seen []string
+	fail := true
+	repo := postgres.New(f.pool, postgres.WithCreateHook(func(ctx context.Context, tx pgx.Tx, it domain.Item) error {
+		seen = append(seen, it.Code)
+		// The hook sees the uncommitted row through the same transaction.
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM items WHERE id = $1::uuid`, it.ID).Scan(&n); err != nil || n != 1 {
+			t.Errorf("hook cannot see its row: n=%d err=%v", n, err)
+		}
+		if fail {
+			return errors.New("boom")
+		}
+		return nil
+	}))
+	svc := app.NewService(repo.Categories(), repo.Locations(), repo.Items())
+	in := app.CreateItemInput{Code: "ISK-HER-900", NewItemInput: domain.NewItemInput{
+		Description: "Cinta", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(3)}}
+
+	if _, err := svc.CreateItem(ctx, in); err == nil {
+		t.Fatal("hook failure was swallowed")
+	}
+	if _, err := f.svc.GetItemByCode(ctx, "ISK-HER-900"); !errors.Is(err, domain.ErrItemNotFound) {
+		t.Fatalf("item survived a failed hook: %v", err)
+	}
+
+	fail = false
+	if _, err := svc.CreateItem(ctx, in); err != nil {
+		t.Fatalf("retry with the same code after rollback: %v", err)
+	}
+	if len(seen) != 2 {
+		t.Errorf("hook calls = %v", seen)
+	}
 }
