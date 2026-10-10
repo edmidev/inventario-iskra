@@ -15,3 +15,36 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("unexpected config: %+v", c)
 	}
 }
+
+func TestValidateServer(t *testing.T) {
+	ok := Config{DatabaseURL: "postgres://x", JWTSecret: "0123456789abcdef0123456789abcdef"}
+	if err := ok.ValidateServer(); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+	short := ok
+	short.JWTSecret = "short"
+	if short.ValidateServer() == nil {
+		t.Fatal("short JWT secret accepted")
+	}
+	noDB := ok
+	noDB.DatabaseURL = ""
+	if noDB.ValidateServer() == nil {
+		t.Fatal("missing DATABASE_URL accepted")
+	}
+}
+
+func TestLoadSecurityDefaults(t *testing.T) {
+	t.Setenv("COOKIE_SECURE", "")
+	t.Setenv("ACCESS_TOKEN_TTL", "")
+	c := Load()
+	if !c.CookieSecure {
+		t.Fatal("cookies must be Secure by default")
+	}
+	if c.AccessTTL.Minutes() != 15 {
+		t.Fatalf("access TTL = %v, want 15m", c.AccessTTL)
+	}
+	t.Setenv("COOKIE_SECURE", "false")
+	if Load().CookieSecure {
+		t.Fatal("COOKIE_SECURE=false ignored")
+	}
+}

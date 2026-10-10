@@ -1,10 +1,13 @@
-.PHONY: test run lint
+.PHONY: test run lint migrate
 
 test:
 	go test ./...
 
 run:
 	go run ./cmd/api
+
+migrate:
+	go run ./cmd/migrate
 
 lint:
 	go vet ./...
