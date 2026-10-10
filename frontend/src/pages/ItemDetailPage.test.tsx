@@ -49,19 +49,6 @@ describe("item detail", () => {
     expect(screen.getByText("5 caja")).toBeInTheDocument();
   });
 
-  it("marks the history and maintenance tabs as not available yet", async () => {
-    useAuthenticatedApi("viewer");
-    const asset = item();
-    serveItem(asset);
-    const user = userEvent.setup();
-    renderApp(`/materiales/${asset.id}`);
-    await screen.findByRole("heading", { name: "ISK-HER-001" });
-    await user.click(screen.getByRole("tab", { name: "Historial" }));
-    expect(screen.getByText(/llegarán en el siguiente paso/)).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "Mantenimiento" }));
-    expect(screen.getByText(/llegará en el siguiente paso/)).toBeInTheDocument();
-  });
-
   it("copies the code to the clipboard", async () => {
     useAuthenticatedApi("viewer");
     const asset = item();

@@ -1,4 +1,16 @@
-import type { Category, DashboardSummary, Item, Location, Role, User } from "../lib/api/schemas";
+import type {
+  Assignment,
+  Category,
+  DashboardSummary,
+  DueMaintenance,
+  Item,
+  Location,
+  MaintenanceRecord,
+  Movement,
+  Role,
+  StockAlert,
+  User,
+} from "../lib/api/schemas";
 
 export const user = (role: Role = "operator"): User => ({
   id: "u-1",
@@ -132,3 +144,106 @@ export const summary: DashboardSummary = {
     ],
   },
 };
+
+export const movement = (overrides: Partial<Movement> = {}): Movement => ({
+  id: 1,
+  item_id: "22222222-2222-2222-2222-222222222222",
+  type: "in",
+  qty: 5,
+  stock_before: 2,
+  stock_after: 7,
+  from_location_id: null,
+  to_location_id: null,
+  user_id: "u-1",
+  user_name: "Ana Pérez",
+  note: "",
+  created_at: "2026-10-01T10:00:00Z",
+  ...overrides,
+});
+
+export const assignment = (overrides: Partial<Assignment> = {}): Assignment => ({
+  id: 1,
+  item_id: "33333333-3333-3333-3333-333333333333",
+  item_code: "ISK-HER-002",
+  item_description: "Sierra circular",
+  assignee_location_id: 12,
+  assignee_name: "Juan Gómez",
+  assignee_kind: "person",
+  origin_location_id: 11,
+  origin_name: "Estante A",
+  assigned_at: "2026-09-01T10:00:00Z",
+  due_at: "2026-09-15T00:00:00Z",
+  overdue: true,
+  returned_at: null,
+  returned_to_location_id: null,
+  returned_to_name: null,
+  assigned_by: "u-1",
+  assigned_by_name: "Ana Pérez",
+  returned_by: null,
+  returned_by_name: null,
+  assign_note: "",
+  return_note: "",
+  created_at: "2026-09-01T10:00:00Z",
+  ...overrides,
+});
+
+export const maintenanceRecord = (overrides: Partial<MaintenanceRecord> = {}): MaintenanceRecord => ({
+  id: 1,
+  item_id: "11111111-1111-1111-1111-111111111111",
+  item_code: "ISK-HER-001",
+  item_description: "Taladro inalámbrico",
+  item_status: "inoperative",
+  kind: "corrective",
+  status: "open",
+  reported_at: "2026-10-05T09:00:00Z",
+  description: "No enciende",
+  destination: null,
+  cost: null,
+  next_due_at: null,
+  closed_at: null,
+  resolution_note: null,
+  reported_by: "u-1",
+  reported_by_name: "Ana Pérez",
+  closed_by: null,
+  closed_by_name: null,
+  created_at: "2026-10-05T09:00:00Z",
+  updated_at: "2026-10-05T09:00:00Z",
+  ...overrides,
+});
+
+export const stockAlert = (overrides: Partial<StockAlert> = {}): StockAlert => ({
+  item_id: "22222222-2222-2222-2222-222222222222",
+  code: "ISK-CON-001",
+  description: "Guantes de nitrilo",
+  unit: "caja",
+  stock_current: 2,
+  stock_min: 5,
+  shortage: -3,
+  location_id: 10,
+  location_name: "Bodega",
+  ...overrides,
+});
+
+export const dueMaintenance = (overrides: Partial<DueMaintenance> = {}): DueMaintenance => ({
+  item_id: "11111111-1111-1111-1111-111111111111",
+  code: "ISK-HER-001",
+  description: "Taladro inalámbrico",
+  category_id: 1,
+  category_name: "Herramientas",
+  status: "functional",
+  location_id: 11,
+  location_name: "Estante A",
+  last_maintenance_at: "2026-06-01T00:00:00Z",
+  maintenance_interval_days: 90,
+  maintenance_due_at: "2026-09-30T00:00:00Z",
+  maintenance_overdue: true,
+  ...overrides,
+});
+
+/** Wraps rows in the paginated envelope the list endpoints return. */
+export const page = <T,>(data: T[], extra: { total?: number; limit?: number; offset?: number } = {}) => ({
+  data,
+  total: extra.total ?? data.length,
+  limit: extra.limit ?? 20,
+  offset: extra.offset ?? 0,
+});

@@ -1,11 +1,10 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Badge } from "../atoms/Badge";
 import { Button } from "../atoms/Button";
 import { Icon } from "../atoms/Icon";
 import { IconButton } from "../atoms/IconButton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../atoms/Tabs";
 import { AvailabilityBadge, LowStockBadge, StatusBadge } from "../molecules/ItemBadges";
-import { EmptyState } from "../molecules/StateMessage";
 import { formatDate, kindLabels } from "../../lib/format";
 import type { Item } from "../../lib/api/schemas";
 
@@ -17,6 +16,9 @@ interface ItemDetailViewProps {
   onEdit: () => void;
   onDelete: () => void;
   onCopyCode: () => void;
+  /** Container-rendered tab bodies (they fetch their own data). */
+  historyTab: ReactNode;
+  maintenanceTab: ReactNode;
 }
 
 function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -33,7 +35,17 @@ function attributeText(value: unknown): string {
   return typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
 }
 
-export function ItemDetailView({ item, categoryName, locationName, canWrite, onEdit, onDelete, onCopyCode }: ItemDetailViewProps) {
+export function ItemDetailView({
+  item,
+  categoryName,
+  locationName,
+  canWrite,
+  onEdit,
+  onDelete,
+  onCopyCode,
+  historyTab,
+  maintenanceTab,
+}: ItemDetailViewProps) {
   const [tab, setTab] = useState("info");
   const attributeEntries = Object.entries(item.attributes);
 
@@ -82,7 +94,7 @@ export function ItemDetailView({ item, categoryName, locationName, canWrite, onE
         <TabsList label="Secciones del material">
           <TabsTrigger value="info">Info</TabsTrigger>
           <TabsTrigger value="history">Historial</TabsTrigger>
-          <TabsTrigger value="maintenance">Mantenimiento</TabsTrigger>
+          {item.kind === "asset" && <TabsTrigger value="maintenance">Mantenimiento</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="info" className="pt-4">
@@ -141,11 +153,13 @@ export function ItemDetailView({ item, categoryName, locationName, canWrite, onE
         </TabsContent>
 
         <TabsContent value="history" className="pt-4">
-          <EmptyState title="Historial" description="Los movimientos de stock y préstamos llegarán en el siguiente paso." />
+          {historyTab}
         </TabsContent>
-        <TabsContent value="maintenance" className="pt-4">
-          <EmptyState title="Mantenimiento" description="El registro de fallas y mantenimientos llegará en el siguiente paso." />
-        </TabsContent>
+        {item.kind === "asset" && (
+          <TabsContent value="maintenance" className="pt-4">
+            {maintenanceTab}
+          </TabsContent>
+        )}
       </Tabs>
     </article>
   );

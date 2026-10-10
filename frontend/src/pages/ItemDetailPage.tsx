@@ -6,6 +6,8 @@ import { ErrorState, LoadingState } from "../components/molecules/StateMessage";
 import { ItemDetailView } from "../components/organisms/ItemDetailView";
 import { usePermissions } from "../features/auth/session";
 import { useCatalogLookup } from "../features/catalog/api/catalog";
+import { HistoryTab } from "../features/history/components/HistoryTab";
+import { MaintenanceTab } from "../features/maintenance/components/MaintenanceTab";
 import { useItem } from "../features/items/api/items";
 import { DeleteItemSheet } from "../features/items/components/DeleteItemSheet";
 import { ItemFormSheet } from "../features/items/components/ItemFormSheet";
@@ -47,6 +49,8 @@ export function ItemDetailPage() {
           categoryName={catalog.categoryName(item.category_id)}
           locationName={catalog.locationName(item.location_id)}
           canWrite={canWriteItems}
+          historyTab={<HistoryTab item={item} />}
+          maintenanceTab={<MaintenanceTab item={item} />}
           onEdit={() => setEditing(true)}
           onDelete={() => setDeleting(true)}
           onCopyCode={() => {
