@@ -16,6 +16,8 @@ export function useAuthenticatedApi(role: Role = "operator") {
     http.post(api("/auth/refresh"), () => HttpResponse.json(session(role))),
     http.get(api("/categories"), () => HttpResponse.json({ data: categories })),
     http.get(api("/locations"), () => HttpResponse.json({ data: locations })),
+    // No open failures unless a test says otherwise (operators' item detail asks for it).
+    http.get(api("/maintenance"), () => HttpResponse.json({ data: [], total: 0, limit: 1, offset: 0 })),
   );
 }
 
