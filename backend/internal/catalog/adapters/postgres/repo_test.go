@@ -538,3 +538,43 @@ func TestItemOnLoanRejectsDeleteAndLocationChange(t *testing.T) {
 		t.Errorf("delete after return: %v", err)
 	}
 }
+
+func TestStatusChangeRejectedWhileFailureIsOpen(t *testing.T) {
+	f := setup(t)
+	ctx := t.Context()
+	it := f.create(t, domain.NewItemInput{Description: "Taladro", Kind: domain.KindAsset}, "ISK-HER-001")
+	if _, err := f.pool.Exec(ctx, `
+		INSERT INTO users (name, email, password_hash, role) VALUES ('Ana', 'ana-repair@example.com', 'x', 'operator')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `
+		INSERT INTO maintenance_records (item_id, kind, status, description, reported_by)
+		VALUES ($1::uuid, 'corrective', 'open', 'broken', (SELECT id FROM users WHERE email = 'ana-repair@example.com'))`, it.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.svc.UpdateItem(ctx, it.ID, domain.ItemPatch{Status: ptr(domain.StatusInRepair)}); !errors.Is(err, domain.ErrItemUnderRepair) {
+		t.Fatalf("status change: %v", err)
+	}
+	// A stale caller that skips the domain check is stopped by the row lock too.
+	stale := it
+	stale.Status = domain.StatusInoperative
+	if err := f.repo.Items().Update(ctx, &stale); !errors.Is(err, domain.ErrItemUnderRepair) {
+		t.Errorf("repository update: %v", err)
+	}
+	if g, _ := f.svc.GetItem(ctx, it.ID); g.Status != domain.StatusFunctional {
+		t.Errorf("rejected writes changed the status: %q", g.Status)
+	}
+	if got, err := f.svc.UpdateItem(ctx, it.ID, domain.ItemPatch{Status: ptr(domain.StatusFunctional), Notes: ptr("same")}); err != nil || got.Notes != "same" {
+		t.Errorf("same status stays allowed: %v %+v", err, got)
+	}
+
+	if _, err := f.pool.Exec(ctx, `
+		UPDATE maintenance_records SET status = 'closed', closed_at = now() + interval '1 second', closed_by = reported_by
+		WHERE item_id = $1::uuid`, it.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.svc.UpdateItem(ctx, it.ID, domain.ItemPatch{Status: ptr(domain.StatusInoperative)}); err != nil || got.Status != domain.StatusInoperative {
+		t.Errorf("after the failure is closed: %v %+v", err, got)
+	}
+}

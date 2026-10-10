@@ -30,6 +30,8 @@ type Store struct {
 type storedItem struct {
 	domain.Item
 	deleted bool
+	// openFailure stands in for an open corrective maintenance record.
+	openFailure bool
 }
 
 // NewStore returns an empty store.
@@ -56,6 +58,16 @@ func (s *Store) SetLoan(itemID string, loan *domain.LoanInfo) {
 	defer s.mu.Unlock()
 	e := s.items[itemID]
 	e.Loan = loan
+	s.items[itemID] = e
+}
+
+// SetOpenFailure marks an item as having an open failure (test helper). It
+// stands in for the maintenance module, which owns the real data.
+func (s *Store) SetOpenFailure(itemID string, open bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.items[itemID]
+	e.openFailure = open
 	s.items[itemID] = e
 }
 
@@ -305,9 +317,12 @@ func (r *Items) Update(_ context.Context, it *domain.Item) error {
 	if e.Loan != nil && !sameLocation(e.LocationID, it.LocationID) {
 		return domain.ErrItemOnLoan
 	}
+	if e.openFailure && e.Status != it.Status {
+		return domain.ErrItemUnderRepair
+	}
 	it.Code, it.Kind, it.StockCurrent, it.Loan = e.Code, e.Kind, e.StockCurrent, e.Loan
 	it.CreatedAt, it.UpdatedAt = e.CreatedAt, r.s.clock()
-	r.s.items[it.ID] = storedItem{Item: *it}
+	r.s.items[it.ID] = storedItem{Item: *it, openFailure: e.openFailure}
 	return nil
 }
 

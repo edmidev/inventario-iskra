@@ -157,7 +157,7 @@ func (c *Categories) Delete(ctx context.Context, id int64) error {
 func wrapQuery(op string, err error) error {
 	for _, d := range []error{
 		domain.ErrCategoryNotFound, domain.ErrCategoryNameTaken, domain.ErrCategoryPrefixTaken, domain.ErrCategoryInUse,
-		domain.ErrLocationNotFound, domain.ErrLocationInUse, domain.ErrItemNotFound, domain.ErrCodeTaken, domain.ErrItemOnLoan,
+		domain.ErrLocationNotFound, domain.ErrLocationInUse, domain.ErrItemNotFound, domain.ErrCodeTaken, domain.ErrItemOnLoan, domain.ErrItemUnderRepair,
 	} {
 		if errors.Is(err, d) {
 			return err
@@ -422,7 +422,10 @@ func (r *Items) GetByCode(ctx context.Context, code string) (domain.Item, error)
 // Update implements app.ItemRepository. code, kind and stock_current are never
 // written. The item row is locked first so a concurrent loan cannot slip in
 // between the "is it on loan" check and the write: while an item is on loan
-// its location belongs to custody and changing it yields ErrItemOnLoan.
+// its location belongs to custody and changing it yields ErrItemOnLoan. The
+// same lock guards the status: while a corrective maintenance record is open
+// the maintenance module owns it and a change yields ErrItemUnderRepair
+// (another adapter-level read of a table owned by a sibling module).
 func (r *Items) Update(ctx context.Context, it *domain.Item) error {
 	if !validUUID(it.ID) {
 		return domain.ErrItemNotFound
@@ -436,16 +439,22 @@ func (r *Items) Update(ctx context.Context, it *domain.Item) error {
 		return fmt.Errorf("begin update item: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var moved, onLoan bool
+	var moved, onLoan, statusChanged, openFailure bool
 	err = tx.QueryRow(ctx, `
-		SELECT i.location_id IS DISTINCT FROM $2::bigint, `+activeLoanExists+`
+		SELECT i.location_id IS DISTINCT FROM $2::bigint, `+activeLoanExists+`,
+		       i.status IS DISTINCT FROM $3,
+		       EXISTS (SELECT 1 FROM maintenance_records m
+		               WHERE m.item_id = i.id AND m.kind = 'corrective' AND m.status = 'open')
 		FROM items i WHERE i.id = $1::uuid AND i.deleted_at IS NULL FOR UPDATE OF i`,
-		it.ID, it.LocationID).Scan(&moved, &onLoan)
+		it.ID, it.LocationID, string(it.Status)).Scan(&moved, &onLoan, &statusChanged, &openFailure)
 	if err != nil {
 		return wrapQuery("update item", itemNotFound(err))
 	}
 	if moved && onLoan {
 		return domain.ErrItemOnLoan
+	}
+	if statusChanged && openFailure {
+		return domain.ErrItemUnderRepair
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE items SET description = $2, category_id = $3, status = $4, unit = $5, stock_min = $6,

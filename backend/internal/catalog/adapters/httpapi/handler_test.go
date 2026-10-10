@@ -501,3 +501,21 @@ func TestItemsExposeMaintenanceDueDateAndOverdueFlag(t *testing.T) {
 		}
 	}
 }
+
+func TestPatchStatusWhileFailureOpenIs409(t *testing.T) {
+	e := newEnv(t)
+	cat := e.mustCreate(t, "/categories", map[string]any{"name": "Herramientas", "code_prefix": "HER"})
+	id := e.mustCreate(t, "/items", map[string]any{"description": "Taladro", "category_id": cat.num("id"), "kind": "asset"}).str("id")
+	e.st.SetOpenFailure(id, true)
+
+	r := e.do(t, "PATCH", "/items/"+id, "operator", map[string]any{"status": "in_repair"})
+	if r.Status != 409 || r.errCode() != "item_under_repair" {
+		t.Fatalf("status change: %d %v", r.Status, r.Body)
+	}
+	if r := e.do(t, "PATCH", "/items/"+id, "operator", map[string]any{"status": "functional", "notes": "ok"}); r.Status != 200 {
+		t.Errorf("same status: %d %v", r.Status, r.Body)
+	}
+	if r := e.do(t, "GET", "/items/"+id, "viewer", nil); r.str("status") != "functional" {
+		t.Errorf("status changed despite 409: %v", r.Body)
+	}
+}

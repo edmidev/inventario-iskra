@@ -427,3 +427,25 @@ func TestOnLoanItemsRejectDeleteAndLocationChange(t *testing.T) {
 		t.Errorf("delete after return: %v", err)
 	}
 }
+
+func TestStatusChangeRejectedWhileFailureIsOpen(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	it := f.asset(t, "ISK-HER-001")
+	f.store.SetOpenFailure(it.ID, true)
+
+	if _, err := f.svc.UpdateItem(ctx, it.ID, domain.ItemPatch{Status: ptr(domain.StatusInRepair)}); !errors.Is(err, domain.ErrItemUnderRepair) {
+		t.Fatalf("status change: %v", err)
+	}
+	if got, _ := f.svc.GetItem(ctx, it.ID); got.Status != domain.StatusFunctional {
+		t.Errorf("rejected change must not persist, status %q", got.Status)
+	}
+	// Re-sending the same status and unrelated edits stay allowed.
+	if _, err := f.svc.UpdateItem(ctx, it.ID, domain.ItemPatch{Status: ptr(domain.StatusFunctional), Notes: ptr("same")}); err != nil {
+		t.Errorf("same status: %v", err)
+	}
+	f.store.SetOpenFailure(it.ID, false) // failure closed
+	if got, err := f.svc.UpdateItem(ctx, it.ID, domain.ItemPatch{Status: ptr(domain.StatusInoperative)}); err != nil || got.Status != domain.StatusInoperative {
+		t.Errorf("after close: %v %+v", err, got)
+	}
+}

@@ -114,6 +114,8 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "location_cycle", "the new parent would create a cycle")
 	case errors.Is(err, domain.ErrItemOnLoan):
 		httpx.WriteError(w, http.StatusConflict, "item_on_loan", "item is on loan; return it first")
+	case errors.Is(err, domain.ErrItemUnderRepair):
+		httpx.WriteError(w, http.StatusConflict, "item_under_repair", "item has an open failure; close it in maintenance first")
 	case errors.Is(err, domain.ErrCodeTaken):
 		httpx.WriteError(w, http.StatusConflict, "code_taken", "an item with this code already exists")
 	default:

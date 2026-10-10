@@ -24,6 +24,9 @@ var (
 	ErrItemNotFound = errors.New("item not found")
 	ErrCodeTaken    = errors.New("item code already in use")
 	ErrItemOnLoan   = errors.New("item is on loan")
+	// ErrItemUnderRepair is returned when a plain edit tries to change the
+	// status of an item with an open failure; maintenance owns it until closed.
+	ErrItemUnderRepair = errors.New("item has an open failure")
 )
 
 // ValidationError is an ErrInvalidInput carrying one message per offending
