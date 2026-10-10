@@ -23,9 +23,13 @@ Mobile-first inventory system (Go backend, React frontend) replacing `inventario
 - [x] T2 catalog: categories, locations, items CRUD, search/filters, code generator
 - [x] T3 stock: movements, consumable stock, min-stock alerts
 - [x] T4 custody: loan/return with history
-- [ ] T4b follow-up: stock `transfer` must reject assets on loan (`item_on_loan`), found by T4 writer (route: folded into T5 writer's first work unit)
-- [ ] T5 maintenance: records, failure report, due dates
-- [ ] T6 frontend: dashboard, PWA, QR
+- [x] T4b follow-up: stock `transfer` must reject assets on loan (`item_on_loan`), found by T4 writer (route: folded into T5 writer's first work unit)
+- [x] T5 maintenance: records, failure report, due dates
+- [ ] T6 frontend: dashboard, PWA, QR (split, one writer at a time, backend first)
+  - [ ] T6a backend `GET /dashboard/summary` (+ fix stale README line)
+  - [ ] T6b frontend foundation: API client, auth + role guards, layout, dashboard, items list/detail/create/edit
+  - [ ] T6c frontend operations: stock movements + alerts, loan/return, maintenance flows, history tabs
+  - [ ] T6d frontend QR scan/labels, admin (users, categories, locations), PWA, Playwright mobile e2e
 - [ ] T7 xlsx importer + real data migration
 
 ## Acceptance
@@ -38,6 +42,7 @@ Per plan "Verificacion" section.
 - T2 done (delegated writer). Commits: bc943b7, 6d8bae4, f94d219, 808808e, 3ae4afb. Parent spot check with throwaway postgres:16: gofmt clean, go vet ok, go test ./... -p 1 all ok incl. catalog Postgres tests. Notes: validation errors are 422 with fields; availability derived via domain.DeriveAvailability (T4 fills ActiveLoan); only admin may supply a manual code; category/location ids are numeric, items uuid; location cycle check not race-safe (admin-only); no optimistic locking on item update.
 - T3 done (delegated writer). Commits: 635b752, e1e41e1, ecb2e80, bce3249, 46fda31. Parent spot check with throwaway postgres:16: gofmt clean, go vet ok, go test ./... -p 1 all ok incl. stock Postgres tests. Notes: movements types opening|in|out|adjust|transfer; stock_movements.user_id nullable (system/backfill); opening movement recorded via catalog adapter create-hook wired in cmd/api/wire.go (same tx); TRUNCATE not blocked by immutability trigger; adjust to same count records delta 0.
 - T4 done (delegated writer). Commits: dd4d15c, d3abf65, 57d8c3d, c671e67, d4fddf3, a34cf50. Parent spot check with throwaway postgres:16: gofmt clean, go vet ok, go test ./... -p 1 all ok incl. custody Postgres tests. Notes: catalog adapter LEFT JOINs custody_assignments (adapter-level coupling only); items expose on_loan + custody; catalog rejects delete/location change while on loan; assignee FK RESTRICT so locations with custody history cannot be deleted; overdue uses app clock. OPEN HOLE: stock transfer can still move an asset on loan (T4b).
+- T4b + T5 done (one delegated writer). Commits: 117a092, b6d33df, 0c92ac1, e937f41, e0a8c8d, aecca9b, da3b2ce. Parent spot check with throwaway postgres:16: gofmt clean, go vet ok, go test ./... -p 1 all 24 packages ok. Notes: `/maintenance/due` within_days 0..365 default 0 (overdue only); last_maintenance_at never moves backwards; plain PATCH /items can still change status while a failure is open (unguarded); costs float64 rounded to 2 decimals at API edge; catalog DTO overdue uses time.Now(). No dashboard endpoint and no CORS exist yet (web uses nginx /api proxy; dev needs Vite proxy).
 
 ## Next step
-T4b stock transfer vs loan guard, then T5 maintenance (records, failure report, due dates).
+T6a backend dashboard summary, then T6b frontend foundation.
