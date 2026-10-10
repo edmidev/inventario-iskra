@@ -79,6 +79,17 @@ Movements and low-stock alerts live in the `stock` module (`POST|GET /api/v1/ite
 - Creating a consumable with `stock_current > 0` records an `opening` movement in the same transaction. Catalog exposes an adapter-level create hook (`catalogpg.WithCreateHook`) that `cmd/api/wire.go` fills with stock's `RecordOpening`; catalog never imports stock. Migration `00004` backfills an `opening` movement for consumables that already had stock.
 - Operators and admins record movements (`items:write`); every role reads history (`limit` max 100, default 25, `offset`, optional `type`) and alerts (consumables with `stock_min > 0` and `stock_current <= stock_min`, most severe first).
 
+## Custody
+
+Loans and returns live in the `custody` module (`POST /api/v1/items/{id}/assign`, `POST /items/{id}/return`, `GET /items/{id}/custody`, `GET /custody/active`; see `openapi/openapi.yaml`). No new environment variables; migration `00005` creates `custody_assignments`.
+
+- Only `asset` items can be lent (consumables: 422 `not_applicable`, they move with stock transfers). The assignee is an existing location of kind `person` or `container` (for example "Maleta de Alejandro"). The item must be `functional` (409 `item_not_available`) and not already on loan (409 `already_assigned`); `due_at` is optional and must be in the future.
+- Assigning moves the item's `location_id` to the assignee and remembers the previous location as `origin_location_id`. Returning closes the assignment and moves the item to `return_location_id` or, by default, back to the origin (left without location if the origin was deleted). Returning without an active loan is 409 `not_assigned`; an item that broke while on loan can still be returned (its status is untouched).
+- Each operation locks the item row (`SELECT ... FOR UPDATE`) and writes the assignment and the item in one transaction. A partial unique index (`custody_assignments_one_active_per_item`, `WHERE returned_at IS NULL`) guarantees at most one active loan per item, so parallel assigns yield exactly one success. Rows are never deleted: history keeps the assignee, origin, return location, both users and both notes. Locations referenced by history cannot be deleted (409 `location_in_use`).
+- Availability is derived, never stored: `available` means `functional` and no active loan. Item responses add `on_loan` and, while on loan, `custody` (`assignee_location_id`, `assignee_name`, `assigned_at`, `due_at`, `overdue`); `GET /items?availability=` honors loans. The catalog's postgres adapter reads `custody_assignments` with a LEFT JOIN for this; the catalog domain and app layers never import custody.
+- While an item is on loan custody owns its location: deleting it or changing `location_id` through `PATCH /items/{id}` returns 409 `item_on_loan`.
+- Operators and admins assign and return (`items:write`); every role reads an item's history and `GET /custody/active` (overdue first, then oldest; filters `assignee_location_id`, `overdue=true`, `q`; `limit` max 100, default 25, `offset`).
+
 ## Test
 
 ```sh

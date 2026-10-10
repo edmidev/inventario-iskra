@@ -554,6 +554,97 @@ paths:
                   offset: { type: integer }
         "401": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /items/{id}/assign:
+    post:
+      operationId: assignItem
+      summary: Lend an asset to a person or container (operator or admin)
+      description: |
+        Atomically creates an active assignment and moves the item's `location_id` to the assignee; the previous location is remembered as the assignment's origin. The acting user is the authenticated caller.
+        - Only assets can be lent (422 `not_applicable` for consumables, which move with stock transfers).
+        - `assignee_location_id` must exist and be a `person` or `container` location (422 on that field).
+        - `due_at` is optional and must be in the future (422).
+        - The item must be `functional` (409 `item_not_available`) and not already on loan (409 `already_assigned`). The database guarantees at most one active assignment per item, so parallel requests yield exactly one 201.
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssignRequest" }
+      responses:
+        "201":
+          description: Assignment created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assignment" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /items/{id}/return:
+    post:
+      operationId: returnItem
+      summary: Return a lent asset (operator or admin)
+      description: |
+        Closes the item's active assignment and moves the item to `return_location_id` when given, otherwise back to the location it had when lent. If that origin location no longer exists the item is left without a location. The item's status is untouched, so an item that broke while on loan can still be returned. Without an active assignment the call fails with 409 `not_assigned`. The request body is optional.
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReturnRequest" }
+      responses:
+        "200":
+          description: The closed assignment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assignment" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /items/{id}/custody:
+    get:
+      operationId: listItemCustody
+      summary: Loan history of an item (any role)
+      description: Newest first, including the active assignment. Soft-deleted items return 404.
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: One page of assignments
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssignmentPage" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /custody/active:
+    get:
+      operationId: listActiveCustody
+      summary: Items currently on loan (any role)
+      description: Overdue loans first, then the oldest loan first. `q` is a case-insensitive substring match over item code and description.
+      parameters:
+        - { name: assignee_location_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: overdue, in: query, description: "`true` keeps only loans past their `due_at`.", schema: { type: boolean } }
+        - { name: q, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: One page of active assignments
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssignmentPage" }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
 security:
   - bearerAuth: []
 components:
@@ -628,10 +719,10 @@ components:
     Availability:
       type: string
       enum: [available, unavailable]
-      description: Derived, never stored. Today `available` means status is `functional`; custody will also require no active loan.
+      description: Derived, never stored. `available` means status is `functional` and the item has no active loan.
     Item:
       type: object
-      required: [id, code, description, category_id, kind, status, availability, unit, stock_current, stock_min, low_stock, location_id, last_maintenance_at, maintenance_interval_days, attributes, notes, created_at, updated_at]
+      required: [id, code, description, category_id, kind, status, availability, unit, stock_current, stock_min, low_stock, on_loan, location_id, last_maintenance_at, maintenance_interval_days, attributes, notes, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         code: { type: string, example: ISK-HER-001 }
@@ -644,6 +735,8 @@ components:
         stock_current: { type: integer }
         stock_min: { type: integer }
         low_stock: { type: boolean }
+        on_loan: { type: boolean, description: True while the item has an active custody assignment. While on loan the item cannot be deleted and its `location_id` cannot be changed through PATCH (409 `item_on_loan`). }
+        custody: { $ref: "#/components/schemas/ItemCustody" }
         location_id: { type: integer, format: int64, nullable: true }
         last_maintenance_at: { type: string, format: date-time, nullable: true }
         maintenance_interval_days: { type: integer, nullable: true }
@@ -651,6 +744,16 @@ components:
         notes: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    ItemCustody:
+      type: object
+      description: Present only while the item is on loan.
+      required: [assignee_location_id, assignee_name, assigned_at, due_at, overdue]
+      properties:
+        assignee_location_id: { type: integer, format: int64 }
+        assignee_name: { type: string }
+        assigned_at: { type: string, format: date-time }
+        due_at: { type: string, format: date-time, nullable: true }
+        overdue: { type: boolean, description: True when `due_at` has passed. }
     ItemCreate:
       type: object
       required: [description, category_id, kind]
@@ -743,6 +846,54 @@ components:
         shortage: { type: integer, description: stock_current - stock_min; lower is more severe. }
         location_id: { type: integer, format: int64, nullable: true }
         location_name: { type: string, nullable: true }
+    AssignRequest:
+      type: object
+      required: [assignee_location_id]
+      properties:
+        assignee_location_id: { type: integer, format: int64, description: A location of kind `person` or `container`. }
+        due_at: { type: string, format: date-time, nullable: true, description: Must be in the future. }
+        note: { type: string, maxLength: 500 }
+    ReturnRequest:
+      type: object
+      properties:
+        return_location_id: { type: integer, format: int64, nullable: true, description: Defaults to the location the item had when lent. }
+        note: { type: string, maxLength: 500 }
+    Assignment:
+      type: object
+      required: [id, item_id, item_code, item_description, assignee_location_id, assignee_name, assignee_kind, origin_location_id, origin_name, assigned_at, due_at, overdue, returned_at, returned_to_location_id, returned_to_name, assigned_by, assigned_by_name, returned_by, returned_by_name, assign_note, return_note, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        item_id: { type: string, format: uuid }
+        item_code: { type: string }
+        item_description: { type: string }
+        assignee_location_id: { type: integer, format: int64 }
+        assignee_name: { type: string }
+        assignee_kind: { type: string, enum: [person, container, storage], description: Kind at read time; new loans only accept person or container. }
+        origin_location_id: { type: integer, format: int64, nullable: true, description: Where the item was when lent. }
+        origin_name: { type: string, nullable: true }
+        assigned_at: { type: string, format: date-time }
+        due_at: { type: string, format: date-time, nullable: true }
+        overdue: { type: boolean, description: True for an active assignment past its due date. }
+        returned_at: { type: string, format: date-time, nullable: true, description: Null while the loan is active. }
+        returned_to_location_id: { type: integer, format: int64, nullable: true }
+        returned_to_name: { type: string, nullable: true }
+        assigned_by: { type: string, format: uuid }
+        assigned_by_name: { type: string }
+        returned_by: { type: string, format: uuid, nullable: true }
+        returned_by_name: { type: string, nullable: true }
+        assign_note: { type: string }
+        return_note: { type: string }
+        created_at: { type: string, format: date-time }
+    AssignmentPage:
+      type: object
+      required: [data, total, limit, offset]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Assignment" }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
   responses:
     Error:
       description: Error envelope
