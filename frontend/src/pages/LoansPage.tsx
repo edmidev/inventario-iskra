@@ -58,15 +58,15 @@ export function LoansPage() {
           value={filters.q}
           onChange={(q) => update({ ...filters, q })}
           label="Buscar préstamos"
-          placeholder="Buscar por código o descripción"
+          placeholder="Código o descripción"
         />
         <div className="grid grid-cols-[1fr_auto] gap-2">
           <Select
             aria-label="Filtrar por responsable"
             value={filters.assigneeLocationId ? String(filters.assigneeLocationId) : ""}
             onValueChange={(value) => update({ ...filters, assigneeLocationId: value ? Number(value) : null })}
-            placeholder="Todos los responsables"
-            clearLabel="Todos los responsables"
+            placeholder="Responsable"
+            clearLabel="Responsable"
             options={catalog.locations
               .filter((l) => l.kind === "person" || l.kind === "container")
               .map((l) => ({ value: String(l.id), label: l.name }))}

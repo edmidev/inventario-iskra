@@ -17,6 +17,11 @@ export function Sheet({ open, onOpenChange, title, description, children }: Shee
       <Dialog.Portal>
         <Dialog.Overlay className="sheet-overlay fixed inset-0 z-40 bg-overlay" />
         <Dialog.Content
+          // Keep focus on the sheet itself: auto-focusing the close button pops its tooltip open.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            (event.currentTarget as HTMLElement).focus();
+          }}
           className={
             "sheet-content fixed inset-x-0 bottom-0 z-50 flex max-h-[92dvh] flex-col rounded-t-3xl bg-surface shadow-sheet " +
             "md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:w-full md:max-w-lg md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-3xl"
@@ -33,7 +38,7 @@ export function Sheet({ open, onOpenChange, title, description, children }: Shee
               )}
             </div>
             <Dialog.Close asChild>
-              <IconButton icon="x" label="Cerrar" className="-mr-2" />
+              <IconButton icon="x" label="Cerrar" className="-mr-2 shrink-0" />
             </Dialog.Close>
           </header>
           <div className="overflow-y-auto px-5 pt-1 pb-[max(1.25rem,env(safe-area-inset-bottom))]">{children}</div>

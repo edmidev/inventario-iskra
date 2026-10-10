@@ -76,7 +76,7 @@ export function ItemsPage() {
             value={filters.q}
             onChange={setSearch}
             label="Buscar materiales"
-            placeholder="Buscar por código o descripción"
+            placeholder="Código o descripción"
           />
         </div>
         <Button onClick={() => setFiltersOpen(true)} aria-label={count ? `Filtros (${count} activos)` : "Filtros"}>

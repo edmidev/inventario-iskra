@@ -105,13 +105,16 @@ export function ScanPage() {
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold">Escanear</h1>
 
-      <section aria-label="Cámara" className="relative aspect-square max-h-[55dvh] w-full overflow-hidden rounded-card bg-black">
-        <video ref={videoRef} muted playsInline className="size-full object-cover" aria-label="Vista de la cámara" />
+      <section
+        aria-label="Cámara"
+        className={`relative w-full overflow-hidden rounded-card bg-black ${camera.status === "unavailable" ? "min-h-32" : "aspect-square max-h-[55dvh]"}`}
+      >
+        <video ref={videoRef} muted playsInline className={`size-full object-cover ${camera.status === "unavailable" ? "hidden" : ""}`} aria-label="Vista de la cámara" />
         {camera.status === "starting" && (
           <output className="absolute inset-0 grid place-items-center text-sm font-medium text-white">Iniciando cámara…</output>
         )}
         {camera.status === "unavailable" && (
-          <p role="alert" className="absolute inset-0 grid place-items-center bg-sunken p-6 text-center text-sm font-medium text-ink">
+          <p role="alert" className="grid min-h-32 place-items-center bg-sunken p-6 text-center text-sm font-medium text-ink">
             {cameraMessages[camera.reason]}
           </p>
         )}

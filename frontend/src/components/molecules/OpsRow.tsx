@@ -18,7 +18,7 @@ export function OpsRow({ itemId, code, description, children, aside, action }: O
   return (
     <li className="flex flex-col gap-2 rounded-card border border-line bg-surface p-4">
       <div className="flex items-start justify-between gap-3">
-        <Link to={`/materiales/${itemId}`} className="min-w-0 flex-1">
+        <Link to={`/materiales/${itemId}`} className="min-h-11 min-w-0 flex-1">
           <span className="block font-mono text-sm font-semibold text-accent">{code}</span>
           <span className="block font-medium">{description}</span>
         </Link>

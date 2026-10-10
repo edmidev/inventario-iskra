@@ -25,7 +25,7 @@ function AlertList({
         <div className="flex items-center gap-3">
           <Badge tone={count > 0 ? "bad" : "ok"}>{count}</Badge>
           {seeAllTo && count > 0 && (
-            <Link to={seeAllTo} className="text-sm font-semibold text-accent">
+            <Link to={seeAllTo} className="-my-2 inline-flex min-h-11 items-center px-1 text-sm font-semibold text-accent">
               Ver todo
             </Link>
           )}

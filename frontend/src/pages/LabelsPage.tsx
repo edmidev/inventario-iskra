@@ -49,7 +49,7 @@ export function LabelsPage() {
       </div>
 
       <div className="sticky top-0 z-20 -mx-4 flex flex-col gap-2 bg-canvas/95 px-4 py-2 backdrop-blur">
-        <SearchInput value={q} onChange={setQ} label="Buscar materiales" placeholder="Buscar por código o descripción" />
+        <SearchInput value={q} onChange={setQ} label="Buscar materiales" placeholder="Código o descripción" />
         <Select
           aria-label="Categoría"
           value={categoryId}
