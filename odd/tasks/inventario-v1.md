@@ -25,11 +25,12 @@ Mobile-first inventory system (Go backend, React frontend) replacing `inventario
 - [x] T4 custody: loan/return with history
 - [x] T4b follow-up: stock `transfer` must reject assets on loan (`item_on_loan`), found by T4 writer (route: folded into T5 writer's first work unit)
 - [x] T5 maintenance: records, failure report, due dates
-- [ ] T6 frontend: dashboard, PWA, QR (split, one writer at a time, backend first)
+- [x] T6 frontend: dashboard, PWA, QR (split, one writer at a time, backend first)
   - [x] T6a backend `GET /dashboard/summary` (+ fix stale README line)
   - [x] T6b frontend foundation: API client, auth + role guards, layout, dashboard, items list/detail/create/edit
   - [x] T6c frontend operations: stock movements + alerts, loan/return, maintenance flows, history tabs
-  - [ ] T6d frontend QR scan/labels, admin (users, categories, locations), PWA, Playwright mobile e2e
+  - [x] T6d frontend QR scan/labels, admin (users, categories, locations), PWA, Playwright mobile e2e
+- [ ] T6e follow-up (backend): refresh-token rotation race signs users out when a page load aborts after rotation; add a short reuse grace window or idempotent rotation (found by T6d)
 - [ ] T7 xlsx importer + real data migration
 
 ## Acceptance
@@ -46,6 +47,7 @@ Per plan "Verificacion" section.
 - T6a done (delegated writer). Commits: b28ad90, 0ff3d08, eb8f70b. Parent spot check with throwaway postgres:16: gofmt clean, go vet ok, go test ./... -p 1 all 26 packages ok, none failing. Added GET /dashboard/summary (internal/dashboard) and 409 `item_under_repair` guard on PATCH status during open failure.
 - T6b done as `partial` (delegated writer; no browser available so nothing checked visually). Commits: 7d8bd67, d4fd77e, 25ded78, 9a6c4a9, 830786c, 9039368. Parent spot check: tsc clean, oxlint clean, vitest 8 files / 59 tests pass, vite build ok (single ~596 kB chunk warning). Real backend smoke through Vite proxy passed for login/refresh/dashboard/catalog/items; custody/UI flows only MSW-tested. Notes: oxlint replaces eslint (TS 7 incompatible with typescript-eslint); `API_PROXY_TARGET` override added in vite.config.ts (port 8080 on this machine is held by an unrelated process); intermediate commits 25ded78 and 9a6c4a9 not individually green (final tree green). API gaps: Item lacks category/location names, no on-loan filter, no item location history endpoint. Visual mobile check still pending (do in T6d Playwright + Chrome).
 - T6c done as `partial` (delegated writer, resumed once after a rate-limit stop; no browser available so nothing checked visually). Commits: 014fb14, 4262e96, 9b6f946, 20ece9c, 6aba753, db736e7, a019012. Parent spot check: tsc clean, oxlint clean, vitest pass (agent reported 14 files / 103 tests), vite build ok, entry chunk 595.88 -> 461.58 kB. Real-API HTTP round trips for stock/custody/maintenance/dashboard parsed with the app's zod schemas (19 payloads); UI flows only MSW-tested. API gaps: openapi Error.code omits new 409 codes; Item lacks loan origin and open_failure flag; no currency defined. Visual mobile check still pending (T6d).
+- T6d done (delegated writer). Commits: 9059ca4, 21122f1, ff6affb, d90fe18, a49887f, e64fb2c, 52cce02, b177f1a. Parent spot check: tsc clean, oxlint clean, vitest 22 files / 158 tests pass, vite build ok (entry chunk 319.58 kB; qr-scanner lazy chunks). Agent reported e2e 21/21 pass at 390x844 on a real stack (not re-run by parent) and a Playwright screenshot review in light/dark (about 16 of 18 screens viewed; fixes for focus tooltip, placeholders, tap targets, scan layout). Not verified: real phone camera, print preview, PWA install prompt, iOS Safari, CI e2e job on GitHub. Behavior fixes: offline session state `unreachable`, react-query networkMode always. Backend gaps: refresh rotation race (T6e), GET /users has no pagination/filters, users validation errors are 400 without fields, Item lacks category/location names and on-loan filter.
 
 ## Next step
-T6d QR scan/labels, admin (users, categories, locations), PWA, Playwright mobile e2e + visual check; also add missing Error.code values to openapi.
+T7 xlsx importer + real data migration (awaiting user go-ahead); T6e refresh-token race fix.
