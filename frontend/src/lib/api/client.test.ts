@@ -84,7 +84,7 @@ describe("api client", () => {
   });
 
   it("does not try to refresh when login itself fails with 401", async () => {
-    const refresh = vi.fn();
+    const refresh = vi.fn<() => void>();
     server.use(
       http.post(api("/auth/login"), () => HttpResponse.json(errorBody("invalid_credentials", "bad"), { status: 401 })),
       http.post(api("/auth/refresh"), () => {
@@ -131,7 +131,7 @@ describe("api client", () => {
   });
 
   it("session events reach subscribers", () => {
-    const listener = vi.fn();
+    const listener = vi.fn<() => void>();
     const unsubscribe = subscribeSession(listener);
     emitSession({ type: "expired" });
     unsubscribe();

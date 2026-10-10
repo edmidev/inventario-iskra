@@ -5,8 +5,14 @@ interface FormFieldProps {
   error?: string;
   hint?: string;
   required?: boolean;
-  /** A single control; receives id, aria-describedby and invalid. */
-  children: ReactElement<{ id?: string; "aria-describedby"?: string; invalid?: boolean }>;
+  /** A single control, or a render function when the control sits behind a wrapper (e.g. Controller). */
+  children: ReactElement<ControlProps> | ((props: ControlProps) => ReactElement);
+}
+
+export interface ControlProps {
+  id?: string;
+  "aria-describedby"?: string;
+  invalid?: boolean;
 }
 
 export function FormField({ label, error, hint, required, children }: FormFieldProps) {
@@ -18,7 +24,9 @@ export function FormField({ label, error, hint, required, children }: FormFieldP
         {label}
         {required && <span aria-hidden="true" className="text-bad"> *</span>}
       </label>
-      {cloneElement(children, { id, "aria-describedby": describedBy, invalid: Boolean(error) })}
+      {typeof children === "function"
+        ? children({ id, "aria-describedby": describedBy, invalid: Boolean(error) })
+        : cloneElement(children, { id, "aria-describedby": describedBy, invalid: Boolean(error) })}
       {hint && !error && (
         <p id={`${id}-hint`} className="text-xs text-ink-soft">
           {hint}
