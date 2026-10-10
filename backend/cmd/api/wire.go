@@ -8,6 +8,9 @@ import (
 	catalogpg "github.com/edgar/inventario/backend/internal/catalog/adapters/postgres"
 	catalogapp "github.com/edgar/inventario/backend/internal/catalog/app"
 	catalogdomain "github.com/edgar/inventario/backend/internal/catalog/domain"
+	custodyapi "github.com/edgar/inventario/backend/internal/custody/adapters/httpapi"
+	custodypg "github.com/edgar/inventario/backend/internal/custody/adapters/postgres"
+	custodyapp "github.com/edgar/inventario/backend/internal/custody/app"
 	"github.com/edgar/inventario/backend/internal/identity/adapters"
 	"github.com/edgar/inventario/backend/internal/identity/adapters/httpapi"
 	"github.com/edgar/inventario/backend/internal/identity/adapters/postgres"
@@ -76,6 +79,16 @@ func wireCatalog(pool *pgxpool.Pool, identity *httpapi.Handler) *catalogapi.Hand
 func wireStock(pool *pgxpool.Pool, identity *httpapi.Handler) *stockapi.Handler {
 	svc := stockapp.NewService(stockpg.New(pool))
 	return stockapi.New(svc, identity.Authenticate(), stockapi.Permissions{
+		Read:       string(domain.PermRead),
+		WriteItems: string(domain.PermWriteItems),
+	})
+}
+
+// wireCustody builds the custody handler with the same authentication and
+// permission names as the catalog.
+func wireCustody(pool *pgxpool.Pool, identity *httpapi.Handler) *custodyapi.Handler {
+	svc := custodyapp.NewService(custodypg.New(pool), nil)
+	return custodyapi.New(svc, identity.Authenticate(), custodyapi.Permissions{
 		Read:       string(domain.PermRead),
 		WriteItems: string(domain.PermWriteItems),
 	})

@@ -68,10 +68,11 @@ func main() {
 
 	catalogHandler := wireCatalog(pool, identityHandler)
 	stockHandler := wireStock(pool, identityHandler)
+	custodyHandler := wireCustody(pool, identityHandler)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           newRouter(identityHandler.Register, catalogHandler.Register, stockHandler.Register),
+		Handler:           newRouter(identityHandler.Register, catalogHandler.Register, stockHandler.Register, custodyHandler.Register),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
