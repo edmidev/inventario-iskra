@@ -1,0 +1,141 @@
+// Package postgres implements the dashboard read model on PostgreSQL via pgx.
+//
+// It is a read-only projection over tables owned by catalog, custody and
+// maintenance; the SQL mirrors their rules (see the comments per query) so the
+// dashboard never disagrees with the list endpoints. No domain or app package
+// of those modules is imported.
+package postgres
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/edgar/inventario/backend/internal/dashboard/domain"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// Repo implements app.Repository.
+type Repo struct{ pool *pgxpool.Pool }
+
+// New builds a Repo on an open pool.
+func New(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
+
+const (
+	// activeLoanJoin attaches the item's active loan (at most one, enforced by
+	// a partial unique index), as the catalog adapter does.
+	activeLoanJoin = `LEFT JOIN custody_assignments ca ON ca.item_id = i.id AND ca.returned_at IS NULL`
+	// maintenanceDue mirrors the maintenance module: last maintenance (or
+	// creation) plus the interval in 24-hour days.
+	maintenanceDue = `(COALESCE(i.last_maintenance_at, i.created_at) + i.maintenance_interval_days * interval '24 hours')`
+	// lowStock mirrors the catalog low_stock filter.
+	lowStock = `i.kind = 'consumable' AND i.stock_min > 0 AND i.stock_current <= i.stock_min`
+)
+
+// Summary implements app.Repository: one counters query, one open-failures
+// query and three bounded top lists, all over non-deleted items.
+func (r *Repo) Summary(ctx context.Context, now time.Time) (domain.Summary, error) {
+	var s domain.Summary
+	err := r.pool.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE i.kind = 'asset'),
+		       count(*) FILTER (WHERE i.kind = 'consumable'),
+		       count(*) FILTER (WHERE i.kind = 'asset' AND i.status = 'functional' AND ca.id IS NULL),
+		       count(*) FILTER (WHERE i.kind = 'asset' AND (i.status <> 'functional' OR ca.id IS NOT NULL)),
+		       count(*) FILTER (WHERE i.kind = 'asset' AND ca.id IS NOT NULL),
+		       count(*) FILTER (WHERE i.kind = 'asset' AND i.status = 'inoperative'),
+		       count(*) FILTER (WHERE i.kind = 'asset' AND i.status = 'in_repair'),
+		       count(*) FILTER (WHERE `+lowStock+`),
+		       count(*) FILTER (WHERE ca.id IS NOT NULL),
+		       count(*) FILTER (WHERE ca.due_at < $1),
+		       count(*) FILTER (WHERE i.kind = 'asset' AND i.maintenance_interval_days IS NOT NULL AND `+maintenanceDue+` < $1)
+		FROM items i `+activeLoanJoin+`
+		WHERE i.deleted_at IS NULL`, now).Scan(
+		&s.Items.Total, &s.Items.Assets, &s.Items.Consumables,
+		&s.Assets.Available, &s.Assets.Unavailable, &s.Assets.OnLoan, &s.Assets.Inoperative, &s.Assets.InRepair,
+		&s.LowStock.Count, &s.Loans.Active, &s.Loans.Overdue, &s.Maintenance.Overdue)
+	if err != nil {
+		return domain.Summary{}, fmt.Errorf("dashboard counters: %w", err)
+	}
+	if err := r.pool.QueryRow(ctx, `
+		SELECT count(*) FROM maintenance_records m JOIN items i ON i.id = m.item_id
+		WHERE i.deleted_at IS NULL AND m.kind = 'corrective' AND m.status = 'open'`).Scan(&s.Maintenance.OpenFailures); err != nil {
+		return domain.Summary{}, fmt.Errorf("dashboard open failures: %w", err)
+	}
+	if s.LowStock.Top, err = r.lowStockTop(ctx); err != nil {
+		return domain.Summary{}, err
+	}
+	if s.Loans.OverdueTop, err = r.overdueLoansTop(ctx, now); err != nil {
+		return domain.Summary{}, err
+	}
+	if s.Maintenance.OverdueTop, err = r.overdueMaintenanceTop(ctx, now); err != nil {
+		return domain.Summary{}, err
+	}
+	return s, nil
+}
+
+// collect runs a query and scans every row with scan.
+func collect[T any](ctx context.Context, pool *pgxpool.Pool, op, sql string, scan func(pgx.Rows) (T, error), args ...any) ([]T, error) {
+	rows, err := pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	defer rows.Close()
+	out := []T{}
+	for rows.Next() {
+		v, err := scan(rows)
+		if err != nil {
+			return nil, fmt.Errorf("%s: scan: %w", op, err)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// lowStockTop lists the most severe first: lowest stock/min ratio, then code.
+func (r *Repo) lowStockTop(ctx context.Context) ([]domain.LowStockItem, error) {
+	return collect(ctx, r.pool, "dashboard low stock", `
+		SELECT i.id::text, i.code, i.description, COALESCE(i.unit, ''), i.stock_current, i.stock_min, l.name
+		FROM items i LEFT JOIN locations l ON l.id = i.location_id
+		WHERE i.deleted_at IS NULL AND `+lowStock+`
+		ORDER BY i.stock_current::float8 / i.stock_min ASC, i.code ASC
+		LIMIT $1`,
+		func(row pgx.Rows) (domain.LowStockItem, error) {
+			var it domain.LowStockItem
+			err := row.Scan(&it.ID, &it.Code, &it.Description, &it.Unit, &it.StockCurrent, &it.StockMin, &it.LocationName)
+			return it, err
+		}, domain.TopLimit)
+}
+
+// overdueLoansTop lists the oldest overdue loans first.
+func (r *Repo) overdueLoansTop(ctx context.Context, now time.Time) ([]domain.OverdueLoan, error) {
+	return collect(ctx, r.pool, "dashboard overdue loans", `
+		SELECT i.id::text, i.code, i.description, al.name, ca.due_at
+		FROM items i `+activeLoanJoin+`
+		JOIN locations al ON al.id = ca.assignee_location_id
+		WHERE i.deleted_at IS NULL AND ca.due_at < $1
+		ORDER BY ca.due_at ASC, i.code ASC
+		LIMIT $2`,
+		func(row pgx.Rows) (domain.OverdueLoan, error) {
+			var o domain.OverdueLoan
+			err := row.Scan(&o.ItemID, &o.Code, &o.Description, &o.AssigneeName, &o.DueAt)
+			return o, err
+		}, now, domain.TopLimit)
+}
+
+// overdueMaintenanceTop lists the most overdue assets first.
+func (r *Repo) overdueMaintenanceTop(ctx context.Context, now time.Time) ([]domain.OverdueMaintenance, error) {
+	return collect(ctx, r.pool, "dashboard overdue maintenance", `
+		SELECT i.id::text, i.code, i.description, `+maintenanceDue+`
+		FROM items i
+		WHERE i.deleted_at IS NULL AND i.kind = 'asset' AND i.maintenance_interval_days IS NOT NULL
+		  AND `+maintenanceDue+` < $1
+		ORDER BY `+maintenanceDue+` ASC, i.code ASC
+		LIMIT $2`,
+		func(row pgx.Rows) (domain.OverdueMaintenance, error) {
+			var o domain.OverdueMaintenance
+			err := row.Scan(&o.ItemID, &o.Code, &o.Description, &o.MaintenanceDueAt)
+			return o, err
+		}, now, domain.TopLimit)
+}

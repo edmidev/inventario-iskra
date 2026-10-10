@@ -11,6 +11,9 @@ import (
 	custodyapi "github.com/edgar/inventario/backend/internal/custody/adapters/httpapi"
 	custodypg "github.com/edgar/inventario/backend/internal/custody/adapters/postgres"
 	custodyapp "github.com/edgar/inventario/backend/internal/custody/app"
+	dashboardapi "github.com/edgar/inventario/backend/internal/dashboard/adapters/httpapi"
+	dashboardpg "github.com/edgar/inventario/backend/internal/dashboard/adapters/postgres"
+	dashboardapp "github.com/edgar/inventario/backend/internal/dashboard/app"
 	"github.com/edgar/inventario/backend/internal/identity/adapters"
 	"github.com/edgar/inventario/backend/internal/identity/adapters/httpapi"
 	"github.com/edgar/inventario/backend/internal/identity/adapters/postgres"
@@ -104,5 +107,13 @@ func wireMaintenance(pool *pgxpool.Pool, identity *httpapi.Handler) *maintenance
 	return maintenanceapi.New(svc, identity.Authenticate(), maintenanceapi.Permissions{
 		Read:       string(domain.PermRead),
 		WriteItems: string(domain.PermWriteItems),
+	})
+}
+
+// wireDashboard builds the read-only dashboard handler; every role may read it.
+func wireDashboard(pool *pgxpool.Pool, identity *httpapi.Handler) *dashboardapi.Handler {
+	svc := dashboardapp.NewService(dashboardpg.New(pool), nil)
+	return dashboardapi.New(svc, identity.Authenticate(), dashboardapi.Permissions{
+		Read: string(domain.PermRead),
 	})
 }
