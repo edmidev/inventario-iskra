@@ -7,16 +7,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/edgar/inventario/backend/internal/catalog/adapters/httpapi"
 	"github.com/edgar/inventario/backend/internal/catalog/adapters/memory"
 	"github.com/edgar/inventario/backend/internal/catalog/app"
+	catalog "github.com/edgar/inventario/backend/internal/catalog/domain"
 	"github.com/edgar/inventario/backend/internal/identity/domain"
 	"github.com/edgar/inventario/backend/internal/platform/httpx"
 	"github.com/go-chi/chi/v5"
 )
 
-type env struct{ srv *httptest.Server }
+type env struct {
+	srv *httptest.Server
+	st  *memory.Store
+}
 
 func newEnv(t *testing.T) env {
 	t.Helper()
@@ -40,7 +45,7 @@ func newEnv(t *testing.T) env {
 	r.Route("/api/v1", h.Register)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	return env{srv: srv}
+	return env{srv: srv, st: st}
 }
 
 type resp struct {
@@ -389,5 +394,75 @@ func TestItemListFiltersSortPagination(t *testing.T) {
 	}
 	if body := e.do(t, "GET", "/items?q=zzz", "viewer", nil); body.Body["data"] == nil {
 		t.Errorf("empty list must be [] not null: %v", body.Body)
+	}
+}
+
+func TestItemsOnLoanExposeCustodyAndAvailability(t *testing.T) {
+	e := newEnv(t)
+	cat := e.mustCreate(t, "/categories", map[string]any{"name": "Herramientas", "code_prefix": "HER"})
+	mk := func(desc string) string {
+		return e.mustCreate(t, "/items", map[string]any{"description": desc, "category_id": cat.num("id"), "kind": "asset"}).str("id")
+	}
+	free, lent, late := mk("Free"), mk("Lent"), mk("Late")
+	due, lapsed := time.Now().Add(48*time.Hour), time.Now().Add(-48*time.Hour)
+	e.st.SetLoan(lent, &catalog.LoanInfo{AssigneeLocationID: 7, AssigneeName: "Alejandro", AssignedAt: time.Now(), DueAt: &due})
+	e.st.SetLoan(late, &catalog.LoanInfo{AssigneeLocationID: 7, AssigneeName: "Alejandro", AssignedAt: time.Now().Add(-72 * time.Hour), DueAt: &lapsed})
+
+	r := e.do(t, "GET", "/items/"+lent, "viewer", nil)
+	c, _ := r.Body["custody"].(map[string]any)
+	if r.Body["on_loan"] != true || r.str("availability") != "unavailable" || r.str("status") != "functional" ||
+		c["assignee_name"] != "Alejandro" || c["assignee_location_id"] != float64(7) || c["overdue"] != false || c["due_at"] == nil {
+		t.Errorf("on loan: %v", r.Body)
+	}
+	r = e.do(t, "GET", "/items/"+late, "viewer", nil)
+	if c, _ := r.Body["custody"].(map[string]any); c["overdue"] != true {
+		t.Errorf("overdue: %v", r.Body)
+	}
+	r = e.do(t, "GET", "/items/"+free, "viewer", nil)
+	if _, has := r.Body["custody"]; r.Body["on_loan"] != false || has || r.str("availability") != "available" {
+		t.Errorf("free item: %v", r.Body)
+	}
+
+	ids := func(path string) map[string]bool {
+		out := map[string]bool{}
+		for _, d := range e.do(t, "GET", path, "viewer", nil).data() {
+			out[d.(map[string]any)["id"].(string)] = true
+		}
+		return out
+	}
+	if got := ids("/items?availability=available"); len(got) != 1 || !got[free] {
+		t.Errorf("available filter: %v", got)
+	}
+	if got := ids("/items?availability=unavailable"); len(got) != 2 || !got[lent] || !got[late] {
+		t.Errorf("unavailable filter: %v", got)
+	}
+}
+
+func TestItemOnLoanCannotBeDeletedOrMoved(t *testing.T) {
+	e := newEnv(t)
+	cat := e.mustCreate(t, "/categories", map[string]any{"name": "Herramientas", "code_prefix": "HER"})
+	home := e.mustCreate(t, "/locations", map[string]any{"name": "Bodega", "kind": "storage"})
+	other := e.mustCreate(t, "/locations", map[string]any{"name": "Taller", "kind": "storage"})
+	id := e.mustCreate(t, "/items", map[string]any{"description": "Drill", "category_id": cat.num("id"), "kind": "asset", "location_id": home.num("id")}).str("id")
+	e.st.SetLoan(id, &catalog.LoanInfo{AssigneeLocationID: 7, AssigneeName: "Alejandro", AssignedAt: time.Now()})
+
+	if r := e.do(t, "DELETE", "/items/"+id, "operator", nil); r.Status != 409 || r.errCode() != "item_on_loan" {
+		t.Errorf("delete on loan: %d %v", r.Status, r.Body)
+	}
+	for name, body := range map[string]string{
+		"move":  `{"location_id":` + itoa(other.num("id")) + `}`,
+		"clear": `{"location_id":null}`,
+	} {
+		if r := e.do(t, "PATCH", "/items/"+id, "operator", body); r.Status != 409 || r.errCode() != "item_on_loan" {
+			t.Errorf("%s on loan: %d %v", name, r.Status, r.Body)
+		}
+	}
+	if r := e.do(t, "PATCH", "/items/"+id, "operator", `{"notes":"still editable","status":"in_repair"}`); r.Status != 200 ||
+		r.Body["on_loan"] != true || r.str("availability") != "unavailable" {
+		t.Errorf("other edits on loan: %d %v", r.Status, r.Body)
+	}
+	e.st.SetLoan(id, nil)
+	if r := e.do(t, "DELETE", "/items/"+id, "operator", nil); r.Status != 204 {
+		t.Errorf("delete after return: %d", r.Status)
 	}
 }

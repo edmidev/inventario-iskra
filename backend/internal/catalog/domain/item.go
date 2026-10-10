@@ -77,9 +77,27 @@ type Item struct {
 	MaintenanceIntervalDays *int
 	Attributes              map[string]any
 	Notes                   string
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+	// Loan is the item's active custody assignment, nil when it is not on
+	// loan. Custody owns the data; the catalog only reads it (see the
+	// postgres adapter) so availability and responses can reflect it.
+	Loan      *LoanInfo
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
+
+// LoanInfo is the read-only view of an active custody assignment.
+type LoanInfo struct {
+	AssigneeLocationID int64
+	AssigneeName       string
+	AssignedAt         time.Time
+	DueAt              *time.Time
+}
+
+// Overdue reports whether the loan is past its due date at now.
+func (l LoanInfo) Overdue(now time.Time) bool { return l.DueAt != nil && l.DueAt.Before(now) }
+
+// OnLoan reports whether the item is currently lent out.
+func (i Item) OnLoan() bool { return i.Loan != nil }
 
 // LowStock reports whether a consumable is at or below a configured minimum.
 func (i Item) LowStock() bool {
@@ -98,8 +116,7 @@ const (
 // Valid reports whether a is a known availability.
 func (a Availability) Valid() bool { return a == Available || a == Unavailable }
 
-// AvailabilityInputs are the facts availability is derived from. Custody (T4)
-// fills ActiveLoan; until then no item is ever on loan.
+// AvailabilityInputs are the facts availability is derived from.
 type AvailabilityInputs struct {
 	Status     Status
 	ActiveLoan bool
@@ -115,17 +132,7 @@ func DeriveAvailability(in AvailabilityInputs) Availability {
 
 // Availability derives the item's availability from its current facts.
 func (i Item) Availability() Availability {
-	return DeriveAvailability(AvailabilityInputs{Status: i.Status})
-}
-
-// StatusesFor returns the statuses compatible with availability a, so list
-// queries filter with the same rule as DeriveAvailability. Custody extends
-// this with a loan join; the API shape stays the same.
-func StatusesFor(a Availability) []Status {
-	if a == Available {
-		return []Status{StatusFunctional}
-	}
-	return []Status{StatusInoperative, StatusInRepair}
+	return DeriveAvailability(AvailabilityInputs{Status: i.Status, ActiveLoan: i.OnLoan()})
 }
 
 // NewItemInput carries the creation fields (the code is decided by the app).
@@ -312,6 +319,9 @@ func (i Item) Apply(p ItemPatch) (Item, error) {
 		out.Notes = strings.TrimSpace(*p.Notes)
 	}
 	checkCommon(fe, &out)
+	if i.OnLoan() && p.LocationID.Set && !sameLocation(i.LocationID, out.LocationID) {
+		return Item{}, ErrItemOnLoan // custody owns the location until the item is returned
+	}
 	switch i.Kind {
 	case KindAsset:
 		if p.Unit != nil && strings.TrimSpace(*p.Unit) != "" {
@@ -329,4 +339,11 @@ func (i Item) Apply(p ItemPatch) (Item, error) {
 		return Item{}, err
 	}
 	return out, nil
+}
+
+func sameLocation(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

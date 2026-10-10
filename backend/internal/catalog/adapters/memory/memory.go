@@ -49,6 +49,16 @@ func (s *Store) Locations() *Locations { return &Locations{s} }
 // Items returns the item repository view.
 func (s *Store) Items() *Items { return &Items{s} }
 
+// SetLoan marks an item as on loan (nil clears it). It stands in for the
+// custody module, which owns the real data (test helper).
+func (s *Store) SetLoan(itemID string, loan *domain.LoanInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.items[itemID]
+	e.Loan = loan
+	s.items[itemID] = e
+}
+
 // SeedSequence sets the last used number for a prefix (test helper).
 func (s *Store) SeedSequence(prefix string, last int) {
 	s.mu.Lock()
@@ -292,7 +302,10 @@ func (r *Items) Update(_ context.Context, it *domain.Item) error {
 		}
 	}
 	// Like the SQL repository: code, kind and stock_current are not written.
-	it.Code, it.Kind, it.StockCurrent = e.Code, e.Kind, e.StockCurrent
+	if e.Loan != nil && !sameLocation(e.LocationID, it.LocationID) {
+		return domain.ErrItemOnLoan
+	}
+	it.Code, it.Kind, it.StockCurrent, it.Loan = e.Code, e.Kind, e.StockCurrent, e.Loan
 	it.CreatedAt, it.UpdatedAt = e.CreatedAt, r.s.clock()
 	r.s.items[it.ID] = storedItem{Item: *it}
 	return nil
@@ -305,6 +318,9 @@ func (r *Items) SoftDelete(_ context.Context, id string) error {
 	e, ok := r.s.items[id]
 	if !ok || e.deleted {
 		return domain.ErrItemNotFound
+	}
+	if e.Loan != nil {
+		return domain.ErrItemOnLoan
 	}
 	e.deleted = true
 	r.s.items[id] = e
@@ -357,4 +373,11 @@ func (r *Items) NextSequence(_ context.Context, prefix string) (int, error) {
 	defer r.s.mu.Unlock()
 	r.s.seqs[prefix]++
 	return r.s.seqs[prefix], nil
+}
+
+func sameLocation(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -113,12 +114,46 @@ func TestAvailabilityIsDerivedFromStatus(t *testing.T) {
 	if DeriveAvailability(AvailabilityInputs{Status: StatusFunctional, ActiveLoan: true}) != Unavailable {
 		t.Error("an active loan must make a functional item unavailable")
 	}
-	for _, a := range []Availability{Available, Unavailable} {
-		for _, st := range StatusesFor(a) {
-			if DeriveAvailability(AvailabilityInputs{Status: st}) != a {
-				t.Errorf("StatusesFor(%s) includes %s", a, st)
-			}
+}
+
+func TestAvailabilityReflectsActiveLoan(t *testing.T) {
+	loan := &LoanInfo{AssigneeLocationID: 7, AssigneeName: "Alejandro"}
+	for st, want := range map[Status]Availability{StatusFunctional: Unavailable, StatusInoperative: Unavailable, StatusInRepair: Unavailable} {
+		it := Item{Status: st, Loan: loan}
+		if !it.OnLoan() || it.Availability() != want {
+			t.Errorf("%s on loan: availability %s", st, it.Availability())
 		}
+	}
+	if (Item{Status: StatusFunctional}).OnLoan() {
+		t.Error("item without loan reported on loan")
+	}
+}
+
+func TestLoanOverdue(t *testing.T) {
+	now := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	past, future := now.Add(-time.Minute), now.Add(time.Minute)
+	if !(LoanInfo{DueAt: &past}).Overdue(now) || (LoanInfo{DueAt: &future}).Overdue(now) || (LoanInfo{}).Overdue(now) {
+		t.Error("overdue only when a due date lapsed")
+	}
+}
+
+func TestApplyWhileOnLoan(t *testing.T) {
+	loc := int64(7)
+	it := Item{Kind: KindAsset, Status: StatusFunctional, Description: "Drill", CategoryID: 1, LocationID: &loc, Loan: &LoanInfo{AssigneeLocationID: 7}}
+	for name, p := range map[string]ItemPatch{
+		"move":  {LocationID: Nullable[int64]{Set: true, Value: 9}},
+		"clear": {LocationID: Nullable[int64]{Set: true, Null: true}},
+	} {
+		if _, err := it.Apply(p); !errors.Is(err, ErrItemOnLoan) {
+			t.Errorf("%s: err = %v, want ErrItemOnLoan", name, err)
+		}
+	}
+	if _, err := it.Apply(ItemPatch{LocationID: Nullable[int64]{Set: true, Value: 7}}); err != nil {
+		t.Errorf("re-sending the same location must be accepted: %v", err)
+	}
+	desc := "Drill 18V"
+	if out, err := it.Apply(ItemPatch{Description: &desc}); err != nil || out.Loan == nil {
+		t.Errorf("other edits stay allowed and keep the loan: %v", err)
 	}
 }
 
@@ -243,5 +278,15 @@ func TestFilterMatches(t *testing.T) {
 		if f.Matches(it) {
 			t.Errorf("no[%d] should not match", i)
 		}
+	}
+}
+
+func TestFilterMatchesTreatsLoanAsUnavailable(t *testing.T) {
+	it := Item{Code: "ISK-HER-001", Description: "Drill", Kind: KindAsset, Status: StatusFunctional, Loan: &LoanInfo{AssigneeLocationID: 7}}
+	if (ItemFilter{Availability: Available}).Matches(it) || !(ItemFilter{Availability: Unavailable}).Matches(it) {
+		t.Error("a functional item on loan must be unavailable")
+	}
+	if !(ItemFilter{Status: StatusFunctional}).Matches(it) {
+		t.Error("the status filter keeps ignoring loans")
 	}
 }

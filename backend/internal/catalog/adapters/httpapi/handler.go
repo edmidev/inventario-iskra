@@ -112,6 +112,8 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "location_in_use", "location still has child locations or items")
 	case errors.Is(err, domain.ErrLocationCycle):
 		httpx.WriteError(w, http.StatusConflict, "location_cycle", "the new parent would create a cycle")
+	case errors.Is(err, domain.ErrItemOnLoan):
+		httpx.WriteError(w, http.StatusConflict, "item_on_loan", "item is on loan; return it first")
 	case errors.Is(err, domain.ErrCodeTaken):
 		httpx.WriteError(w, http.StatusConflict, "code_taken", "an item with this code already exists")
 	default:
@@ -288,6 +290,8 @@ type itemDTO struct {
 	StockCurrent            int            `json:"stock_current"`
 	StockMin                int            `json:"stock_min"`
 	LowStock                bool           `json:"low_stock"`
+	OnLoan                  bool           `json:"on_loan"`
+	Custody                 *custodyDTO    `json:"custody,omitempty"`
 	LocationID              *int64         `json:"location_id"`
 	LastMaintenanceAt       *time.Time     `json:"last_maintenance_at"`
 	MaintenanceIntervalDays *int           `json:"maintenance_interval_days"`
@@ -297,7 +301,21 @@ type itemDTO struct {
 	UpdatedAt               time.Time      `json:"updated_at"`
 }
 
+// custodyDTO is the active loan embedded in an item response.
+type custodyDTO struct {
+	AssigneeLocationID int64      `json:"assignee_location_id"`
+	AssigneeName       string     `json:"assignee_name"`
+	AssignedAt         time.Time  `json:"assigned_at"`
+	DueAt              *time.Time `json:"due_at"`
+	Overdue            bool       `json:"overdue"`
+}
+
 func toItemDTO(it domain.Item) itemDTO {
+	var loan *custodyDTO
+	if l := it.Loan; l != nil {
+		loan = &custodyDTO{AssigneeLocationID: l.AssigneeLocationID, AssigneeName: l.AssigneeName,
+			AssignedAt: l.AssignedAt, DueAt: l.DueAt, Overdue: l.Overdue(time.Now())}
+	}
 	attrs := it.Attributes
 	if attrs == nil {
 		attrs = map[string]any{}
@@ -306,6 +324,7 @@ func toItemDTO(it domain.Item) itemDTO {
 		ID: it.ID, Code: it.Code, Description: it.Description, CategoryID: it.CategoryID,
 		Kind: string(it.Kind), Status: string(it.Status), Availability: string(it.Availability()),
 		Unit: it.Unit, StockCurrent: it.StockCurrent, StockMin: it.StockMin, LowStock: it.LowStock(),
+		OnLoan: it.OnLoan(), Custody: loan,
 		LocationID: it.LocationID, LastMaintenanceAt: it.LastMaintenanceAt,
 		MaintenanceIntervalDays: it.MaintenanceIntervalDays, Attributes: attrs, Notes: it.Notes,
 		CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt,

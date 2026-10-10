@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/edgar/inventario/backend/internal/catalog/adapters/postgres"
 	"github.com/edgar/inventario/backend/internal/catalog/app"
@@ -407,5 +408,133 @@ func TestCreateHookRunsInTheCreationTransaction(t *testing.T) {
 	}
 	if len(seen) != 2 {
 		t.Errorf("hook calls = %v", seen)
+	}
+}
+
+// lend writes an active custody row directly: the catalog only reads that
+// table, so its tests do not need the custody module.
+func (f fixture) lend(t *testing.T, itemID string, assignee int64, due *time.Time) {
+	t.Helper()
+	ctx := t.Context()
+	if _, err := f.pool.Exec(ctx, `
+		INSERT INTO users (name, email, password_hash, role) VALUES ('Ana', 'ana-catalog@example.com', 'x', 'operator')
+		ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	var uid string
+	if err := f.pool.QueryRow(ctx, `SELECT id::text FROM users WHERE email = 'ana-catalog@example.com'`).Scan(&uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `
+		INSERT INTO custody_assignments (item_id, assignee_location_id, assigned_by, assigned_at, due_at)
+		VALUES ($1::uuid, $2, $3::uuid, now() - interval '2 hours', $4)`, itemID, assignee, uid, due); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f fixture) giveBack(t *testing.T, itemID string) {
+	t.Helper()
+	if _, err := f.pool.Exec(t.Context(), `
+		UPDATE custody_assignments SET returned_at = now(), returned_by = assigned_by WHERE item_id = $1::uuid AND returned_at IS NULL`,
+		itemID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestActiveCustodyDrivesAvailabilityAndOnLoan(t *testing.T) {
+	f := setup(t)
+	ctx := t.Context()
+	person, err := f.svc.CreateLocation(ctx, "Alejandro", domain.LocationPerson, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	free := f.create(t, domain.NewItemInput{Description: "Libre", Kind: domain.KindAsset}, "ISK-HER-001")
+	lent := f.create(t, domain.NewItemInput{Description: "Prestado", Kind: domain.KindAsset}, "ISK-HER-002")
+	broken := f.create(t, domain.NewItemInput{Description: "Roto", Kind: domain.KindAsset, Status: domain.StatusInRepair}, "ISK-HER-003")
+	due := time.Now().Add(-time.Hour)
+	f.lend(t, lent.ID, person.ID, &due)
+
+	got, err := f.svc.GetItem(ctx, lent.ID)
+	if err != nil || got.Loan == nil || got.Loan.AssigneeName != "Alejandro" || got.Loan.AssigneeLocationID != person.ID ||
+		got.Loan.DueAt == nil || !got.Loan.Overdue(time.Now()) || got.Availability() != domain.Unavailable || got.Status != domain.StatusFunctional {
+		t.Fatalf("get: %+v %v", got, err)
+	}
+	if byCode, _ := f.svc.GetItemByCode(ctx, "ISK-HER-002"); byCode.Loan == nil {
+		t.Error("GetByCode lost the loan")
+	}
+	if g, _ := f.svc.GetItem(ctx, free.ID); g.Loan != nil || g.Availability() != domain.Available {
+		t.Errorf("free item: %+v", g)
+	}
+
+	codes := func(f2 domain.ItemFilter) []string {
+		items, _, _, err := f.svc.ListItems(ctx, f2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return codesOf(items)
+	}
+	if got := codes(domain.ItemFilter{Availability: domain.Available}); len(got) != 1 || got[0] != "ISK-HER-001" {
+		t.Errorf("available: %v", got)
+	}
+	if got := codes(domain.ItemFilter{Availability: domain.Unavailable}); len(got) != 2 || got[0] != "ISK-HER-002" || got[1] != "ISK-HER-003" {
+		t.Errorf("unavailable: %v", got)
+	}
+	if _, total, _, _ := f.svc.ListItems(ctx, domain.ItemFilter{Availability: domain.Available}); total != 1 {
+		t.Errorf("available total = %d", total)
+	}
+	if got := codes(domain.ItemFilter{Status: domain.StatusFunctional}); len(got) != 2 {
+		t.Errorf("status filter ignores loans: %v", got)
+	}
+	items, _, _, _ := f.svc.ListItems(ctx, domain.ItemFilter{Sort: domain.SortCode})
+	if !items[1].OnLoan() || items[0].OnLoan() || items[2].OnLoan() {
+		t.Errorf("list on_loan: %+v", items)
+	}
+	_ = broken
+
+	f.giveBack(t, lent.ID)
+	if got := codes(domain.ItemFilter{Availability: domain.Available}); len(got) != 2 {
+		t.Errorf("after return: %v", got)
+	}
+	if g, _ := f.svc.GetItem(ctx, lent.ID); g.Loan != nil {
+		t.Error("returned loan still reported")
+	}
+}
+
+func TestItemOnLoanRejectsDeleteAndLocationChange(t *testing.T) {
+	f := setup(t)
+	ctx := t.Context()
+	home, _ := f.svc.CreateLocation(ctx, "Bodega", domain.LocationStorage, nil)
+	other, _ := f.svc.CreateLocation(ctx, "Taller", domain.LocationStorage, nil)
+	person, _ := f.svc.CreateLocation(ctx, "Alejandro", domain.LocationPerson, nil)
+	it := f.create(t, domain.NewItemInput{Description: "Taladro", Kind: domain.KindAsset, LocationID: &home.ID}, "ISK-HER-001")
+	f.lend(t, it.ID, person.ID, nil)
+
+	move := domain.ItemPatch{LocationID: domain.Nullable[int64]{Set: true, Value: other.ID}}
+	if _, err := f.svc.UpdateItem(ctx, it.ID, move); !errors.Is(err, domain.ErrItemOnLoan) {
+		t.Errorf("move: %v", err)
+	}
+	// The domain rule compares with the stored item; go around it to prove
+	// the repository enforces the rule under its own row lock.
+	stale := it
+	stale.LocationID = &other.ID
+	if err := f.repo.Items().Update(ctx, &stale); !errors.Is(err, domain.ErrItemOnLoan) {
+		t.Errorf("repository update with a stale (loan-less) item: %v", err)
+	}
+	if err := f.svc.DeleteItem(ctx, it.ID); !errors.Is(err, domain.ErrItemOnLoan) {
+		t.Errorf("delete: %v", err)
+	}
+	if got, err := f.svc.UpdateItem(ctx, it.ID, domain.ItemPatch{Notes: ptr("ok")}); err != nil || got.Notes != "ok" || !got.OnLoan() {
+		t.Errorf("unrelated edit: %v %+v", err, got)
+	}
+	if g, _ := f.svc.GetItem(ctx, it.ID); g.LocationID == nil || *g.LocationID != home.ID {
+		t.Errorf("rejected writes changed the location: %v", g.LocationID)
+	}
+
+	f.giveBack(t, it.ID)
+	if _, err := f.svc.UpdateItem(ctx, it.ID, move); err != nil {
+		t.Errorf("move after return: %v", err)
+	}
+	if err := f.svc.DeleteItem(ctx, it.ID); err != nil {
+		t.Errorf("delete after return: %v", err)
 	}
 }

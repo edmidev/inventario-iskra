@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/edgar/inventario/backend/internal/catalog/domain"
 	"github.com/jackc/pgx/v5"
@@ -156,7 +157,7 @@ func (c *Categories) Delete(ctx context.Context, id int64) error {
 func wrapQuery(op string, err error) error {
 	for _, d := range []error{
 		domain.ErrCategoryNotFound, domain.ErrCategoryNameTaken, domain.ErrCategoryPrefixTaken, domain.ErrCategoryInUse,
-		domain.ErrLocationNotFound, domain.ErrLocationInUse, domain.ErrItemNotFound, domain.ErrCodeTaken,
+		domain.ErrLocationNotFound, domain.ErrLocationInUse, domain.ErrItemNotFound, domain.ErrCodeTaken, domain.ErrItemOnLoan,
 	} {
 		if errors.Is(err, d) {
 			return err
@@ -273,23 +274,54 @@ type Items struct {
 	onCreate CreateHook
 }
 
+// itemCols are the plain item columns (INSERT/UPDATE ... RETURNING).
 const itemCols = `id::text, code, description, category_id, kind, status, unit, stock_current, stock_min,
 	location_id, last_maintenance_at, maintenance_interval_days, attributes, notes, created_at, updated_at`
 
-func scanItem(row pgx.Row) (domain.Item, error) {
+// Reads also LEFT JOIN the item's active custody assignment. This is the one
+// place the catalog touches a table owned by custody: an adapter-level read
+// coupling that keeps availability and `on_loan` correct in a single query,
+// while the catalog domain and app layers never import the custody module.
+// The partial unique index on custody_assignments guarantees at most one
+// active row per item, so the join never duplicates items.
+const (
+	itemColsJoined = `i.id::text, i.code, i.description, i.category_id, i.kind, i.status, i.unit, i.stock_current,
+	i.stock_min, i.location_id, i.last_maintenance_at, i.maintenance_interval_days, i.attributes, i.notes,
+	i.created_at, i.updated_at, ca.assignee_location_id, al.name, ca.assigned_at, ca.due_at`
+	itemFromJoined = `items i
+	LEFT JOIN custody_assignments ca ON ca.item_id = i.id AND ca.returned_at IS NULL
+	LEFT JOIN locations al ON al.id = ca.assignee_location_id`
+	activeLoanExists = `EXISTS (SELECT 1 FROM custody_assignments ca WHERE ca.item_id = i.id AND ca.returned_at IS NULL)`
+)
+
+// scanItem scans a row of itemCols; scanItemJoined one of itemColsJoined.
+func scanItem(row pgx.Row) (domain.Item, error) { return scanItemRow(row, false) }
+
+func scanItemJoined(row pgx.Row) (domain.Item, error) { return scanItemRow(row, true) }
+
+func scanItemRow(row pgx.Row, joined bool) (domain.Item, error) {
 	var it domain.Item
 	var kind, status string
 	var attrs []byte
-	err := row.Scan(&it.ID, &it.Code, &it.Description, &it.CategoryID, &kind, &status, &it.Unit,
+	dest := []any{&it.ID, &it.Code, &it.Description, &it.CategoryID, &kind, &status, &it.Unit,
 		&it.StockCurrent, &it.StockMin, &it.LocationID, &it.LastMaintenanceAt, &it.MaintenanceIntervalDays,
-		&attrs, &it.Notes, &it.CreatedAt, &it.UpdatedAt)
-	if err != nil {
+		&attrs, &it.Notes, &it.CreatedAt, &it.UpdatedAt}
+	var assignee *int64
+	var assigneeName *string
+	var assignedAt, dueAt *time.Time
+	if joined {
+		dest = append(dest, &assignee, &assigneeName, &assignedAt, &dueAt)
+	}
+	if err := row.Scan(dest...); err != nil {
 		return domain.Item{}, err
 	}
 	it.Kind, it.Status = domain.Kind(kind), domain.Status(status)
 	it.Attributes = map[string]any{}
 	if err := json.Unmarshal(attrs, &it.Attributes); err != nil {
 		return domain.Item{}, fmt.Errorf("decode attributes: %w", err)
+	}
+	if assignee != nil && assigneeName != nil && assignedAt != nil {
+		it.Loan = &domain.LoanInfo{AssigneeLocationID: *assignee, AssigneeName: *assigneeName, AssignedAt: *assignedAt, DueAt: dueAt}
 	}
 	return it, nil
 }
@@ -369,8 +401,8 @@ func (r *Items) Get(ctx context.Context, id string) (domain.Item, error) {
 	if !validUUID(id) {
 		return domain.Item{}, domain.ErrItemNotFound
 	}
-	it, err := scanItem(r.pool.QueryRow(ctx,
-		`SELECT `+itemCols+` FROM items WHERE id = $1::uuid AND deleted_at IS NULL`, id))
+	it, err := scanItemJoined(r.pool.QueryRow(ctx,
+		`SELECT `+itemColsJoined+` FROM `+itemFromJoined+` WHERE i.id = $1::uuid AND i.deleted_at IS NULL`, id))
 	if err != nil {
 		return domain.Item{}, wrapQuery("get item", itemNotFound(err))
 	}
@@ -379,47 +411,90 @@ func (r *Items) Get(ctx context.Context, id string) (domain.Item, error) {
 
 // GetByCode implements app.ItemRepository.
 func (r *Items) GetByCode(ctx context.Context, code string) (domain.Item, error) {
-	it, err := scanItem(r.pool.QueryRow(ctx,
-		`SELECT `+itemCols+` FROM items WHERE code = $1 AND deleted_at IS NULL`, code))
+	it, err := scanItemJoined(r.pool.QueryRow(ctx,
+		`SELECT `+itemColsJoined+` FROM `+itemFromJoined+` WHERE i.code = $1 AND i.deleted_at IS NULL`, code))
 	if err != nil {
 		return domain.Item{}, wrapQuery("get item by code", itemNotFound(err))
 	}
 	return it, nil
 }
 
-// Update implements app.ItemRepository. code, kind and stock_current are never written.
+// Update implements app.ItemRepository. code, kind and stock_current are never
+// written. The item row is locked first so a concurrent loan cannot slip in
+// between the "is it on loan" check and the write: while an item is on loan
+// its location belongs to custody and changing it yields ErrItemOnLoan.
 func (r *Items) Update(ctx context.Context, it *domain.Item) error {
+	if !validUUID(it.ID) {
+		return domain.ErrItemNotFound
+	}
 	attrs, err := json.Marshal(it.Attributes)
 	if err != nil {
 		return fmt.Errorf("encode attributes: %w", err)
 	}
-	updated, err := scanItem(r.pool.QueryRow(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin update item: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var moved, onLoan bool
+	err = tx.QueryRow(ctx, `
+		SELECT i.location_id IS DISTINCT FROM $2::bigint, `+activeLoanExists+`
+		FROM items i WHERE i.id = $1::uuid AND i.deleted_at IS NULL FOR UPDATE OF i`,
+		it.ID, it.LocationID).Scan(&moved, &onLoan)
+	if err != nil {
+		return wrapQuery("update item", itemNotFound(err))
+	}
+	if moved && onLoan {
+		return domain.ErrItemOnLoan
+	}
+	if _, err := tx.Exec(ctx, `
 		UPDATE items SET description = $2, category_id = $3, status = $4, unit = $5, stock_min = $6,
 			location_id = $7, last_maintenance_at = $8, maintenance_interval_days = $9,
 			attributes = $10::jsonb, notes = $11, updated_at = now()
-		WHERE id = $1::uuid AND deleted_at IS NULL
-		RETURNING `+itemCols,
+		WHERE id = $1::uuid`,
 		it.ID, it.Description, it.CategoryID, string(it.Status), it.Unit, it.StockMin, it.LocationID,
-		it.LastMaintenanceAt, it.MaintenanceIntervalDays, string(attrs), it.Notes))
+		it.LastMaintenanceAt, it.MaintenanceIntervalDays, string(attrs), it.Notes); err != nil {
+		return wrapQuery("update item", mapItemWriteErr(err))
+	}
+	updated, err := scanItemJoined(tx.QueryRow(ctx,
+		`SELECT `+itemColsJoined+` FROM `+itemFromJoined+` WHERE i.id = $1::uuid`, it.ID))
 	if err != nil {
-		return wrapQuery("update item", itemNotFound(mapItemWriteErr(err)))
+		return fmt.Errorf("reload item: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit update item: %w", err)
 	}
 	*it = updated
 	return nil
 }
 
-// SoftDelete implements app.ItemRepository.
+// SoftDelete implements app.ItemRepository. An item on loan cannot be deleted
+// (ErrItemOnLoan); the row lock serializes this with concurrent loans.
 func (r *Items) SoftDelete(ctx context.Context, id string) error {
 	if !validUUID(id) {
 		return domain.ErrItemNotFound
 	}
-	tag, err := r.pool.Exec(ctx,
-		`UPDATE items SET deleted_at = now(), updated_at = now() WHERE id = $1::uuid AND deleted_at IS NULL`, id)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("begin delete item: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var onLoan bool
+	err = tx.QueryRow(ctx, `
+		SELECT `+activeLoanExists+`
+		FROM items i WHERE i.id = $1::uuid AND i.deleted_at IS NULL FOR UPDATE OF i`, id).Scan(&onLoan)
+	if err != nil {
+		return wrapQuery("delete item", itemNotFound(err))
+	}
+	if onLoan {
+		return domain.ErrItemOnLoan
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE items SET deleted_at = now(), updated_at = now() WHERE id = $1::uuid`, id); err != nil {
 		return fmt.Errorf("soft delete item: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return domain.ErrItemNotFound
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete item: %w", err)
 	}
 	return nil
 }
@@ -429,9 +504,9 @@ func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
-// whereClause mirrors domain.ItemFilter.Matches in SQL.
+// whereClause mirrors domain.ItemFilter.Matches in SQL; items are aliased i.
 func whereClause(f domain.ItemFilter) (string, []any) {
-	conds := []string{"deleted_at IS NULL"}
+	conds := []string{"i.deleted_at IS NULL"}
 	var args []any
 	arg := func(v any) string {
 		args = append(args, v)
@@ -440,30 +515,29 @@ func whereClause(f domain.ItemFilter) (string, []any) {
 	if f.Q != "" {
 		p := arg(escapeLike(f.Q))
 		conds = append(conds, fmt.Sprintf(
-			`(code ILIKE '%%' || %s || '%%' ESCAPE '\' OR description ILIKE '%%' || %s || '%%' ESCAPE '\')`, p, p))
+			`(i.code ILIKE '%%' || %s || '%%' ESCAPE '\' OR i.description ILIKE '%%' || %s || '%%' ESCAPE '\')`, p, p))
 	}
 	if f.CategoryID != nil {
-		conds = append(conds, "category_id = "+arg(*f.CategoryID))
+		conds = append(conds, "i.category_id = "+arg(*f.CategoryID))
 	}
 	if f.Status != "" {
-		conds = append(conds, "status = "+arg(string(f.Status)))
+		conds = append(conds, "i.status = "+arg(string(f.Status)))
 	}
 	if f.Kind != "" {
-		conds = append(conds, "kind = "+arg(string(f.Kind)))
+		conds = append(conds, "i.kind = "+arg(string(f.Kind)))
 	}
-	if f.Availability != "" {
-		statuses := domain.StatusesFor(f.Availability)
-		names := make([]string, len(statuses))
-		for i, s := range statuses {
-			names[i] = string(s)
-		}
-		conds = append(conds, "status = ANY("+arg(names)+")")
+	// Same rule as domain.DeriveAvailability: functional and not on loan.
+	switch f.Availability {
+	case domain.Available:
+		conds = append(conds, "i.status = 'functional' AND NOT "+activeLoanExists)
+	case domain.Unavailable:
+		conds = append(conds, "(i.status <> 'functional' OR "+activeLoanExists+")")
 	}
 	if f.LocationID != nil {
-		conds = append(conds, "location_id = "+arg(*f.LocationID))
+		conds = append(conds, "i.location_id = "+arg(*f.LocationID))
 	}
 	if f.LowStock {
-		conds = append(conds, "kind = 'consumable' AND stock_min > 0 AND stock_current <= stock_min")
+		conds = append(conds, "i.kind = 'consumable' AND i.stock_min > 0 AND i.stock_current <= i.stock_min")
 	}
 	return strings.Join(conds, " AND "), args
 }
@@ -472,7 +546,7 @@ func whereClause(f domain.ItemFilter) (string, []any) {
 func (r *Items) List(ctx context.Context, f domain.ItemFilter) ([]domain.Item, int, error) {
 	where, args := whereClause(f)
 	var total int
-	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM items WHERE `+where, args...).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM items i WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count items: %w", err)
 	}
 
@@ -483,19 +557,19 @@ func (r *Items) List(ctx context.Context, f domain.ItemFilter) ([]domain.Item, i
 	var order string
 	switch f.Sort {
 	case domain.SortDescription:
-		order = "lower(description) " + dir + ", code " + dir
+		order = "lower(i.description) " + dir + ", i.code " + dir
 	case domain.SortUpdatedAt:
-		order = "updated_at " + dir + ", code " + dir
+		order = "i.updated_at " + dir + ", i.code " + dir
 	default:
-		order = "code " + dir
+		order = "i.code " + dir
 	}
 	limit := f.Limit
 	if limit <= 0 {
 		limit = domain.DefaultLimit
 	}
 	args = append(args, limit, f.Offset)
-	q := fmt.Sprintf(`SELECT %s FROM items WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
-		itemCols, where, order, len(args)-1, len(args))
+	q := fmt.Sprintf(`SELECT %s FROM %s WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
+		itemColsJoined, itemFromJoined, where, order, len(args)-1, len(args))
 	rows, err := r.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list items: %w", err)
@@ -503,7 +577,7 @@ func (r *Items) List(ctx context.Context, f domain.ItemFilter) ([]domain.Item, i
 	defer rows.Close()
 	out := []domain.Item{}
 	for rows.Next() {
-		it, err := scanItem(rows)
+		it, err := scanItemJoined(rows)
 		if err != nil {
 			return nil, 0, fmt.Errorf("scan item: %w", err)
 		}

@@ -378,3 +378,52 @@ func descs(items []domain.Item) []string {
 	}
 	return out
 }
+
+func TestListItemsAvailabilityAccountsForLoans(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	free, lent := f.asset(t, "ISK-HER-001"), f.asset(t, "ISK-HER-002")
+	f.store.SetLoan(lent.ID, &domain.LoanInfo{AssigneeLocationID: 3, AssigneeName: "Alejandro"})
+
+	got, total, _, err := f.svc.ListItems(ctx, domain.ItemFilter{Availability: domain.Available})
+	if err != nil || total != 1 || got[0].ID != free.ID {
+		t.Fatalf("available: %v %d %+v", err, total, got)
+	}
+	got, _, _, _ = f.svc.ListItems(ctx, domain.ItemFilter{Availability: domain.Unavailable})
+	if len(got) != 1 || got[0].ID != lent.ID || !got[0].OnLoan() {
+		t.Fatalf("unavailable: %+v", got)
+	}
+	f.store.SetLoan(lent.ID, nil) // returned
+	if _, total, _, _ := f.svc.ListItems(ctx, domain.ItemFilter{Availability: domain.Available}); total != 2 {
+		t.Errorf("after return both are available, got %d", total)
+	}
+}
+
+func TestOnLoanItemsRejectDeleteAndLocationChange(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	loc, err := f.svc.CreateLocation(ctx, "Bodega", domain.LocationStorage, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := f.asset(t, "ISK-HER-001")
+	f.store.SetLoan(it.ID, &domain.LoanInfo{AssigneeLocationID: 3, AssigneeName: "Alejandro"})
+
+	move := domain.ItemPatch{LocationID: domain.Nullable[int64]{Set: true, Value: loc.ID}}
+	if _, err := f.svc.UpdateItem(ctx, it.ID, move); !errors.Is(err, domain.ErrItemOnLoan) {
+		t.Errorf("move: %v", err)
+	}
+	if err := f.svc.DeleteItem(ctx, it.ID); !errors.Is(err, domain.ErrItemOnLoan) {
+		t.Errorf("delete: %v", err)
+	}
+	if got, err := f.svc.UpdateItem(ctx, it.ID, domain.ItemPatch{Notes: ptr("note")}); err != nil || !got.OnLoan() {
+		t.Errorf("unrelated edit keeps the loan: %v %+v", err, got)
+	}
+	f.store.SetLoan(it.ID, nil)
+	if _, err := f.svc.UpdateItem(ctx, it.ID, move); err != nil {
+		t.Errorf("move after return: %v", err)
+	}
+	if err := f.svc.DeleteItem(ctx, it.ID); err != nil {
+		t.Errorf("delete after return: %v", err)
+	}
+}

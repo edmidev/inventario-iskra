@@ -23,6 +23,7 @@ var (
 
 	ErrItemNotFound = errors.New("item not found")
 	ErrCodeTaken    = errors.New("item code already in use")
+	ErrItemOnLoan   = errors.New("item is on loan")
 )
 
 // ValidationError is an ErrInvalidInput carrying one message per offending
