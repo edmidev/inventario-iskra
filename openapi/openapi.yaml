@@ -441,7 +441,7 @@ paths:
       operationId: updateItem
       summary: Update an item (operator or admin)
       description: |
-        Partial update. `attributes` replaces the whole object. `location_id` and `maintenance_interval_days` accept `null` to clear. `code`, `kind` and `stock_current` cannot be changed (422 with the field named); stock changes belong to stock movements.
+        Partial update. `attributes` replaces the whole object. `location_id` and `maintenance_interval_days` accept `null` to clear. `code`, `kind` and `stock_current` cannot be changed (422 with the field named); stock changes belong to stock movements. While the item has an open failure (maintenance), changing `status` is rejected with 409 `item_under_repair`; re-sending the current status is allowed.
       parameters:
         - { $ref: "#/components/parameters/ItemId" }
       requestBody:
@@ -731,6 +731,19 @@ paths:
               schema: { $ref: "#/components/schemas/DueMaintenancePage" }
         "401": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      summary: Home-screen summary (any role)
+      description: |
+        Read-only snapshot of the inventory for the mobile home screen. Soft-deleted items are excluded. `assets.available` (functional and not on loan) and `assets.unavailable` partition the assets; `on_loan`, `inoperative` and `in_repair` overlap them. `low_stock.top` lists up to 5 consumables, lowest `stock_current / stock_min` first; `loans.overdue_top` up to 5 active loans past `due_at`, oldest first; `maintenance.overdue_top` up to 5 assets past `maintenance_due_at`, most overdue first.
+      responses:
+        "200":
+          description: The dashboard summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DashboardSummary" }
+        "401": { $ref: "#/components/responses/Error" }
   /maintenance/{id}:
     patch:
       operationId: updateMaintenance
@@ -1123,6 +1136,81 @@ components:
         total: { type: integer }
         limit: { type: integer }
         offset: { type: integer }
+    DashboardSummary:
+      type: object
+      required: [generated_at, items, assets, low_stock, loans, maintenance]
+      properties:
+        generated_at: { type: string, format: date-time }
+        items:
+          type: object
+          required: [total, assets, consumables]
+          properties:
+            total: { type: integer }
+            assets: { type: integer }
+            consumables: { type: integer }
+        assets:
+          type: object
+          required: [available, unavailable, on_loan, inoperative, in_repair]
+          properties:
+            available: { type: integer }
+            unavailable: { type: integer }
+            on_loan: { type: integer }
+            inoperative: { type: integer }
+            in_repair: { type: integer }
+        low_stock:
+          type: object
+          required: [count, top]
+          properties:
+            count: { type: integer }
+            top:
+              type: array
+              maxItems: 5
+              items:
+                type: object
+                required: [id, code, description, unit, stock_current, stock_min, location_name]
+                properties:
+                  id: { type: string, format: uuid }
+                  code: { type: string }
+                  description: { type: string }
+                  unit: { type: string }
+                  stock_current: { type: integer }
+                  stock_min: { type: integer }
+                  location_name: { type: string, nullable: true }
+        loans:
+          type: object
+          required: [active, overdue, overdue_top]
+          properties:
+            active: { type: integer }
+            overdue: { type: integer }
+            overdue_top:
+              type: array
+              maxItems: 5
+              items:
+                type: object
+                required: [item_id, code, description, assignee_name, due_at]
+                properties:
+                  item_id: { type: string, format: uuid }
+                  code: { type: string }
+                  description: { type: string }
+                  assignee_name: { type: string }
+                  due_at: { type: string, format: date-time }
+        maintenance:
+          type: object
+          required: [open_failures, overdue, overdue_top]
+          properties:
+            open_failures: { type: integer }
+            overdue: { type: integer }
+            overdue_top:
+              type: array
+              maxItems: 5
+              items:
+                type: object
+                required: [item_id, code, description, maintenance_due_at]
+                properties:
+                  item_id: { type: string, format: uuid }
+                  code: { type: string }
+                  description: { type: string }
+                  maintenance_due_at: { type: string, format: date-time }
   responses:
     Error:
       description: Error envelope

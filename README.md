@@ -63,7 +63,8 @@ Categories, locations and items live in the `catalog` module (`/api/v1/categorie
 
 - Item kinds: `asset` (unique, stock always 1, no unit) and `consumable` (requires a unit, tracks `stock_current` / `stock_min`). `kind` and `code` never change after creation. `stock_current` is only set as an opening balance on create; later changes belong to stock movements.
 - Codes are generated as `ISK-<category prefix>-<sequence>` (3+ digits) from an atomic per-prefix counter. Only admins may supply a code (legacy or imported); it must match `ISK-[A-Z0-9]+(-[A-Z0-9]+)*`. Deleting an item is a soft delete and its code stays reserved. Look items up by code with `GET /items/by-code/{code}` (QR scanning).
-- `availability` (`available` / `unavailable`) is derived, never stored: today it means `status = functional`; custody will also require no active loan.
+- `availability` (`available` / `unavailable`) is derived, never stored: `available` means `status = functional` and no active loan (custody), `unavailable` otherwise.
+- While an item has an open failure (maintenance), `PATCH /items/{id}` cannot change its `status` (409 `item_under_repair`; re-sending the current status is fine). Report and close failures through maintenance. The check runs under the same item row lock; catalog reads `maintenance_records` with adapter-level SQL only.
 - Categories, locations: admin only to write, any role reads. Items: operator and admin write, viewer reads. Deleting a category with items, or a location with child locations or items, returns 409.
 - Search: `GET /items?q=` matches code and description (case-insensitive). Filters: `category_id`, `status`, `kind`, `availability`, `location_id`, `low_stock=true`; `sort` (`code`, `description`, `updated_at`; prefix `-` or `order=desc` for descending), `limit` (max 100, default 25) and `offset`. The response includes `total`. A `pg_trgm` index is created when the extension is available; search works without it.
 - Validation errors return 422 `validation_failed` with `error.fields`.
@@ -103,6 +104,14 @@ Preventive maintenance and the failure/repair flow live in the `maintenance` mod
 - Due maintenance is derived, never stored: an asset with `maintenance_interval_days` is due at `COALESCE(last_maintenance_at, created_at) + interval` (24-hour days) and overdue once that is in the past. Item responses add `maintenance_due_at` (null without an interval) and `maintenance_overdue`. `GET /maintenance/due` lists overdue assets plus those due within `within_days` (0 to 365, default 0 = overdue only), most overdue first; filters `category_id`, `q`; `limit` max 100.
 - `GET /maintenance` lists records across items, open first then newest, with item code/description and user names; filters `status`, `kind`, `destination` (exact, case-insensitive), `item_id`, `q` (item code/description and record description).
 - Operators and admins write (`items:write`); every role reads. Validation errors return 422 `validation_failed` with `error.fields`.
+
+## Dashboard
+
+The home-screen summary lives in the `dashboard` module, a read-only projection (`GET /api/v1/dashboard/summary`; see `openapi/openapi.yaml`). No new environment variables and no migration. Any authenticated role may read it.
+
+- One response with item counts (`items`: total, assets, consumables), asset counts (`assets`: `available`, `unavailable`, `on_loan`, `inoperative`, `in_repair`; available and unavailable partition the assets, the rest overlap them), `low_stock` (`count` plus up to 5 most severe, by lowest `stock_current / stock_min`), `loans` (`active`, `overdue`, up to 5 oldest overdue) and `maintenance` (`open_failures`, `overdue`, up to 5 most overdue). Soft-deleted items are excluded everywhere.
+- It reuses the rules of the other modules: low stock is a consumable with `stock_min > 0` and `stock_current <= stock_min`; available is `functional` with no active loan; a loan is overdue when `due_at` is before now; maintenance is overdue when `COALESCE(last_maintenance_at, created_at) + interval` is before now. Time comes from an injectable app clock.
+- It costs five SQL queries (one counters query, one open-failures count, three bounded top lists), no N+1. The postgres adapter reads tables owned by catalog, custody and maintenance with adapter-level SQL; the module never imports their domain or app packages.
 
 ## Test
 
