@@ -17,6 +17,7 @@ interface ItemDetailViewProps {
   onDelete: () => void;
   onCopyCode: () => void;
   /** Container-rendered tab bodies (they fetch their own data). */
+  actions: ReactNode;
   historyTab: ReactNode;
   maintenanceTab: ReactNode;
 }
@@ -43,6 +44,7 @@ export function ItemDetailView({
   onEdit,
   onDelete,
   onCopyCode,
+  actions,
   historyTab,
   maintenanceTab,
 }: ItemDetailViewProps) {
@@ -75,6 +77,8 @@ export function ItemDetailView({
           </div>
         )}
       </header>
+
+      {actions}
 
       {item.custody && (
         <section

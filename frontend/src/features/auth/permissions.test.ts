@@ -7,10 +7,10 @@ describe("permissionsFor", () => {
     ["operator", true, false],
     ["admin", true, true],
   ] as const)("%s: canWriteItems=%s isAdmin=%s", (role, canWriteItems, isAdmin) => {
-    expect(permissionsFor(role)).toMatchObject({ canWriteItems, isAdmin });
+    expect(permissionsFor(role)).toMatchObject({ canWriteItems, canOperate: canWriteItems, isAdmin });
   });
 
   it("grants nothing without a session", () => {
-    expect(permissionsFor(null)).toMatchObject({ canWriteItems: false, isAdmin: false });
+    expect(permissionsFor(null)).toMatchObject({ canWriteItems: false, canOperate: false, isAdmin: false });
   });
 });

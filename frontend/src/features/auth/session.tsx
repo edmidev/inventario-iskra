@@ -61,6 +61,8 @@ export interface Permissions {
   role: Role | null;
   /** operator and admin: create, edit and delete items. */
   canWriteItems: boolean;
+  /** operator and admin: stock movements, loans and maintenance flows. */
+  canOperate: boolean;
   /** admin only: catalogs, users and custom item codes. */
   isAdmin: boolean;
 }
@@ -69,6 +71,7 @@ export function permissionsFor(role: Role | null): Permissions {
   return {
     role,
     canWriteItems: role === "operator" || role === "admin",
+    canOperate: role === "operator" || role === "admin",
     isAdmin: role === "admin",
   };
 }

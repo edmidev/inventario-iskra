@@ -22,11 +22,12 @@ export function useAuthenticatedApi(role: Role = "operator") {
 export function renderApp(route = "/") {
   const client = createQueryClient();
   client.setDefaultOptions({ queries: { retry: false, staleTime: 0 } });
-  return render(
+  const result = render(
     <AppProviders client={client}>
       <MemoryRouter initialEntries={[route]}>
         <App />
       </MemoryRouter>
     </AppProviders>,
   );
+  return { ...result, client };
 }

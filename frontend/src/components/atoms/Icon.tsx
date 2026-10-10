@@ -7,6 +7,7 @@ const paths = {
   filter: "M4 6h16M7 12h10M10 18h4",
   copy: "M9 9h10v11H9zM5 15V4h10",
   plus: "M12 5v14M5 12h14",
+  minus: "M5 12h14",
   x: "M6 6l12 12M18 6 6 18",
   chevron: "M9 6l6 6-6 6",
   check: "M5 12.5 10 17 19 7",
