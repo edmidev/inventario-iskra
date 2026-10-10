@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { LoadingState } from "./components/molecules/StateMessage";
 import { AppShell } from "./components/organisms/AppShell";
 import { RequireAuth } from "./features/auth/RequireAuth";
+import { RequireRole } from "./features/auth/RequireRole";
 
 // Route-level code splitting: each page (with the forms it opens) is its own chunk.
 const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })));
@@ -13,6 +14,7 @@ const StockAlertsPage = lazy(() => import("./pages/StockAlertsPage").then((m) =>
 const LoansPage = lazy(() => import("./pages/LoansPage").then((m) => ({ default: m.LoansPage })));
 const MaintenancePage = lazy(() => import("./pages/MaintenancePage").then((m) => ({ default: m.MaintenancePage })));
 const MorePage = lazy(() => import("./pages/MorePage").then((m) => ({ default: m.MorePage })));
+const LabelsPage = lazy(() => import("./pages/LabelsPage").then((m) => ({ default: m.LabelsPage })));
 const ScanPage = lazy(() => import("./pages/ScanPage").then((m) => ({ default: m.ScanPage })));
 const ResolveCodePage = lazy(() => import("./pages/ResolveCodePage").then((m) => ({ default: m.ResolveCodePage })));
 
@@ -27,6 +29,9 @@ export function App() {
             <Route path="inicio" element={<DashboardPage />} />
             <Route path="materiales" element={<ItemsPage />} />
             <Route path="materiales/codigo/:code" element={<ResolveCodePage />} />
+            <Route element={<RequireRole check={(p) => p.canWriteItems} />}>
+              <Route path="materiales/etiquetas" element={<LabelsPage />} />
+            </Route>
             <Route path="materiales/:id" element={<ItemDetailPage />} />
             <Route path="stock-bajo" element={<StockAlertsPage />} />
             <Route path="prestamos" element={<LoansPage />} />

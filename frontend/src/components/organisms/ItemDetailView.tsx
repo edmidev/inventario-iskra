@@ -16,6 +16,7 @@ interface ItemDetailViewProps {
   onEdit: () => void;
   onDelete: () => void;
   onCopyCode: () => void;
+  onLabel: () => void;
   /** Container-rendered tab bodies (they fetch their own data). */
   actions: ReactNode;
   historyTab: ReactNode;
@@ -44,6 +45,7 @@ export function ItemDetailView({
   onEdit,
   onDelete,
   onCopyCode,
+  onLabel,
   actions,
   historyTab,
   maintenanceTab,
@@ -66,16 +68,21 @@ export function ItemDetailView({
           {item.kind === "consumable" && item.low_stock && <LowStockBadge />}
           {item.maintenance_overdue && <Badge tone="bad">Mantenimiento vencido</Badge>}
         </div>
-        {canWrite && (
-          <div className="flex gap-2">
-            <Button onClick={onEdit}>
-              <Icon name="edit" className="size-4" /> Editar
-            </Button>
-            <Button variant="secondary" className="text-bad" onClick={onDelete}>
-              <Icon name="trash" className="size-4" /> Eliminar
-            </Button>
-          </div>
-        )}
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={onLabel}>
+            <Icon name="qr" className="size-4" /> Etiqueta QR
+          </Button>
+          {canWrite && (
+            <>
+              <Button onClick={onEdit}>
+                <Icon name="edit" className="size-4" /> Editar
+              </Button>
+              <Button variant="secondary" className="text-bad" onClick={onDelete}>
+                <Icon name="trash" className="size-4" /> Eliminar
+              </Button>
+            </>
+          )}
+        </div>
       </header>
 
       {actions}

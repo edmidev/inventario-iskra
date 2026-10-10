@@ -110,3 +110,29 @@
 @media (prefers-reduced-motion: reduce) {
   .sheet-content, .sheet-overlay { animation: none !important; }
 }
+
+/* Print: only the .print-root block (labels) goes to paper; the app chrome is hidden. */
+.print-root { display: none; }
+
+@media print {
+  @page { size: auto; margin: 8mm; }
+  body > *:not(.print-root) { display: none !important; }
+  .print-root { display: block; }
+  html, body { background: #fff !important; }
+  .label-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 50mm);
+    gap: 2mm;
+  }
+  .label-card {
+    box-sizing: border-box;
+    width: 50mm;
+    height: 30mm;
+    padding: 2mm;
+    gap: 2mm;
+    overflow: hidden;
+    border: 0.2mm dashed #888;
+    break-inside: avoid;
+  }
+  .label-qr { width: 24mm; height: 24mm; }
+}

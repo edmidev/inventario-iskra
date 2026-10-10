@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "../components/atoms/Button";
 import { Icon } from "../components/atoms/Icon";
 import { FilterChip } from "../components/molecules/FilterChip";
@@ -55,9 +55,18 @@ export function ItemsPage() {
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Materiales</h1>
         <Can check={(p) => p.canWriteItems}>
-          <Button variant="primary" onClick={() => setCreateOpen(true)}>
-            <Icon name="plus" className="size-4" /> Nuevo
-          </Button>
+          <div className="flex gap-2">
+            <Link
+              to="/materiales/etiquetas"
+              aria-label="Etiquetas QR"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface px-4 text-sm font-semibold hover:bg-sunken"
+            >
+              <Icon name="qr" className="size-4" /> <span className="hidden sm:inline">Etiquetas</span>
+            </Link>
+            <Button variant="primary" onClick={() => setCreateOpen(true)}>
+              <Icon name="plus" className="size-4" /> Nuevo
+            </Button>
+          </div>
         </Can>
       </div>
 

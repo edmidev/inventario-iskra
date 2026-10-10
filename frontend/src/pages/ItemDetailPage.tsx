@@ -11,6 +11,7 @@ import { HistoryTab } from "../features/history/components/HistoryTab";
 import { MaintenanceTab } from "../features/maintenance/components/MaintenanceTab";
 import { useItem } from "../features/items/api/items";
 import { DeleteItemSheet } from "../features/items/components/DeleteItemSheet";
+import { LabelSheet } from "../features/labels/components/LabelSheet";
 import { ItemFormSheet } from "../features/items/components/ItemFormSheet";
 import { ApiError, describeError } from "../lib/api/errors";
 
@@ -23,6 +24,7 @@ export function ItemDetailPage() {
   const query = useItem(id);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [labelOpen, setLabelOpen] = useState(false);
 
   const back = (
     <Link to="/materiales" className="inline-flex min-h-11 items-center gap-1 text-sm font-semibold text-accent">
@@ -55,6 +57,7 @@ export function ItemDetailPage() {
           maintenanceTab={<MaintenanceTab item={item} />}
           onEdit={() => setEditing(true)}
           onDelete={() => setDeleting(true)}
+          onLabel={() => setLabelOpen(true)}
           onCopyCode={() => {
             navigator.clipboard
               ?.writeText(item.code)
@@ -62,6 +65,7 @@ export function ItemDetailPage() {
               .catch(() => toast.error("No se pudo copiar el código."));
           }}
         />
+        <LabelSheet item={item} open={labelOpen} onOpenChange={setLabelOpen} />
         {canWriteItems && (
           <>
             <ItemFormSheet open={editing} onOpenChange={setEditing} item={item} />
