@@ -62,6 +62,13 @@ func (r *Repo) Record(ctx context.Context, itemID, userID string, decide func(do
 		return domain.Movement{}, fmt.Errorf("lock item: %w", err)
 	}
 	cur.Kind = domain.Kind(kind)
+	// The item row lock serializes this with custody assign/return, which
+	// lock the same row, so the flag cannot go stale before commit.
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM custody_assignments WHERE item_id = $1::uuid AND returned_at IS NULL)`,
+		itemID).Scan(&cur.OnLoan); err != nil {
+		return domain.Movement{}, fmt.Errorf("check active loan: %w", err)
+	}
 
 	out, err := decide(cur)
 	if err != nil {

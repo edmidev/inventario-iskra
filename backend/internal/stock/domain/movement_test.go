@@ -38,6 +38,7 @@ func TestDecide(t *testing.T) {
 		{name: "adjust negative", state: cons, req: domain.Request{Type: domain.TypeAdjust, Qty: -1, Note: "x"}, wantField: "qty"},
 		{name: "transfer consumable", state: cons, req: domain.Request{Type: domain.TypeTransfer, ToLocationID: p64(2)}, qty: 0, after: 10, loc: p64(2)},
 		{name: "transfer asset", state: asset, req: domain.Request{Type: domain.TypeTransfer, ToLocationID: p64(2)}, qty: 0, after: 1, loc: p64(2)},
+		{name: "transfer asset on loan", state: domain.ItemState{Kind: domain.KindAsset, StockCurrent: 1, LocationID: p64(1), OnLoan: true}, req: domain.Request{Type: domain.TypeTransfer, ToLocationID: p64(2)}, wantErr: domain.ErrItemOnLoan},
 		{name: "transfer without destination", state: asset, req: domain.Request{Type: domain.TypeTransfer}, wantField: "to_location_id"},
 		{name: "transfer to same location", state: asset, req: domain.Request{Type: domain.TypeTransfer, ToLocationID: p64(1)}, wantField: "to_location_id"},
 		{name: "transfer with qty", state: asset, req: domain.Request{Type: domain.TypeTransfer, ToLocationID: p64(2), Qty: 3}, wantField: "qty"},

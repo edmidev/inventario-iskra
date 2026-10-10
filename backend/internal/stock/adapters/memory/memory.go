@@ -21,6 +21,7 @@ type Item struct {
 	StockMin     int
 	LocationID   *int64
 	Deleted      bool
+	OnLoan       bool // active custody assignment
 }
 
 // Store holds items, known locations and the ledger. Safe for concurrent use.
@@ -84,7 +85,7 @@ func (s *Store) Record(_ context.Context, itemID, userID string, decide func(dom
 	if !ok || it.Deleted {
 		return domain.Movement{}, domain.ErrItemNotFound
 	}
-	out, err := decide(domain.ItemState{Kind: it.Kind, StockCurrent: it.StockCurrent, LocationID: it.LocationID})
+	out, err := decide(domain.ItemState{Kind: it.Kind, StockCurrent: it.StockCurrent, LocationID: it.LocationID, OnLoan: it.OnLoan})
 	if err != nil {
 		return domain.Movement{}, err
 	}

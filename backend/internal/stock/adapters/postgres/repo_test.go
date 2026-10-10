@@ -395,3 +395,29 @@ func TestMigrationBackfillReconcilesExistingConsumables(t *testing.T) {
 		t.Errorf("backfilled %d movements, want 1 (only the consumable with stock)", total)
 	}
 }
+
+func TestTransferRejectedWhileOnLoanThenAllowedAfterReturn(t *testing.T) {
+	f := setup(t)
+	ctx := t.Context()
+	asset := f.asset(t, "Taladro", &f.locA)
+	var assignmentID int64
+	if err := f.pool.QueryRow(ctx, `
+		INSERT INTO custody_assignments (item_id, assignee_location_id, origin_location_id, assigned_by)
+		VALUES ($1::uuid, $2, $3, $4::uuid) RETURNING id`, asset.ID, f.locB, f.locA, f.userID).Scan(&assignmentID); err != nil {
+		t.Fatal(err)
+	}
+	req := domain.Request{Type: domain.TypeTransfer, ToLocationID: &f.locB}
+	if _, err := f.stock.Record(ctx, asset.ID, f.userID, req); !errors.Is(err, domain.ErrItemOnLoan) {
+		t.Fatalf("transfer on loan: %v", err)
+	}
+	var loc int64
+	if err := f.pool.QueryRow(ctx, `SELECT location_id FROM items WHERE id = $1::uuid`, asset.ID).Scan(&loc); err != nil || loc != f.locA {
+		t.Errorf("rejected transfer moved the asset: loc=%d err=%v", loc, err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE custody_assignments SET returned_at = now(), returned_by = $2::uuid WHERE id = $1`, assignmentID, f.userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.stock.Record(ctx, asset.ID, f.userID, req); err != nil {
+		t.Errorf("transfer after return: %v", err)
+	}
+}

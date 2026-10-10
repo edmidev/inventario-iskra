@@ -164,3 +164,15 @@ func TestConcurrentOutNeverOversells(t *testing.T) {
 		t.Errorf("successes=%d stock=%d, want 10 and 0", ok, st.Item("c1").StockCurrent)
 	}
 }
+
+func TestTransferRejectedWhileOnLoan(t *testing.T) {
+	svc, st := setup()
+	st.SeedItem(memory.Item{ID: "a-loan", Kind: domain.KindAsset, StockCurrent: 1, LocationID: p64(1), OnLoan: true})
+	_, err := svc.Record(t.Context(), "a-loan", "u1", domain.Request{Type: domain.TypeTransfer, ToLocationID: p64(2)})
+	if !errors.Is(err, domain.ErrItemOnLoan) {
+		t.Fatalf("err = %v, want ErrItemOnLoan", err)
+	}
+	if loc := st.Item("a-loan").LocationID; loc == nil || *loc != 1 || len(st.Movements()) != 0 {
+		t.Error("rejected transfer changed state")
+	}
+}

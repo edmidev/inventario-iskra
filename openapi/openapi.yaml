@@ -479,7 +479,7 @@ paths:
         Atomically changes an item and appends an immutable movement; the acting user is the authenticated caller.
         - `in` (`qty` > 0) adds, `out` (`qty` > 0) subtracts and never goes below 0 (409 `insufficient_stock`).
         - `adjust` sets the absolute counted quantity (`qty` >= 0) and requires a non-empty `note`; the movement records the delta.
-        - `transfer` moves the item (asset or consumable) to `to_location_id`, which must exist and differ from the current location; `qty` must be omitted or 0.
+        - `transfer` moves the item (asset or consumable) to `to_location_id`, which must exist and differ from the current location; `qty` must be omitted or 0. An asset on loan cannot be transferred (409 `item_on_loan`): custody owns its location until it is returned.
         - `in`, `out` and `adjust` apply to consumables only (422 `not_applicable` for assets). `opening` movements are written by the system and cannot be requested.
       parameters:
         - { $ref: "#/components/parameters/ItemId" }

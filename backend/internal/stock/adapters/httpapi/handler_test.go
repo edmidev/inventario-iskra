@@ -263,3 +263,15 @@ func TestAlertsEndpoint(t *testing.T) {
 		t.Errorf("alert fields: %v", b)
 	}
 }
+
+func TestTransferOfAssetOnLoanIs409(t *testing.T) {
+	e := newEnv(t)
+	e.st.SeedItem(memory.Item{ID: "a-loan", Code: "ISK-HER-002", Description: "Saw", Kind: domain.KindAsset, StockCurrent: 1, LocationID: p64(1), OnLoan: true})
+	got := e.do(t, "POST", "/items/a-loan/movements", "operator", m{"type": "transfer", "to_location_id": 2})
+	if got.Status != 409 || got.errCode() != "item_on_loan" {
+		t.Errorf("%d %v", got.Status, got.Body)
+	}
+	if n := len(e.st.Movements()); n != 0 {
+		t.Errorf("recorded %d movements", n)
+	}
+}

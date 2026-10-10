@@ -60,6 +60,9 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrNotApplicable):
 		httpx.WriteError(w, http.StatusUnprocessableEntity, "not_applicable",
 			"this movement only applies to consumables; assets can only be transferred")
+	case errors.Is(err, domain.ErrItemOnLoan):
+		httpx.WriteError(w, http.StatusConflict, "item_on_loan",
+			"item is on loan; return it before changing its location")
 	case errors.As(err, &ie):
 		httpx.WriteError(w, http.StatusConflict, "insufficient_stock",
 			fmt.Sprintf("only %d in stock, %d requested", ie.Available, ie.Requested))

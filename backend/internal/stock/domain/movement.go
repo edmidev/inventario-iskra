@@ -55,6 +55,7 @@ var (
 	ErrNotApplicable     = errors.New("movement not applicable to this item kind")
 	ErrInsufficientStock = errors.New("insufficient stock")
 	ErrInvalidInput      = errors.New("invalid input")
+	ErrItemOnLoan        = errors.New("item is on loan; custody owns its location")
 )
 
 // InsufficientStockError carries the numbers behind ErrInsufficientStock.
@@ -115,6 +116,9 @@ type ItemState struct {
 	Kind         Kind
 	StockCurrent int
 	LocationID   *int64
+	// OnLoan is true while custody has an active assignment for the item.
+	// Stock only reads this flag; custody owns the loan itself.
+	OnLoan bool
 }
 
 // Request is a client-requested movement. For adjust, Qty is the absolute
@@ -187,6 +191,9 @@ func Decide(cur ItemState, req Request) (Outcome, error) {
 		}
 		m.Qty = req.Qty - cur.StockCurrent
 	case TypeTransfer:
+		if cur.OnLoan {
+			return Outcome{}, ErrItemOnLoan
+		}
 		fe := map[string]string{}
 		if req.Qty != 0 {
 			fe["qty"] = "must be omitted or 0 for transfers"
