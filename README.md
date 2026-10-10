@@ -52,10 +52,21 @@ Auth is a short-lived access JWT (sent as `Authorization: Bearer`) plus a rotati
 | Role | Permissions |
 | --- | --- |
 | `viewer` | read |
-| `operator` | read + operational writes (movements, custody, maintenance) |
-| `admin` | everything, including users and catalogs |
+| `operator` | read + operational writes (movements, custody, maintenance) + create/edit/delete items |
+| `admin` | everything, including users, categories and locations |
 
 The last active admin cannot be deactivated or demoted. Endpoints are documented in `openapi/openapi.yaml`. Other modules reuse `httpx.Authenticate` and `httpx.RequirePermission`.
+
+## Catalog
+
+Categories, locations and items live in the `catalog` module (`/api/v1/categories`, `/locations`, `/items`; see `openapi/openapi.yaml`).
+
+- Item kinds: `asset` (unique, stock always 1, no unit) and `consumable` (requires a unit, tracks `stock_current` / `stock_min`). `kind` and `code` never change after creation. `stock_current` is only set as an opening balance on create; later changes belong to stock movements.
+- Codes are generated as `ISK-<category prefix>-<sequence>` (3+ digits) from an atomic per-prefix counter. Only admins may supply a code (legacy or imported); it must match `ISK-[A-Z0-9]+(-[A-Z0-9]+)*`. Deleting an item is a soft delete and its code stays reserved. Look items up by code with `GET /items/by-code/{code}` (QR scanning).
+- `availability` (`available` / `unavailable`) is derived, never stored: today it means `status = functional`; custody will also require no active loan.
+- Categories, locations: admin only to write, any role reads. Items: operator and admin write, viewer reads. Deleting a category with items, or a location with child locations or items, returns 409.
+- Search: `GET /items?q=` matches code and description (case-insensitive). Filters: `category_id`, `status`, `kind`, `availability`, `location_id`, `low_stock=true`; `sort` (`code`, `description`, `updated_at`; prefix `-` or `order=desc` for descending), `limit` (max 100, default 25) and `offset`. The response includes `total`. A `pg_trgm` index is created when the extension is available; search works without it.
+- Validation errors return 422 `validation_failed` with `error.fields`.
 
 ## Test
 

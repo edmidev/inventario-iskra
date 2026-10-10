@@ -183,6 +183,294 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /categories:
+    get:
+      operationId: listCategories
+      summary: List categories
+      responses:
+        "200":
+          description: All categories, ordered by name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Category" }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createCategory
+      summary: Create a category (admin)
+      description: The name is unique ignoring case; `code_prefix` (2-8 chars, A-Z and 0-9, stored uppercase) is unique and feeds generated item codes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, code_prefix]
+              properties:
+                name: { type: string, maxLength: 120 }
+                code_prefix: { type: string, example: HER }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /categories/{id}:
+    patch:
+      operationId: updateCategory
+      summary: Rename a category or change its prefix (admin)
+      description: A new prefix only affects codes generated afterwards; existing codes never change.
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 120 }
+                code_prefix: { type: string }
+      responses:
+        "200":
+          description: Updated category
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteCategory
+      summary: Delete a category (admin)
+      description: 409 `category_in_use` while any item (including soft-deleted ones) references it.
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /locations:
+    get:
+      operationId: listLocations
+      summary: List locations
+      responses:
+        "200":
+          description: All locations (flat list; use `parent_id` to build the tree)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Location" }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createLocation
+      summary: Create a location (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, kind]
+              properties:
+                name: { type: string, maxLength: 120 }
+                kind: { $ref: "#/components/schemas/LocationKind" }
+                parent_id: { type: integer, format: int64, nullable: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Location" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /locations/{id}:
+    patch:
+      operationId: updateLocation
+      summary: Update a location (admin)
+      description: "Send `parent_id: null` to detach. A parent that would create a cycle returns 409 `location_cycle`."
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 120 }
+                kind: { $ref: "#/components/schemas/LocationKind" }
+                parent_id: { type: integer, format: int64, nullable: true }
+      responses:
+        "200":
+          description: Updated location
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Location" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteLocation
+      summary: Delete a location (admin)
+      description: 409 `location_in_use` while it has child locations or items.
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /items:
+    get:
+      operationId: listItems
+      summary: Search and filter items
+      description: Soft-deleted items are never listed. `q` is a case-insensitive substring match over code and description. Invalid parameters return 422 with `error.fields`.
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: category_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ItemStatus" } }
+        - { name: kind, in: query, schema: { $ref: "#/components/schemas/ItemKind" } }
+        - { name: availability, in: query, schema: { $ref: "#/components/schemas/Availability" } }
+        - { name: location_id, in: query, schema: { type: integer, format: int64 } }
+        - name: low_stock
+          in: query
+          description: "`true` keeps consumables with `stock_min > 0` and `stock_current <= stock_min`."
+          schema: { type: boolean }
+        - name: sort
+          in: query
+          description: Field to sort by; a leading `-` sorts descending.
+          schema: { type: string, enum: [code, description, updated_at], default: code }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        "200":
+          description: One page of items
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, limit, offset]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Item" }
+                  total: { type: integer, description: Matches across all pages }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createItem
+      summary: Create an item (operator or admin)
+      description: |
+        Assets are always stock 1 with no unit. Consumables require a `unit`; `stock_current` is the opening balance (later changes go through stock movements). The code is generated as `ISK-<category prefix>-<sequence>` unless an admin supplies `code` (pattern `ISK-[A-Z0-9]+(-[A-Z0-9]+)*`); supplying a code without admin rights returns 403. Codes are immutable and stay reserved after deletion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ItemCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Item" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /items/by-code/{code}:
+    get:
+      operationId: getItemByCode
+      summary: Look an item up by code (QR scanning)
+      description: The code is matched case-insensitively.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string, example: ISK-HER-001 } }
+      responses:
+        "200":
+          description: The item
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Item" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /items/{id}:
+    get:
+      operationId: getItem
+      summary: Get an item
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+      responses:
+        "200":
+          description: The item
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Item" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateItem
+      summary: Update an item (operator or admin)
+      description: |
+        Partial update. `attributes` replaces the whole object. `location_id` and `maintenance_interval_days` accept `null` to clear. `code`, `kind` and `stock_current` cannot be changed (422 with the field named); stock changes belong to stock movements.
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ItemUpdate" }
+      responses:
+        "200":
+          description: Updated item
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Item" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteItem
+      summary: Soft-delete an item (operator or admin)
+      description: The item disappears from reads and lists; its code stays reserved.
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 security:
   - bearerAuth: []
 components:
@@ -193,6 +481,16 @@ components:
       bearerFormat: JWT
   parameters:
     UserId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    NumericId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    ItemId:
       name: id
       in: path
       required: true
@@ -212,6 +510,85 @@ components:
         active: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    Category:
+      type: object
+      required: [id, name, code_prefix]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        code_prefix: { type: string, example: HER }
+    LocationKind:
+      type: string
+      enum: [storage, container, person]
+    Location:
+      type: object
+      required: [id, name, kind, parent_id]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        kind: { $ref: "#/components/schemas/LocationKind" }
+        parent_id: { type: integer, format: int64, nullable: true }
+    ItemKind:
+      type: string
+      enum: [asset, consumable]
+    ItemStatus:
+      type: string
+      enum: [functional, inoperative, in_repair]
+    Availability:
+      type: string
+      enum: [available, unavailable]
+      description: Derived, never stored. Today `available` means status is `functional`; custody will also require no active loan.
+    Item:
+      type: object
+      required: [id, code, description, category_id, kind, status, availability, unit, stock_current, stock_min, low_stock, location_id, last_maintenance_at, maintenance_interval_days, attributes, notes, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, example: ISK-HER-001 }
+        description: { type: string }
+        category_id: { type: integer, format: int64 }
+        kind: { $ref: "#/components/schemas/ItemKind" }
+        status: { $ref: "#/components/schemas/ItemStatus" }
+        availability: { $ref: "#/components/schemas/Availability" }
+        unit: { type: string, nullable: true }
+        stock_current: { type: integer }
+        stock_min: { type: integer }
+        low_stock: { type: boolean }
+        location_id: { type: integer, format: int64, nullable: true }
+        last_maintenance_at: { type: string, format: date-time, nullable: true }
+        maintenance_interval_days: { type: integer, nullable: true }
+        attributes: { type: object, additionalProperties: true, description: "Free-form JSON object (brand, color, level...), up to 8 KB." }
+        notes: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ItemCreate:
+      type: object
+      required: [description, category_id, kind]
+      properties:
+        code: { type: string, description: Admin only. Omit to generate one. }
+        description: { type: string, maxLength: 500 }
+        category_id: { type: integer, format: int64 }
+        kind: { $ref: "#/components/schemas/ItemKind" }
+        status: { $ref: "#/components/schemas/ItemStatus" }
+        unit: { type: string, maxLength: 30, description: Required for consumables; not allowed for assets. }
+        stock_current: { type: integer, minimum: 0, description: Opening balance (consumables). }
+        stock_min: { type: integer, minimum: 0 }
+        location_id: { type: integer, format: int64, nullable: true }
+        last_maintenance_at: { type: string, format: date-time, nullable: true }
+        maintenance_interval_days: { type: integer, minimum: 1, maximum: 3650, nullable: true }
+        attributes: { type: object, additionalProperties: true }
+        notes: { type: string, maxLength: 4000 }
+    ItemUpdate:
+      type: object
+      properties:
+        description: { type: string, maxLength: 500 }
+        category_id: { type: integer, format: int64 }
+        status: { $ref: "#/components/schemas/ItemStatus" }
+        unit: { type: string, maxLength: 30 }
+        stock_min: { type: integer, minimum: 0 }
+        location_id: { type: integer, format: int64, nullable: true }
+        maintenance_interval_days: { type: integer, minimum: 1, maximum: 3650, nullable: true }
+        attributes: { type: object, additionalProperties: true }
+        notes: { type: string, maxLength: 4000 }
     Error:
       type: object
       required: [error]
@@ -222,8 +599,12 @@ components:
           properties:
             code:
               type: string
-              description: "Stable machine code, e.g. invalid_request, unauthorized, forbidden, not_found, conflict, email_taken, last_admin, invalid_credentials, rate_limited, internal_error."
+              description: "Stable machine code, e.g. invalid_request, unauthorized, forbidden, not_found, conflict, email_taken, last_admin, invalid_credentials, rate_limited, validation_failed, category_name_taken, category_prefix_taken, category_in_use, location_in_use, location_cycle, code_taken, internal_error."
             message: { type: string }
+            fields:
+              type: object
+              additionalProperties: { type: string }
+              description: Present on 422 `validation_failed`; maps each offending field to a message.
   responses:
     Error:
       description: Error envelope
