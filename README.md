@@ -68,6 +68,17 @@ Categories, locations and items live in the `catalog` module (`/api/v1/categorie
 - Search: `GET /items?q=` matches code and description (case-insensitive). Filters: `category_id`, `status`, `kind`, `availability`, `location_id`, `low_stock=true`; `sort` (`code`, `description`, `updated_at`; prefix `-` or `order=desc` for descending), `limit` (max 100, default 25) and `offset`. The response includes `total`. A `pg_trgm` index is created when the extension is available; search works without it.
 - Validation errors return 422 `validation_failed` with `error.fields`.
 
+## Stock
+
+Movements and low-stock alerts live in the `stock` module (`POST|GET /api/v1/items/{id}/movements`, `GET /api/v1/stock/alerts`; see `openapi/openapi.yaml`). No new environment variables.
+
+- `stock_movements` is an append-only ledger: a database trigger rejects `UPDATE` and `DELETE`. Each row stores the signed `qty` delta, `stock_before`, `stock_after`, from/to location, the acting user and a note. Corrections are new movements, never edits.
+- Types: `in` (adds), `out` (subtracts, never below 0, otherwise 409 `insufficient_stock`), `adjust` (sets an absolute counted quantity; requires a note; the movement records the delta), `transfer` (moves an asset or consumable to another location; stock unchanged) and `opening` (system-written).
+- `in`, `out` and `adjust` apply to consumables only; assets get 422 `not_applicable` but can be transferred. Soft-deleted items return 404.
+- Each movement locks the item row (`SELECT ... FOR UPDATE`) and updates `items.stock_current` / `location_id` and inserts the movement in one transaction, so parallel `out` requests never oversell and the ledger always reconciles with the item.
+- Creating a consumable with `stock_current > 0` records an `opening` movement in the same transaction. Catalog exposes an adapter-level create hook (`catalogpg.WithCreateHook`) that `cmd/api/wire.go` fills with stock's `RecordOpening`; catalog never imports stock. Migration `00004` backfills an `opening` movement for consumables that already had stock.
+- Operators and admins record movements (`items:write`); every role reads history (`limit` max 100, default 25, `offset`, optional `type`) and alerts (consumables with `stock_min > 0` and `stock_current <= stock_min`, most severe first).
+
 ## Test
 
 ```sh

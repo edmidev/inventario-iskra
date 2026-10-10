@@ -471,6 +471,89 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /items/{id}/movements:
+    post:
+      operationId: recordMovement
+      summary: Record a stock movement (operator or admin)
+      description: |
+        Atomically changes an item and appends an immutable movement; the acting user is the authenticated caller.
+        - `in` (`qty` > 0) adds, `out` (`qty` > 0) subtracts and never goes below 0 (409 `insufficient_stock`).
+        - `adjust` sets the absolute counted quantity (`qty` >= 0) and requires a non-empty `note`; the movement records the delta.
+        - `transfer` moves the item (asset or consumable) to `to_location_id`, which must exist and differ from the current location; `qty` must be omitted or 0.
+        - `in`, `out` and `adjust` apply to consumables only (422 `not_applicable` for assets). `opening` movements are written by the system and cannot be requested.
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MovementRequest" }
+      responses:
+        "201":
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MovementResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    get:
+      operationId: listMovements
+      summary: Movement history of an item (any role)
+      description: Newest first. Soft-deleted items return 404.
+      parameters:
+        - { $ref: "#/components/parameters/ItemId" }
+        - name: type
+          in: query
+          schema: { $ref: "#/components/schemas/MovementType" }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: One page of movements
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, limit, offset]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Movement" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /stock/alerts:
+    get:
+      operationId: listStockAlerts
+      summary: Consumables at or below their minimum stock (any role)
+      description: Consumables with `stock_min > 0` and `stock_current <= stock_min`, most severe (lowest `stock_current - stock_min`) first, then by code.
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: One page of alerts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, limit, offset]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/StockAlert" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
 security:
   - bearerAuth: []
 components:
@@ -495,6 +578,14 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
   schemas:
     Role:
       type: string
@@ -605,6 +696,53 @@ components:
               type: object
               additionalProperties: { type: string }
               description: Present on 422 `validation_failed`; maps each offending field to a message.
+    MovementType:
+      type: string
+      enum: [opening, in, out, adjust, transfer]
+    MovementRequest:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [in, out, adjust, transfer] }
+        qty: { type: integer, description: "Amount for in/out; absolute counted quantity for adjust; omit or 0 for transfer." }
+        to_location_id: { type: integer, format: int64, description: Required for transfer; not allowed otherwise. }
+        note: { type: string, maxLength: 500, description: Required (non-empty) for adjust. }
+    Movement:
+      type: object
+      required: [id, item_id, type, qty, stock_before, stock_after, from_location_id, to_location_id, user_id, user_name, note, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        item_id: { type: string, format: uuid }
+        type: { $ref: "#/components/schemas/MovementType" }
+        qty: { type: integer, description: Signed delta applied to stock; 0 for transfers. }
+        stock_before: { type: integer }
+        stock_after: { type: integer }
+        from_location_id: { type: integer, format: int64, nullable: true }
+        to_location_id: { type: integer, format: int64, nullable: true }
+        user_id: { type: string, format: uuid, nullable: true, description: Null for system rows (migration backfill). }
+        user_name: { type: string, nullable: true }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+    MovementResult:
+      type: object
+      required: [movement, stock_current, location_id]
+      properties:
+        movement: { $ref: "#/components/schemas/Movement" }
+        stock_current: { type: integer, description: Item stock after the movement. }
+        location_id: { type: integer, format: int64, nullable: true, description: Item location after the movement. }
+    StockAlert:
+      type: object
+      required: [item_id, code, description, unit, stock_current, stock_min, shortage, location_id, location_name]
+      properties:
+        item_id: { type: string, format: uuid }
+        code: { type: string }
+        description: { type: string }
+        unit: { type: string }
+        stock_current: { type: integer }
+        stock_min: { type: integer }
+        shortage: { type: integer, description: stock_current - stock_min; lower is more severe. }
+        location_id: { type: integer, format: int64, nullable: true }
+        location_name: { type: string, nullable: true }
   responses:
     Error:
       description: Error envelope
