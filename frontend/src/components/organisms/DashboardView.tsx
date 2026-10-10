@@ -57,12 +57,12 @@ export function DashboardView({ summary }: { summary: DashboardSummary }) {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Total de materiales" value={items.total} to="/materiales" />
         <StatCard label="Disponibles" value={assets.available} tone="ok" to="/materiales?availability=available" />
-        <StatCard label="Prestados" value={loans.active} tone="warn" />
-        <StatCard label="En reparación o inoperativos" value={assets.in_repair + assets.inoperative} tone="bad" />
+        <StatCard label="Prestados" value={loans.active} tone="warn" to="/prestamos" />
+        <StatCard label="En reparación o inoperativos" value={assets.in_repair + assets.inoperative} tone="bad" to="/mantenimiento" />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <AlertList title="Stock bajo" count={low_stock.count} empty="Todo el stock está en orden." seeAllTo="/materiales?low_stock=true">
+        <AlertList title="Stock bajo" count={low_stock.count} empty="Todo el stock está en orden." seeAllTo="/stock-bajo">
           {low_stock.top.map((row) => (
             <Row
               key={row.id}
@@ -78,7 +78,7 @@ export function DashboardView({ summary }: { summary: DashboardSummary }) {
           ))}
         </AlertList>
 
-        <AlertList title="Préstamos vencidos" count={loans.overdue} empty="No hay préstamos vencidos.">
+        <AlertList title="Préstamos vencidos" count={loans.overdue} empty="No hay préstamos vencidos." seeAllTo="/prestamos?overdue=true">
           {loans.overdue_top.map((row) => (
             <Row
               key={row.item_id}
@@ -95,7 +95,7 @@ export function DashboardView({ summary }: { summary: DashboardSummary }) {
           ))}
         </AlertList>
 
-        <AlertList title="Mantenimiento vencido" count={maintenance.overdue} empty="No hay mantenimientos vencidos.">
+        <AlertList title="Mantenimiento vencido" count={maintenance.overdue} empty="No hay mantenimientos vencidos." seeAllTo="/mantenimiento?tab=due">
           {maintenance.overdue_top.map((row) => (
             <Row
               key={row.item_id}

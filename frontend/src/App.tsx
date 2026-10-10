@@ -5,8 +5,11 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { ItemDetailPage } from "./pages/ItemDetailPage";
 import { ItemsPage } from "./pages/ItemsPage";
 import { LoginPage } from "./pages/LoginPage";
+import { LoansPage } from "./pages/LoansPage";
+import { MaintenancePage } from "./pages/MaintenancePage";
 import { MorePage } from "./pages/MorePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { StockAlertsPage } from "./pages/StockAlertsPage";
 
 export function App() {
   return (
@@ -22,6 +25,9 @@ export function App() {
             path="escanear"
             element={<PlaceholderPage title="Escanear" description="El escaneo de códigos QR llegará en un paso posterior." />}
           />
+          <Route path="stock-bajo" element={<StockAlertsPage />} />
+          <Route path="prestamos" element={<LoansPage />} />
+          <Route path="mantenimiento" element={<MaintenancePage />} />
           <Route path="mas" element={<MorePage />} />
         </Route>
       </Route>
