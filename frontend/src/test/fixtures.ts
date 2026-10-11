@@ -4,6 +4,7 @@ import type {
   DashboardSummary,
   DueMaintenance,
   Item,
+  ItemStock,
   Location,
   MaintenanceRecord,
   Movement,
@@ -51,6 +52,7 @@ export const item = (overrides: Partial<Item> = {}): Item => ({
   unit: null,
   stock_current: 1,
   stock_min: 0,
+  stocks: [],
   low_stock: false,
   on_loan: false,
   location_id: 11,
@@ -65,8 +67,20 @@ export const item = (overrides: Partial<Item> = {}): Item => ({
   ...overrides,
 });
 
-export const consumable = (overrides: Partial<Item> = {}): Item =>
-  item({
+export const stock = (location_id: number, quantity: number): ItemStock => ({
+  location_id,
+  location_name: locations.find((l) => l.id === location_id)?.name ?? `Ubicación ${location_id}`,
+  quantity,
+});
+
+/**
+ * A consumable stocked at Bodega. Overriding `stock_current` without `stocks` keeps them consistent
+ * (all of it at Bodega); overriding `stocks` without `stock_current` makes the total follow.
+ */
+export const consumable = (overrides: Partial<Item> = {}): Item => {
+  const stocks = overrides.stocks ?? (overrides.stock_current === 0 ? [] : [stock(10, overrides.stock_current ?? 2)]);
+  const total = overrides.stock_current ?? stocks.reduce((sum, row) => sum + row.quantity, 0);
+  return item({
     id: "22222222-2222-2222-2222-222222222222",
     code: "ISK-CON-001",
     description: "Guantes de nitrilo",
@@ -74,14 +88,16 @@ export const consumable = (overrides: Partial<Item> = {}): Item =>
     kind: "consumable",
     availability: "available",
     unit: "caja",
-    stock_current: 2,
     stock_min: 5,
     low_stock: true,
+    location_id: null,
     maintenance_interval_days: null,
     maintenance_due_at: null,
     attributes: {},
     ...overrides,
+    ...{ stocks, stock_current: total },
   });
+};
 
 export const onLoanItem = (overrides: Partial<Item> = {}): Item =>
   item({
@@ -115,6 +131,7 @@ export const summary: DashboardSummary = {
         stock_current: 2,
         stock_min: 5,
         location_name: "Bodega",
+        stocks: [stock(10, 2)],
       },
     ],
   },
@@ -152,8 +169,10 @@ export const movement = (overrides: Partial<Movement> = {}): Movement => ({
   qty: 5,
   stock_before: 2,
   stock_after: 7,
+  location_id: 10,
   from_location_id: null,
   to_location_id: null,
+  moved_qty: 0,
   user_id: "u-1",
   user_name: "Ana Pérez",
   note: "",
@@ -221,6 +240,7 @@ export const stockAlert = (overrides: Partial<StockAlert> = {}): StockAlert => (
   shortage: -3,
   location_id: 10,
   location_name: "Bodega",
+  stocks: [stock(10, 2)],
   ...overrides,
 });
 

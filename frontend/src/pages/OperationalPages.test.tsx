@@ -21,7 +21,7 @@ describe("stock alerts page", () => {
       http.post(api("/items/a2/movements"), async ({ request }) => {
         body = await request.json();
         return HttpResponse.json(
-          { movement: { id: 1, item_id: "a2", type: "in", qty: 10, stock_before: 3, stock_after: 13, from_location_id: null, to_location_id: null, user_id: null, user_name: null, note: "", created_at: "2026-10-10T00:00:00Z" }, stock_current: 13, location_id: 10 },
+          { movement: { id: 1, item_id: "a2", type: "in", qty: 10, stock_before: 3, stock_after: 13, location_id: 10, moved_qty: 0, from_location_id: null, to_location_id: null, user_id: null, user_name: null, note: "", created_at: "2026-10-10T00:00:00Z" }, stock_current: 13, location_id: null, stocks: [{ location_id: 10, location_name: "Bodega", quantity: 13 }] },
           { status: 201 },
         );
       }),

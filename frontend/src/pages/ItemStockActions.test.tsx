@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 import { dashboardKey } from "../features/dashboard/api/useDashboardSummary";
 import type { Item } from "../lib/api/schemas";
-import { consumable, item, movement, onLoanItem, summary } from "../test/fixtures";
+import { consumable, item, movement, onLoanItem, stock, summary } from "../test/fixtures";
 import { api, errorBody, renderApp, useAuthenticatedApi } from "../test/render";
 import { server } from "../test/server";
 
@@ -17,10 +17,11 @@ function serve(value: Item) {
   return state;
 }
 
-const result = (stock: number, qty: number) => ({
-  movement: movement({ qty, stock_after: stock }),
-  stock_current: stock,
-  location_id: 10,
+const result = (total: number, qty: number) => ({
+  movement: movement({ qty, stock_after: total }),
+  stock_current: total,
+  location_id: null,
+  stocks: [stock(10, total)],
 });
 
 describe("stock actions", () => {
@@ -147,7 +148,7 @@ describe("stock actions", () => {
     server.use(
       http.post(api(`/items/${asset.id}/movements`), async ({ request }) => {
         body = await request.json();
-        return HttpResponse.json({ movement: movement({ type: "transfer", qty: 0 }), stock_current: 1, location_id: 10 }, { status: 201 });
+        return HttpResponse.json({ movement: movement({ type: "transfer", qty: 0 }), stock_current: 1, location_id: 10, stocks: [] }, { status: 201 });
       }),
     );
     const user = userEvent.setup();

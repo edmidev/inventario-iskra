@@ -54,6 +54,14 @@ export const custodySchema = z.object({
 });
 export type Custody = z.infer<typeof custodySchema>;
 
+/** Quantity of a consumable held at one location (only locations with stock are listed). */
+export const itemStockSchema = z.object({
+  location_id: z.number(),
+  location_name: z.string(),
+  quantity: z.number(),
+});
+export type ItemStock = z.infer<typeof itemStockSchema>;
+
 export const itemSchema = z.object({
   id: z.string(),
   code: z.string(),
@@ -65,9 +73,12 @@ export const itemSchema = z.object({
   unit: z.string().nullable(),
   stock_current: z.number(),
   stock_min: z.number(),
+  /** Consumables only: stock per location, ordered by location name (empty for assets). */
+  stocks: z.array(itemStockSchema),
   low_stock: z.boolean(),
   on_loan: z.boolean(),
   custody: custodySchema.nullish(),
+  /** An asset's location; always null for consumables (see `stocks`). */
   location_id: z.number().nullable(),
   last_maintenance_at: z.string().nullable(),
   maintenance_interval_days: z.number().nullable(),
@@ -111,6 +122,7 @@ export const dashboardSummarySchema = z.object({
         stock_current: z.number(),
         stock_min: z.number(),
         location_name: z.string().nullable(),
+        stocks: z.array(itemStockSchema),
       }),
     ),
   }),
@@ -163,8 +175,12 @@ export const movementSchema = z.object({
   qty: z.number(),
   stock_before: z.number(),
   stock_after: z.number(),
+  /** Consumable opening/in/out/adjust: where it happened. Null for transfers and legacy rows. */
+  location_id: z.number().nullable(),
   from_location_id: z.number().nullable(),
   to_location_id: z.number().nullable(),
+  /** Quantity moved by a consumable transfer; 0 otherwise. */
+  moved_qty: z.number(),
   user_id: z.string().nullable(),
   user_name: z.string().nullable(),
   note: z.string(),
@@ -176,7 +192,9 @@ export const movementResultSchema = z.object({
   movement: movementSchema,
   stock_current: z.number(),
   location_id: z.number().nullable(),
+  stocks: z.array(itemStockSchema),
 });
+export type MovementResult = z.infer<typeof movementResultSchema>;
 
 export const stockAlertSchema = z.object({
   item_id: z.string(),
@@ -186,8 +204,10 @@ export const stockAlertSchema = z.object({
   stock_current: z.number(),
   stock_min: z.number(),
   shortage: z.number(),
+  /** Set only when all the stock sits in one location. */
   location_id: z.number().nullable(),
   location_name: z.string().nullable(),
+  stocks: z.array(itemStockSchema),
 });
 export type StockAlert = z.infer<typeof stockAlertSchema>;
 
