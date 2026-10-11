@@ -90,12 +90,55 @@ func (s *seed) asset(desc, status string, createdAt time.Time, interval *int, la
 
 func (s *seed) consumable(desc string, current, min int, loc *int64) string {
 	s.t.Helper()
-	var id string
-	if err := s.pool.QueryRow(context.Background(), `
-		INSERT INTO items (code, description, category_id, kind, unit, stock_current, stock_min, location_id, created_at, updated_at)
-		VALUES ($1, $2, $3, 'consumable', 'unit', $4, $5, $6, $7, $7) RETURNING id::text`,
-		s.code(), desc, s.cat, current, min, loc, now).Scan(&id); err != nil {
+	stocks := map[int64]int{}
+	if current > 0 { // stock lives per location; no location means "Sin ubicación"
+		at := s.defaultLocation()
+		if loc != nil {
+			at = *loc
+		}
+		stocks[at] = current
+	}
+	return s.consumableAt(desc, min, stocks)
+}
+
+// consumableAt creates a consumable spread over several locations. The item
+// and its rows go in one transaction: the total check runs at commit.
+func (s *seed) consumableAt(desc string, min int, stocks map[int64]int) string {
+	s.t.Helper()
+	total := 0
+	for _, q := range stocks {
+		total += q
+	}
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		s.t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var id string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO items (code, description, category_id, kind, unit, stock_current, stock_min, created_at, updated_at)
+		VALUES ($1, $2, $3, 'consumable', 'unit', $4, $5, $6, $6) RETURNING id::text`,
+		s.code(), desc, s.cat, total, min, now).Scan(&id); err != nil {
+		s.t.Fatal(err)
+	}
+	for loc, q := range stocks {
+		if _, err := tx.Exec(ctx, `INSERT INTO item_stocks (item_id, location_id, quantity) VALUES ($1::uuid, $2, $3)`, id, loc, q); err != nil {
+			s.t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		s.t.Fatal(err)
+	}
+	return id
+}
+
+func (s *seed) defaultLocation() int64 {
+	s.t.Helper()
+	var id int64
+	err := s.pool.QueryRow(context.Background(), `SELECT id FROM locations WHERE name = 'Sin ubicación'`).Scan(&id)
+	if err != nil {
+		id = s.location("Sin ubicación", "storage")
 	}
 	return id
 }
@@ -230,11 +273,38 @@ func TestLowStockTopIsMostSevereFirstAndCapped(t *testing.T) {
 		}
 	}
 	first := sum.LowStock.Top[0]
-	if first.LocationName == nil || *first.LocationName != "Bodega" || first.Unit != "unit" || first.StockMin != 3 || first.StockCurrent != 0 {
+	if first.LocationName != nil || first.Unit != "unit" || first.StockMin != 3 || first.StockCurrent != 0 {
 		t.Errorf("first = %+v", first)
 	}
-	if sum.LowStock.Top[1].LocationName != nil {
-		t.Errorf("item without location must have nil location_name, got %v", *sum.LowStock.Top[1].LocationName)
+	if second := sum.LowStock.Top[1]; second.LocationName == nil || *second.LocationName != "Sin ubicación" {
+		t.Errorf("stock recorded without a location sits in the default location, got %v", second.LocationName)
+	}
+	// A stocked item with a single location reports its name.
+	if last := sum.LowStock.Top[3]; last.Description != "ratio 0.50" || last.LocationName == nil || *last.LocationName != "Bodega" {
+		t.Errorf("single-location item: %+v", last)
+	}
+	if len(first.Stocks) != 0 { // out of stock: no rows
+		t.Errorf("first.Stocks = %+v, want none", first.Stocks)
+	}
+}
+
+func TestLowStockBreakdownListsEveryLocationAndHidesTheSingleName(t *testing.T) {
+	s := newSeed(t)
+	bodega := s.location("Bodega", "storage")
+	taller := s.location("Taller", "storage")
+	s.consumableAt("Tornillos", 12, map[int64]int{bodega: 5, taller: 5}) // total 10 <= 12
+	s.consumableAt("Pernos", 20, map[int64]int{taller: 7})               // total 7 <= 20
+
+	top := s.summary().LowStock.Top
+	if len(top) != 2 || top[0].Description != "Pernos" || top[1].Description != "Tornillos" { // ratios 0.35, 0.83
+		t.Fatalf("top = %+v", top)
+	}
+	if top[0].LocationName == nil || *top[0].LocationName != "Taller" || len(top[0].Stocks) != 1 || top[0].Stocks[0].Quantity != 7 {
+		t.Errorf("single-location item: %+v", top[0])
+	}
+	if top[1].LocationName != nil || len(top[1].Stocks) != 2 || top[1].Stocks[0].LocationName != "Bodega" ||
+		top[1].Stocks[1].LocationName != "Taller" || top[1].StockCurrent != 10 {
+		t.Errorf("multi-location item: %+v", top[1])
 	}
 }
 

@@ -319,3 +319,99 @@ func TestMaintenanceDueAndOverdue(t *testing.T) {
 		}
 	}
 }
+
+func TestNewItemConsumableStockForms(t *testing.T) {
+	base := NewItemInput{Description: "Tornillos", CategoryID: 1, Kind: KindConsumable, Unit: ptr("u")}
+
+	t.Run("multi-location opening balance", func(t *testing.T) {
+		in := base
+		in.Stocks = []StockInput{{LocationID: 1, Quantity: 5}, {LocationID: 2, Quantity: 5}}
+		it, err := NewItem(in)
+		if err != nil || it.StockCurrent != 10 || len(it.Stocks) != 2 || it.LocationID != nil {
+			t.Fatalf("got %+v %v", it, err)
+		}
+	})
+	t.Run("legacy form with a location", func(t *testing.T) {
+		in := base
+		in.StockCurrent, in.LocationID = ptr(7), ptr(int64(3))
+		it, err := NewItem(in)
+		if err != nil || it.StockCurrent != 7 || len(it.Stocks) != 1 || it.Stocks[0].LocationID != 3 || it.Stocks[0].Quantity != 7 || it.LocationID != nil {
+			t.Fatalf("got %+v %v", it, err)
+		}
+	})
+	t.Run("legacy form without a location targets the default location", func(t *testing.T) {
+		in := base
+		in.StockCurrent = ptr(4)
+		it, err := NewItem(in)
+		if err != nil || len(it.Stocks) != 1 || it.Stocks[0].LocationID != 0 {
+			t.Fatalf("got %+v %v", it, err)
+		}
+	})
+	t.Run("no stock means no rows", func(t *testing.T) {
+		in := base
+		in.StockCurrent, in.LocationID = ptr(0), ptr(int64(3))
+		it, err := NewItem(in)
+		if err != nil || len(it.Stocks) != 0 || it.LocationID != nil {
+			t.Fatalf("got %+v %v", it, err)
+		}
+	})
+	t.Run("both forms at once are rejected", func(t *testing.T) {
+		for _, in := range []NewItemInput{
+			{Stocks: []StockInput{{LocationID: 1, Quantity: 1}}, StockCurrent: ptr(1)},
+			{Stocks: []StockInput{{LocationID: 1, Quantity: 1}}, LocationID: ptr(int64(1))},
+			{Stocks: []StockInput{}, StockCurrent: ptr(0)},
+		} {
+			in.Description, in.CategoryID, in.Kind, in.Unit = base.Description, base.CategoryID, base.Kind, base.Unit
+			if _, err := NewItem(in); fieldsOf(t, err)["stocks"] == "" {
+				t.Errorf("%+v accepted", in)
+			}
+		}
+	})
+	t.Run("invalid rows", func(t *testing.T) {
+		in := base
+		in.Stocks = []StockInput{{LocationID: 0, Quantity: 1}, {LocationID: 2, Quantity: 0}, {LocationID: 2, Quantity: 3}, {LocationID: 4, Quantity: MaxStock}}
+		f := fieldsOf(t, mustErr(NewItem(in)))
+		for _, k := range []string{"stocks[0].location_id", "stocks[1].quantity", "stocks[2].location_id", "stocks"} {
+			if f[k] == "" {
+				t.Errorf("missing error for %s: %v", k, f)
+			}
+		}
+	})
+	t.Run("assets have no per-location stock", func(t *testing.T) {
+		_, err := NewItem(NewItemInput{Description: "Taladro", CategoryID: 1, Kind: KindAsset, Stocks: []StockInput{{LocationID: 1, Quantity: 1}}})
+		if fieldsOf(t, err)["stocks"] == "" {
+			t.Error("asset with stocks accepted")
+		}
+	})
+}
+
+func mustErr(_ Item, err error) error { return err }
+
+func TestApplyRejectsLocationChangesOnConsumables(t *testing.T) {
+	cons := Item{Code: "ISK-CON-001", Kind: KindConsumable, Description: "Tornillos", CategoryID: 1, Status: StatusFunctional,
+		Unit: ptr("u"), StockCurrent: 4, Stocks: []ItemStock{{LocationID: 1, Quantity: 4}}}
+	if _, err := cons.Apply(ItemPatch{LocationID: Nullable[int64]{Set: true, Value: 2}}); !errors.Is(err, ErrNotApplicable) {
+		t.Errorf("setting a location: %v", err)
+	}
+	// Clearing is a no-op for a consumable (it never has one), so it is tolerated.
+	if got, err := cons.Apply(ItemPatch{LocationID: Nullable[int64]{Set: true, Null: true}, Notes: ptr("x")}); err != nil || got.Notes != "x" || got.LocationID != nil {
+		t.Errorf("null location: %+v %v", got, err)
+	}
+	asset := Item{Code: "ISK-HER-001", Kind: KindAsset, Description: "Taladro", CategoryID: 1, Status: StatusFunctional, StockCurrent: 1}
+	if got, err := asset.Apply(ItemPatch{LocationID: Nullable[int64]{Set: true, Value: 2}}); err != nil || got.LocationID == nil || *got.LocationID != 2 {
+		t.Errorf("assets can still be edited: %+v %v", got, err)
+	}
+}
+
+func TestFilterMatchesConsumablesByStockLocation(t *testing.T) {
+	it := Item{Kind: KindConsumable, Description: "Tornillos", StockCurrent: 10,
+		Stocks: []ItemStock{{LocationID: 1, Quantity: 5}, {LocationID: 2, Quantity: 5}}}
+	for _, loc := range []int64{1, 2} {
+		if !(ItemFilter{LocationID: ptr(loc)}).Matches(it) {
+			t.Errorf("location %d should match", loc)
+		}
+	}
+	if (ItemFilter{LocationID: ptr(int64(3))}).Matches(it) {
+		t.Error("location 3 should not match")
+	}
+}

@@ -176,3 +176,158 @@ func TestTransferRejectedWhileOnLoan(t *testing.T) {
 		t.Error("rejected transfer changed state")
 	}
 }
+
+// multiSetup seeds a consumable stocked in two locations: 6 in the
+// warehouse and 4 in the workshop.
+func multiSetup() (*app.Service, *memory.Store) {
+	svc, st := setup()
+	st.SeedLocation(3, "Toolbox")
+	st.SeedItem(memory.Item{ID: "m1", Code: "ISK-CON-050", Description: "Screws", Kind: domain.KindConsumable, Unit: "u",
+		StockMin: 3, Stocks: map[int64]int{1: 6, 2: 4}})
+	return svc, st
+}
+
+func TestOutAtOneLocationLeavesTheOthersUntouched(t *testing.T) {
+	svc, st := multiSetup()
+	r, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeOut, Qty: 4, LocationID: p64(2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.StockCurrent != 6 || len(r.Stocks) != 1 || r.Stocks[0].LocationID != 1 || r.Stocks[0].Quantity != 6 {
+		t.Fatalf("result: %+v", r)
+	}
+	if m := r.Movement; m.LocationID == nil || *m.LocationID != 2 || m.Qty != -4 || m.StockBefore != 10 || m.StockAfter != 6 {
+		t.Errorf("movement: %+v", m)
+	}
+	if it := st.Item("m1"); it.StockCurrent != 6 || it.Stocks[2] != 0 || it.Stocks[1] != 6 {
+		t.Errorf("stored: %+v", it)
+	}
+}
+
+func TestOutBeyondALocationIsRejectedEvenWhenTheTotalCoversIt(t *testing.T) {
+	svc, st := multiSetup()
+	_, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeOut, Qty: 5, LocationID: p64(2)})
+	var ie *domain.InsufficientStockError
+	if !errors.As(err, &ie) || ie.Available != 4 || ie.LocationName != "Workshop" {
+		t.Fatalf("err = %v", err)
+	}
+	if len(st.Movements()) != 0 || st.Item("m1").StockCurrent != 10 {
+		t.Error("rejected out changed state")
+	}
+}
+
+func TestAmbiguousLocationIsRejectedAndSingleLocationIsInferred(t *testing.T) {
+	svc, st := multiSetup()
+	for _, typ := range []domain.MovementType{domain.TypeIn, domain.TypeOut, domain.TypeAdjust} {
+		_, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: typ, Qty: 1, Note: "x"})
+		if !errors.Is(err, domain.ErrLocationRequired) {
+			t.Errorf("%s: err = %v, want ErrLocationRequired", typ, err)
+		}
+	}
+	if len(st.Movements()) != 0 {
+		t.Error("rejected requests wrote movements")
+	}
+	// c1 has a single stock row: the location is inferred.
+	r, err := svc.Record(t.Context(), "c1", "u1", domain.Request{Type: domain.TypeIn, Qty: 2})
+	if err != nil || r.Movement.LocationID == nil || *r.Movement.LocationID != 1 || r.StockCurrent != 12 {
+		t.Fatalf("inferred: %+v err=%v", r, err)
+	}
+}
+
+func TestAdjustSetsTheCountAtOneLocation(t *testing.T) {
+	svc, _ := multiSetup()
+	r, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeAdjust, Qty: 9, LocationID: p64(2), Note: "recount"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.StockCurrent != 15 || r.Movement.Qty != 5 || len(r.Stocks) != 2 {
+		t.Fatalf("result: %+v", r)
+	}
+	if _, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeAdjust, Qty: 9, LocationID: p64(2)}); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Errorf("adjust without note: %v", err)
+	}
+}
+
+func TestPartialTransferKeepsTheTotal(t *testing.T) {
+	svc, st := multiSetup()
+	r, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeTransfer, Qty: 2, FromLocationID: p64(1), ToLocationID: p64(3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := r.Movement
+	if r.StockCurrent != 10 || m.Qty != 0 || m.MovedQty != 2 || *m.FromLocationID != 1 || *m.ToLocationID != 3 || m.LocationID != nil {
+		t.Fatalf("result: %+v", r)
+	}
+	it := st.Item("m1")
+	if it.Stocks[1] != 4 || it.Stocks[2] != 4 || it.Stocks[3] != 2 {
+		t.Errorf("stocks: %v", it.Stocks)
+	}
+	// Moving everything drops the source row.
+	if _, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeTransfer, Qty: 4, FromLocationID: p64(1), ToLocationID: p64(2)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.Item("m1").Stocks[1]; ok {
+		t.Errorf("empty location kept a row: %v", st.Item("m1").Stocks)
+	}
+	if _, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeTransfer, Qty: 9, FromLocationID: p64(2), ToLocationID: p64(3)}); !errors.Is(err, domain.ErrInsufficientStock) {
+		t.Errorf("over-transfer: %v", err)
+	}
+}
+
+func TestInOnNeverStockedItemGoesToTheDefaultLocationThenSticks(t *testing.T) {
+	svc, st := setup()
+	st.SeedItem(memory.Item{ID: "n1", Code: "ISK-CON-060", Description: "Fresh", Kind: domain.KindConsumable, Unit: "u"})
+	r, err := svc.Record(t.Context(), "n1", "u1", domain.Request{Type: domain.TypeIn, Qty: 3})
+	if err != nil || len(r.Stocks) != 1 || r.Stocks[0].LocationName != "Sin ubicación" || r.Movement.LocationID == nil {
+		t.Fatalf("default location: %+v err=%v", r, err)
+	}
+	// Drained and refilled without a location: back to where it was.
+	if _, err := svc.Record(t.Context(), "n1", "u1", domain.Request{Type: domain.TypeOut, Qty: 3}); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := svc.Record(t.Context(), "n1", "u1", domain.Request{Type: domain.TypeIn, Qty: 1})
+	if err != nil || *r2.Movement.LocationID != *r.Movement.LocationID {
+		t.Fatalf("refill: %+v err=%v", r2, err)
+	}
+}
+
+func TestAlertsCarryThePerLocationBreakdown(t *testing.T) {
+	svc, _ := multiSetup()
+	if _, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeOut, Qty: 4, LocationID: p64(2)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeOut, Qty: 3, LocationID: p64(1)}); err != nil {
+		t.Fatal(err)
+	}
+	as, _, _, err := svc.Alerts(t.Context(), 25, 0)
+	if err != nil || len(as) != 1 || as[0].Code != "ISK-CON-050" {
+		t.Fatalf("alerts: %+v err=%v", as, err)
+	}
+	if as[0].StockCurrent != 3 || len(as[0].Stocks) != 1 || as[0].LocationName == nil || *as[0].LocationName != "Warehouse" {
+		t.Errorf("alert: %+v", as[0])
+	}
+}
+
+func TestConcurrentOutAtOneLocationNeverOversells(t *testing.T) {
+	svc, st := multiSetup()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	ok := 0
+	for range 30 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := svc.Record(t.Context(), "m1", "u1", domain.Request{Type: domain.TypeOut, Qty: 1, LocationID: p64(2)}); err == nil {
+				mu.Lock()
+				ok++
+				mu.Unlock()
+			} else if !errors.Is(err, domain.ErrInsufficientStock) {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if it := st.Item("m1"); ok != 4 || it.StockCurrent != 6 || it.Stocks[1] != 6 {
+		t.Errorf("successes=%d item=%+v", ok, it)
+	}
+}

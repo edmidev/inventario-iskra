@@ -239,6 +239,11 @@ func (l *Locations) Delete(_ context.Context, id int64) error {
 		if it.LocationID != nil && *it.LocationID == id {
 			return domain.ErrLocationInUse
 		}
+		for _, st := range it.Stocks {
+			if st.LocationID == id {
+				return domain.ErrLocationInUse
+			}
+		}
 	}
 	delete(l.s.locs, id)
 	return nil
@@ -266,6 +271,11 @@ func (r *Items) Create(_ context.Context, it *domain.Item) error {
 			return domain.ErrCodeTaken
 		}
 	}
+	stocks, err := r.s.resolveStocks(it.Stocks)
+	if err != nil {
+		return err
+	}
+	it.Stocks = stocks
 	r.s.itemSeq++
 	it.ID = fmt.Sprintf("00000000-0000-4000-8000-%012d", r.s.itemSeq)
 	now := r.s.clock()
@@ -320,7 +330,7 @@ func (r *Items) Update(_ context.Context, it *domain.Item) error {
 	if e.openFailure && e.Status != it.Status {
 		return domain.ErrItemUnderRepair
 	}
-	it.Code, it.Kind, it.StockCurrent, it.Loan = e.Code, e.Kind, e.StockCurrent, e.Loan
+	it.Code, it.Kind, it.StockCurrent, it.Loan, it.Stocks = e.Code, e.Kind, e.StockCurrent, e.Loan, e.Stocks
 	it.CreatedAt, it.UpdatedAt = e.CreatedAt, r.s.clock()
 	r.s.items[it.ID] = storedItem{Item: *it, openFailure: e.openFailure}
 	return nil
@@ -395,4 +405,46 @@ func sameLocation(a, b *int64) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+// defaultLocationName mirrors platform/db.DefaultLocationName.
+const defaultLocationName = "Sin ubicación"
+
+// resolveStocks stores new opening rows like the SQL repository: rows without
+// a location go to the default location (created on demand), rows at the same
+// location merge, and the result carries location names ordered by name.
+func (s *Store) resolveStocks(in []domain.ItemStock) ([]domain.ItemStock, error) {
+	merged := map[int64]int{}
+	for _, st := range in {
+		id := st.LocationID
+		if id == 0 {
+			id = s.ensureDefaultLocation()
+		} else if _, ok := s.locs[id]; !ok {
+			return nil, domain.ErrLocationNotFound
+		}
+		merged[id] += st.Quantity
+	}
+	var out []domain.ItemStock
+	for id, q := range merged {
+		out = append(out, domain.ItemStock{LocationID: id, LocationName: s.locs[id].Name, Quantity: q})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := strings.ToLower(out[i].LocationName), strings.ToLower(out[j].LocationName)
+		if a != b {
+			return a < b
+		}
+		return out[i].LocationID < out[j].LocationID
+	})
+	return out, nil
+}
+
+func (s *Store) ensureDefaultLocation() int64 {
+	for id, l := range s.locs {
+		if l.Name == defaultLocationName {
+			return id
+		}
+	}
+	s.locSeq++
+	s.locs[s.locSeq] = domain.Location{ID: s.locSeq, Name: defaultLocationName, Kind: domain.LocationStorage}
+	return s.locSeq
 }

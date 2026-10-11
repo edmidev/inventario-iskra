@@ -17,24 +17,33 @@ func NewService(r MovementRepository) *Service { return &Service{repo: r} }
 type Result struct {
 	Movement     domain.Movement
 	StockCurrent int
-	LocationID   *int64
+	// LocationID is an asset's new location; consumables have none.
+	LocationID *int64
+	// Stocks is a consumable's per-location stock after the movement (empty
+	// for assets), ordered by location name.
+	Stocks []domain.LocationStock
 }
 
 // Record applies req to the item on behalf of userID.
 func (s *Service) Record(ctx context.Context, itemID, userID string, req domain.Request) (Result, error) {
 	var outcome domain.Outcome
-	m, err := s.repo.Record(ctx, itemID, userID, func(cur domain.ItemState) (domain.Outcome, error) {
+	m, stocks, err := s.repo.Record(ctx, itemID, userID, func(cur domain.ItemState) (domain.Outcome, error) {
 		o, err := domain.Decide(cur, req)
 		outcome = o
 		return o, err
 	})
 	if errors.Is(err, domain.ErrLocationNotFound) {
-		return Result{}, domain.FieldError("to_location_id", "location does not exist")
+		// Only reachable when a location was deleted after decide checked it.
+		field := "location_id"
+		if req.Type == domain.TypeTransfer {
+			field = "to_location_id"
+		}
+		return Result{}, domain.FieldError(field, "location does not exist")
 	}
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Movement: m, StockCurrent: outcome.StockCurrent, LocationID: outcome.LocationID}, nil
+	return Result{Movement: m, StockCurrent: outcome.StockCurrent, LocationID: outcome.LocationID, Stocks: stocks}, nil
 }
 
 // History returns one page of an item's movements, newest first.

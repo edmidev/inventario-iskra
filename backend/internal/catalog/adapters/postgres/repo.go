@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/edgar/inventario/backend/internal/catalog/domain"
+	"github.com/edgar/inventario/backend/internal/platform/db"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -252,9 +253,9 @@ func (l *Locations) Update(ctx context.Context, loc *domain.Location) error {
 // Delete implements app.LocationRepository.
 func (l *Locations) Delete(ctx context.Context, id int64) error {
 	tag, err := l.pool.Exec(ctx, `DELETE FROM locations WHERE id = $1`, id)
-	// Custody history also keeps its assignee location alive.
-	if code, c := pgError(err); code == pgForeignKey && (c == "locations_parent_id_fkey" || c == "items_location_id_fkey" ||
-		c == "custody_assignments_assignee_location_id_fkey") {
+	// Any reference keeps a location alive: child locations, assets, stock
+	// rows, stock movement history and custody history.
+	if code, _ := pgError(err); code == pgForeignKey {
 		return domain.ErrLocationInUse
 	}
 	if err != nil {
@@ -360,6 +361,11 @@ func (r *Items) Create(ctx context.Context, it *domain.Item) error {
 	if err != nil {
 		return wrapQuery("create item", mapItemWriteErr(err))
 	}
+	if created.Kind == domain.KindConsumable && len(it.Stocks) > 0 {
+		if created.Stocks, err = insertStocks(ctx, tx, created.ID, it.Stocks); err != nil {
+			return mapStockInsertErr(err)
+		}
+	}
 	if r.onCreate != nil {
 		if err := r.onCreate(ctx, tx, created); err != nil {
 			return fmt.Errorf("create item hook: %w", err)
@@ -369,6 +375,99 @@ func (r *Items) Create(ctx context.Context, it *domain.Item) error {
 		return fmt.Errorf("commit create item: %w", err)
 	}
 	*it = created
+	return nil
+}
+
+// insertStocks stores a new consumable's opening stock rows, resolving the
+// default location for rows without one, and returns them with location
+// names, ordered by name.
+func insertStocks(ctx context.Context, tx pgx.Tx, itemID string, stocks []domain.ItemStock) ([]domain.ItemStock, error) {
+	merged := map[int64]int{}
+	for _, st := range stocks {
+		id := st.LocationID
+		if id == 0 {
+			var err error
+			if id, err = db.EnsureDefaultLocation(ctx, tx); err != nil {
+				return nil, err
+			}
+		}
+		merged[id] += st.Quantity
+	}
+	for id, q := range merged {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO item_stocks (item_id, location_id, quantity) VALUES ($1::uuid, $2, $3)`, itemID, id, q); err != nil {
+			return nil, err
+		}
+	}
+	return loadStocks(ctx, tx, []string{itemID}).get(itemID)
+}
+
+func mapStockInsertErr(err error) error {
+	if code, c := pgError(err); code == pgForeignKey && c == "item_stocks_location_id_fkey" {
+		return domain.ErrLocationNotFound
+	}
+	return wrapQuery("create item stocks", err)
+}
+
+type stocksByItem struct {
+	m   map[string][]domain.ItemStock
+	err error
+}
+
+func (s stocksByItem) get(id string) ([]domain.ItemStock, error) { return s.m[id], s.err }
+
+type queryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// loadStocks reads the per-location stock of the given items, ordered by
+// location name. This is the other adapter-level read of a table owned by a
+// sibling module (stock), so items carry their breakdown in a single place.
+func loadStocks(ctx context.Context, q queryer, ids []string) stocksByItem {
+	out := stocksByItem{m: map[string][]domain.ItemStock{}}
+	if len(ids) == 0 {
+		return out
+	}
+	rows, err := q.Query(ctx, `
+		SELECT s.item_id::text, s.location_id, l.name, s.quantity
+		FROM item_stocks s JOIN locations l ON l.id = s.location_id
+		WHERE s.item_id = ANY($1::uuid[])
+		ORDER BY lower(l.name), l.id`, ids)
+	if err != nil {
+		out.err = fmt.Errorf("load item stocks: %w", err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var st domain.ItemStock
+		if err := rows.Scan(&id, &st.LocationID, &st.LocationName, &st.Quantity); err != nil {
+			out.err = fmt.Errorf("scan item stock: %w", err)
+			return out
+		}
+		out.m[id] = append(out.m[id], st)
+	}
+	out.err = rows.Err()
+	return out
+}
+
+// attachStocks fills Stocks on the consumables in items.
+func attachStocks(ctx context.Context, q queryer, items ...*domain.Item) error {
+	var ids []string
+	for _, it := range items {
+		if it.Kind == domain.KindConsumable {
+			ids = append(ids, it.ID)
+		}
+	}
+	res := loadStocks(ctx, q, ids)
+	if res.err != nil {
+		return res.err
+	}
+	for _, it := range items {
+		if it.Kind == domain.KindConsumable {
+			it.Stocks = res.m[it.ID]
+		}
+	}
 	return nil
 }
 
@@ -406,6 +505,9 @@ func (r *Items) Get(ctx context.Context, id string) (domain.Item, error) {
 	if err != nil {
 		return domain.Item{}, wrapQuery("get item", itemNotFound(err))
 	}
+	if err := attachStocks(ctx, r.pool, &it); err != nil {
+		return domain.Item{}, err
+	}
 	return it, nil
 }
 
@@ -415,6 +517,9 @@ func (r *Items) GetByCode(ctx context.Context, code string) (domain.Item, error)
 		`SELECT `+itemColsJoined+` FROM `+itemFromJoined+` WHERE i.code = $1 AND i.deleted_at IS NULL`, code))
 	if err != nil {
 		return domain.Item{}, wrapQuery("get item by code", itemNotFound(err))
+	}
+	if err := attachStocks(ctx, r.pool, &it); err != nil {
+		return domain.Item{}, err
 	}
 	return it, nil
 }
@@ -469,6 +574,9 @@ func (r *Items) Update(ctx context.Context, it *domain.Item) error {
 		`SELECT `+itemColsJoined+` FROM `+itemFromJoined+` WHERE i.id = $1::uuid`, it.ID))
 	if err != nil {
 		return fmt.Errorf("reload item: %w", err)
+	}
+	if err := attachStocks(ctx, tx, &updated); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit update item: %w", err)
@@ -543,7 +651,11 @@ func whereClause(f domain.ItemFilter) (string, []any) {
 		conds = append(conds, "(i.status <> 'functional' OR "+activeLoanExists+")")
 	}
 	if f.LocationID != nil {
-		conds = append(conds, "i.location_id = "+arg(*f.LocationID))
+		// Consumables are in a location when they have stock there; assets
+		// by their single location.
+		p := arg(*f.LocationID)
+		conds = append(conds, "((i.kind = 'consumable' AND EXISTS (SELECT 1 FROM item_stocks s WHERE s.item_id = i.id AND s.location_id = "+p+
+			")) OR (i.kind = 'asset' AND i.location_id = "+p+"))")
 	}
 	if f.LowStock {
 		conds = append(conds, "i.kind = 'consumable' AND i.stock_min > 0 AND i.stock_current <= i.stock_min")
@@ -592,7 +704,18 @@ func (r *Items) List(ctx context.Context, f domain.ItemFilter) ([]domain.Item, i
 		}
 		out = append(out, it)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	rows.Close()
+	ptrs := make([]*domain.Item, len(out))
+	for i := range out {
+		ptrs[i] = &out[i]
+	}
+	if err := attachStocks(ctx, r.pool, ptrs...); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 // NextSequence implements app.ItemRepository. The upsert is atomic per prefix

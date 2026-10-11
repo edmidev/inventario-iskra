@@ -24,6 +24,9 @@ var (
 	ErrItemNotFound = errors.New("item not found")
 	ErrCodeTaken    = errors.New("item code already in use")
 	ErrItemOnLoan   = errors.New("item is on loan")
+	// ErrNotApplicable is returned when an edit targets a field that does not
+	// apply to the item's kind (the location of a consumable).
+	ErrNotApplicable = errors.New("not applicable to this item kind")
 	// ErrItemUnderRepair is returned when a plain edit tries to change the
 	// status of an item with an open failure; maintenance owns it until closed.
 	ErrItemUnderRepair = errors.New("item has an open failure")

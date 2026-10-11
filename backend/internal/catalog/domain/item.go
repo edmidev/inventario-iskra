@@ -63,26 +63,41 @@ func GenerateCode(prefix string, seq int) string {
 
 // Item is one inventory entry: a unique asset or a consumable stock line.
 type Item struct {
-	ID                      string
-	Code                    string
-	Description             string
-	CategoryID              int64
-	Kind                    Kind
-	Status                  Status
-	Unit                    *string
-	StockCurrent            int
-	StockMin                int
+	ID           string
+	Code         string
+	Description  string
+	CategoryID   int64
+	Kind         Kind
+	Status       Status
+	Unit         *string
+	StockCurrent int
+	StockMin     int
+	// LocationID is an asset's location. Consumables have none: their stock
+	// lives per location in Stocks.
 	LocationID              *int64
 	LastMaintenanceAt       *time.Time
 	MaintenanceIntervalDays *int
 	Attributes              map[string]any
 	Notes                   string
+	// Stocks is a consumable's quantity per location (only locations with
+	// stock), ordered by location name; always empty for assets. StockCurrent
+	// is their sum. Stock changes go through the stock module.
+	Stocks []ItemStock
 	// Loan is the item's active custody assignment, nil when it is not on
 	// loan. Custody owns the data; the catalog only reads it (see the
 	// postgres adapter) so availability and responses can reflect it.
 	Loan      *LoanInfo
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// ItemStock is the quantity of a consumable held at one location. On a new
+// item LocationID 0 means "no location given" and is resolved to the default
+// location ("Sin ubicación") when the item is stored.
+type ItemStock struct {
+	LocationID   int64
+	LocationName string
+	Quantity     int
 }
 
 // LoanInfo is the read-only view of an active custody assignment.
@@ -98,6 +113,20 @@ func (l LoanInfo) Overdue(now time.Time) bool { return l.DueAt != nil && l.DueAt
 
 // OnLoan reports whether the item is currently lent out.
 func (i Item) OnLoan() bool { return i.Loan != nil }
+
+// InLocation reports whether the item is at the location: an asset by its
+// single location, a consumable by having stock there.
+func (i Item) InLocation(locationID int64) bool {
+	if i.Kind == KindConsumable {
+		for _, s := range i.Stocks {
+			if s.LocationID == locationID {
+				return true
+			}
+		}
+		return false
+	}
+	return i.LocationID != nil && *i.LocationID == locationID
+}
 
 // LowStock reports whether a consumable is at or below a configured minimum.
 func (i Item) LowStock() bool {
@@ -159,18 +188,29 @@ func (i Item) Availability() Availability {
 
 // NewItemInput carries the creation fields (the code is decided by the app).
 type NewItemInput struct {
-	Description             string
-	CategoryID              int64
-	Kind                    Kind
-	Status                  Status // empty means functional
-	Unit                    *string
-	StockCurrent            *int // opening balance, consumables only
-	StockMin                int
-	LocationID              *int64
+	Description  string
+	CategoryID   int64
+	Kind         Kind
+	Status       Status // empty means functional
+	Unit         *string
+	StockCurrent *int // opening balance, consumables only
+	StockMin     int
+	// LocationID is an asset's location. For consumables it is only the
+	// location of the legacy single-location opening balance (StockCurrent).
+	LocationID *int64
+	// Stocks is the multi-location opening balance of a consumable. It
+	// excludes StockCurrent and LocationID: use one form or the other.
+	Stocks                  []StockInput
 	LastMaintenanceAt       *time.Time
 	MaintenanceIntervalDays *int
 	Attributes              map[string]any
 	Notes                   string
+}
+
+// StockInput is one opening-balance row: a quantity at a location.
+type StockInput struct {
+	LocationID int64
+	Quantity   int
 }
 
 // NewItem validates the input against the kind rules and builds an Item
@@ -192,6 +232,9 @@ func NewItem(in NewItemInput) (Item, error) {
 	}
 	switch in.Kind {
 	case KindAsset:
+		if in.Stocks != nil {
+			fe.add("stocks", "assets have no per-location stock")
+		}
 		if in.Unit != nil && strings.TrimSpace(*in.Unit) != "" {
 			fe.add("unit", "assets have no unit")
 		}
@@ -204,11 +247,26 @@ func NewItem(in NewItemInput) (Item, error) {
 		it.Unit, it.StockCurrent, it.StockMin = nil, 1, 0
 	case KindConsumable:
 		it.Unit = normalizeUnit(fe, in.Unit)
-		if in.StockCurrent != nil {
+		it.LocationID = nil
+		if in.Stocks != nil {
+			if in.StockCurrent != nil || in.LocationID != nil {
+				fe.add("stocks", "cannot be combined with stock_current or location_id")
+			}
+			it.Stocks, it.StockCurrent = openingStocks(fe, in.Stocks)
+		} else if in.StockCurrent != nil {
 			if *in.StockCurrent < 0 || *in.StockCurrent > MaxStock {
 				fe.add("stock_current", "must be between 0 and 1000000000")
 			}
 			it.StockCurrent = *in.StockCurrent
+			if it.StockCurrent > 0 {
+				// Legacy form: one opening balance at location_id, or at the
+				// default location when none is given.
+				st := ItemStock{Quantity: it.StockCurrent}
+				if in.LocationID != nil {
+					st.LocationID = *in.LocationID
+				}
+				it.Stocks = []ItemStock{st}
+			}
 		}
 	default:
 		fe.add("kind", "must be asset or consumable")
@@ -220,6 +278,33 @@ func NewItem(in NewItemInput) (Item, error) {
 		it.Attributes = map[string]any{}
 	}
 	return it, nil
+}
+
+// openingStocks validates a multi-location opening balance and returns its
+// rows and their total.
+func openingStocks(fe fieldErrors, in []StockInput) ([]ItemStock, int) {
+	out := make([]ItemStock, 0, len(in))
+	seen := map[int64]bool{}
+	total := 0
+	for i, s := range in {
+		key := fmt.Sprintf("stocks[%d]", i)
+		switch {
+		case s.LocationID <= 0:
+			fe.add(key+".location_id", "required")
+		case seen[s.LocationID]:
+			fe.add(key+".location_id", "repeated location")
+		}
+		if s.Quantity <= 0 || s.Quantity > MaxStock {
+			fe.add(key+".quantity", "must be between 1 and 1000000000")
+		}
+		seen[s.LocationID] = true
+		total += s.Quantity
+		out = append(out, ItemStock{LocationID: s.LocationID, Quantity: s.Quantity})
+	}
+	if total > MaxStock {
+		fe.add("stocks", "total quantity would exceed 1000000000")
+	}
+	return out, total
 }
 
 func normalizeUnit(fe fieldErrors, unit *string) *string {
@@ -319,6 +404,10 @@ func (i Item) Apply(p ItemPatch) (Item, error) {
 	}
 	if p.StockMin != nil {
 		out.StockMin = *p.StockMin
+	}
+	if p.LocationID.Set && i.Kind == KindConsumable && !p.LocationID.Null {
+		// Consumables live in several locations; moving stock is a stock operation.
+		return Item{}, ErrNotApplicable
 	}
 	if p.LocationID.Set {
 		out.LocationID = nil

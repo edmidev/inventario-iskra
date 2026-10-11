@@ -78,14 +78,18 @@ func setup(t *testing.T) fixture {
 // openingHook mirrors cmd/api wiring: consumables created with stock get an
 // opening movement in the same transaction.
 func openingHook(ctx context.Context, tx pgx.Tx, it catalogdomain.Item) error {
-	if it.Kind != catalogdomain.KindConsumable || it.StockCurrent <= 0 {
+	if it.Kind != catalogdomain.KindConsumable || len(it.Stocks) == 0 {
 		return nil
 	}
 	uid := ""
 	if p, ok := httpx.PrincipalFrom(ctx); ok {
 		uid = p.UserID
 	}
-	return postgres.RecordOpening(ctx, tx, it.ID, it.StockCurrent, it.LocationID, uid)
+	stocks := make([]domain.LocationStock, len(it.Stocks))
+	for i, st := range it.Stocks {
+		stocks[i] = domain.LocationStock{LocationID: st.LocationID, LocationName: st.LocationName, Quantity: st.Quantity}
+	}
+	return postgres.RecordOpenings(ctx, tx, it.ID, stocks, uid)
 }
 
 func (f fixture) consumable(t *testing.T, desc string, stock, min int, loc *int64) catalogdomain.Item {
@@ -110,6 +114,26 @@ func (f fixture) asset(t *testing.T, desc string, loc *int64) catalogdomain.Item
 	return it
 }
 
+// stocksOf returns the per-location quantities of an item by location id.
+func (f fixture) stocksOf(t *testing.T, id string) map[int64]int {
+	t.Helper()
+	rows, err := f.pool.Query(t.Context(), `SELECT location_id, quantity FROM item_stocks WHERE item_id = $1::uuid`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[int64]int{}
+	for rows.Next() {
+		var loc int64
+		var q int
+		if err := rows.Scan(&loc, &q); err != nil {
+			t.Fatal(err)
+		}
+		out[loc] = q
+	}
+	return out
+}
+
 func (f fixture) stockOf(t *testing.T, id string) int {
 	t.Helper()
 	var n int
@@ -128,7 +152,7 @@ func TestCreateWithStockRecordsOpeningMovementAtomically(t *testing.T) {
 	}
 	m := ms[0]
 	if m.Type != domain.TypeOpening || m.Qty != 5 || m.StockBefore != 0 || m.StockAfter != 5 ||
-		m.ToLocationID == nil || *m.ToLocationID != f.locA || m.UserName == nil || *m.UserName != "Ana Operator" {
+		m.LocationID == nil || *m.LocationID != f.locA || m.UserName == nil || *m.UserName != "Ana Operator" {
 		t.Errorf("opening movement: %+v", m)
 	}
 
@@ -154,7 +178,7 @@ func TestRecordKeepsStockAndLedgerInStep(t *testing.T) {
 		{domain.Request{Type: domain.TypeOut, Qty: 2}, 3},
 		{domain.Request{Type: domain.TypeAdjust, Qty: 8, Note: "recount"}, 8},
 		{domain.Request{Type: domain.TypeIn, Qty: 1}, 9},
-		{domain.Request{Type: domain.TypeTransfer, ToLocationID: &f.locB}, 9},
+		{domain.Request{Type: domain.TypeTransfer, Qty: 4, FromLocationID: &f.locA, ToLocationID: &f.locB}, 9},
 	}
 	for _, s := range steps {
 		r, err := f.stock.Record(ctx, it.ID, f.userID, s.req)
@@ -165,16 +189,19 @@ func TestRecordKeepsStockAndLedgerInStep(t *testing.T) {
 			t.Errorf("%s: stock result=%d db=%d, want %d", s.req.Type, r.StockCurrent, f.stockOf(t, it.ID), s.stock)
 		}
 	}
-	var loc int64
-	if err := f.pool.QueryRow(ctx, `SELECT location_id FROM items WHERE id = $1::uuid`, it.ID).Scan(&loc); err != nil || loc != f.locB {
-		t.Errorf("item location = %d (%v), want %d", loc, err, f.locB)
+	if got := f.stocksOf(t, it.ID); len(got) != 2 || got[f.locA] != 5 || got[f.locB] != 4 {
+		t.Errorf("per-location stock = %v, want {A:5 B:4}", got)
+	}
+	var loc *int64
+	if err := f.pool.QueryRow(ctx, `SELECT location_id FROM items WHERE id = $1::uuid`, it.ID).Scan(&loc); err != nil || loc != nil {
+		t.Errorf("a consumable keeps no single location, got %v (%v)", loc, err)
 	}
 
 	ms, total, _, err := f.stock.History(ctx, it.ID, "", 25, 0)
 	if err != nil || total != 5 {
 		t.Fatalf("history total=%d err=%v", total, err)
 	}
-	if ms[0].Type != domain.TypeTransfer || *ms[0].FromLocationID != f.locA || *ms[0].ToLocationID != f.locB || ms[0].Qty != 0 {
+	if ms[0].Type != domain.TypeTransfer || *ms[0].FromLocationID != f.locA || *ms[0].ToLocationID != f.locB || ms[0].Qty != 0 || ms[0].MovedQty != 4 || ms[0].LocationID != nil {
 		t.Errorf("newest = %+v", ms[0])
 	}
 	if ms[1].Type != domain.TypeIn || ms[2].Type != domain.TypeAdjust || ms[2].Qty != 5 || ms[3].Type != domain.TypeOut || ms[4].Type != domain.TypeOpening {
@@ -328,7 +355,7 @@ func TestAlertsOrderedBySeverityAndPaged(t *testing.T) {
 			t.Errorf("alerts[%d] = %s, want %s", i, as[i].Description, want)
 		}
 	}
-	if as[0].LocationName == nil || *as[0].LocationName != "Bodega" || as[1].LocationName != nil || as[0].Unit != "u" {
+	if as[0].LocationName != nil || len(as[0].Stocks) != 0 || as[1].LocationName == nil || *as[1].LocationName != "Sin ubicación" || as[0].Unit != "u" {
 		t.Errorf("alert fields: %+v / %+v", as[0], as[1])
 	}
 	// Taking stock out moves an item up the list.

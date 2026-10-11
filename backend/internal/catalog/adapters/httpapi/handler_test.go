@@ -519,3 +519,132 @@ func TestPatchStatusWhileFailureOpenIs409(t *testing.T) {
 		t.Errorf("status changed despite 409: %v", r.Body)
 	}
 }
+
+// stocksOf returns the stocks array of a response as location name -> quantity.
+func stocksOf(t *testing.T, body map[string]any) map[string]int {
+	t.Helper()
+	list, ok := body["stocks"].([]any)
+	if !ok {
+		t.Fatalf("stocks is not an array: %v", body["stocks"])
+	}
+	out := map[string]int{}
+	for _, s := range list {
+		m := s.(map[string]any)
+		out[m["location_name"].(string)] = int(m["quantity"].(float64))
+	}
+	return out
+}
+
+func TestConsumableStockedInSeveralLocations(t *testing.T) {
+	e := newEnv(t)
+	cat := e.mustCreate(t, "/categories", map[string]any{"name": "Consumibles", "code_prefix": "CON"}).num("id")
+	taller := e.mustCreate(t, "/locations", map[string]any{"name": "Taller", "kind": "storage"}).num("id")
+	maleta := e.mustCreate(t, "/locations", map[string]any{"name": "Maleta y caja de Alejandro", "kind": "container"}).num("id")
+
+	created := e.do(t, "POST", "/items", "operator", map[string]any{
+		"description": "Tornillos", "category_id": cat, "kind": "consumable", "unit": "u", "stock_min": 3,
+		"stocks": []any{map[string]any{"location_id": taller, "quantity": 5}, map[string]any{"location_id": maleta, "quantity": 5}},
+	})
+	if created.Status != 201 || created.num("stock_current") != 10 || created.Body["location_id"] != nil {
+		t.Fatalf("create: %d %v", created.Status, created.Body)
+	}
+	got := stocksOf(t, created.Body)
+	if len(got) != 2 || got["Taller"] != 5 || got["Maleta y caja de Alejandro"] != 5 {
+		t.Errorf("stocks: %v", got)
+	}
+	list := created.Body["stocks"].([]any)
+	if list[0].(map[string]any)["location_name"] != "Maleta y caja de Alejandro" { // ordered by name
+		t.Errorf("not ordered by location name: %v", list)
+	}
+	id := created.str("id")
+	if r := e.do(t, "GET", "/items/"+id, "viewer", nil); r.Status != 200 || len(stocksOf(t, r.Body)) != 2 {
+		t.Errorf("get: %d %v", r.Status, r.Body)
+	}
+
+	// Filtering by either location finds it; an unrelated one does not.
+	for _, loc := range []int{taller, maleta} {
+		if r := e.do(t, "GET", "/items?location_id="+itoa(loc), "viewer", nil); r.num("total") != 1 || r.data()[0].(map[string]any)["id"] != id {
+			t.Errorf("location %d: %v", loc, r.Body)
+		}
+	}
+	if r := e.do(t, "GET", "/items?location_id=999", "viewer", nil); r.num("total") != 0 {
+		t.Errorf("unrelated location: %v", r.Body)
+	}
+	// low_stock stays on the total.
+	if r := e.do(t, "GET", "/items?low_stock=true", "viewer", nil); r.num("total") != 0 {
+		t.Errorf("low_stock on a total of 10: %v", r.Body)
+	}
+
+	// Moving a consumable through PATCH is refused; other edits keep the rows.
+	r := e.do(t, "PATCH", "/items/"+id, "operator", map[string]any{"location_id": taller})
+	if r.Status != 422 || r.errCode() != "not_applicable" {
+		t.Errorf("patch location: %d %v", r.Status, r.Body)
+	}
+	if r := e.do(t, "PATCH", "/items/"+id, "operator", `{"location_id":null,"notes":"ok"}`); r.Status != 200 || r.str("notes") != "ok" || len(stocksOf(t, r.Body)) != 2 {
+		t.Errorf("patch notes: %d %v", r.Status, r.Body)
+	}
+	if r := e.do(t, "DELETE", "/locations/"+itoa(taller), "admin", nil); r.Status != 409 || r.errCode() != "location_in_use" {
+		t.Errorf("delete location holding stock: %d %v", r.Status, r.Body)
+	}
+}
+
+func TestConsumableLegacyCreateKeepsWorking(t *testing.T) {
+	e := newEnv(t)
+	cat := e.mustCreate(t, "/categories", map[string]any{"name": "Consumibles", "code_prefix": "CON"}).num("id")
+	bodega := e.mustCreate(t, "/locations", map[string]any{"name": "Bodega", "kind": "storage"}).num("id")
+	r := e.do(t, "POST", "/items", "operator", map[string]any{"description": "Cinta", "category_id": cat, "kind": "consumable",
+		"unit": "rollo", "stock_current": 8, "location_id": bodega})
+	if r.Status != 201 || r.num("stock_current") != 8 || r.Body["location_id"] != nil || stocksOf(t, r.Body)["Bodega"] != 8 {
+		t.Fatalf("legacy with location: %d %v", r.Status, r.Body)
+	}
+	r = e.do(t, "POST", "/items", "operator", map[string]any{"description": "Pegamento", "category_id": cat, "kind": "consumable",
+		"unit": "u", "stock_current": 2})
+	if r.Status != 201 || stocksOf(t, r.Body)["Sin ubicación"] != 2 {
+		t.Fatalf("legacy without location: %d %v", r.Status, r.Body)
+	}
+	r = e.do(t, "POST", "/items", "operator", map[string]any{"description": "Vacío", "category_id": cat, "kind": "consumable", "unit": "u"})
+	if r.Status != 201 || len(stocksOf(t, r.Body)) != 0 || r.num("stock_current") != 0 {
+		t.Fatalf("no stock: %d %v", r.Status, r.Body)
+	}
+	// Assets expose an empty list and keep their single location.
+	a := e.do(t, "POST", "/items", "operator", map[string]any{"description": "Taladro", "category_id": cat, "kind": "asset", "location_id": bodega})
+	if a.Status != 201 || len(stocksOf(t, a.Body)) != 0 || a.num("location_id") != bodega {
+		t.Errorf("asset: %d %v", a.Status, a.Body)
+	}
+	if r := e.do(t, "GET", "/items?location_id="+itoa(bodega), "viewer", nil); r.num("total") != 2 { // Cinta + Taladro
+		t.Errorf("filter by Bodega: %v", r.Body)
+	}
+}
+
+func TestCreateConsumableRejectsBothStockForms(t *testing.T) {
+	e := newEnv(t)
+	cat := e.mustCreate(t, "/categories", map[string]any{"name": "Consumibles", "code_prefix": "CON"}).num("id")
+	bodega := e.mustCreate(t, "/locations", map[string]any{"name": "Bodega", "kind": "storage"}).num("id")
+	row := []any{map[string]any{"location_id": bodega, "quantity": 1}}
+	base := func(extra map[string]any) map[string]any {
+		b := map[string]any{"description": "Cinta", "category_id": cat, "kind": "consumable", "unit": "u"}
+		for k, v := range extra {
+			b[k] = v
+		}
+		return b
+	}
+	for name, body := range map[string]map[string]any{
+		"stocks + stock_current":     base(map[string]any{"stocks": row, "stock_current": 1}),
+		"stocks + location_id":       base(map[string]any{"stocks": row, "location_id": bodega}),
+		"unknown location in stocks": base(map[string]any{"stocks": []any{map[string]any{"location_id": 999, "quantity": 1}}}),
+		"zero quantity":              base(map[string]any{"stocks": []any{map[string]any{"location_id": bodega, "quantity": 0}}}),
+		"repeated location":          base(map[string]any{"stocks": []any{map[string]any{"location_id": bodega, "quantity": 1}, map[string]any{"location_id": bodega, "quantity": 2}}}),
+		"stocks on an asset":         {"description": "Taladro", "category_id": cat, "kind": "asset", "stocks": row},
+	} {
+		r := e.do(t, "POST", "/items", "operator", body)
+		if r.Status != 422 || r.errCode() != "validation_failed" {
+			t.Errorf("%s: %d %v", name, r.Status, r.Body)
+		}
+	}
+	if r := e.do(t, "POST", "/items", "viewer", base(map[string]any{"stocks": row})); r.Status != 403 {
+		t.Errorf("viewer: %d", r.Status)
+	}
+	if r := e.do(t, "GET", "/items", "viewer", nil); r.num("total") != 0 {
+		t.Errorf("rejected requests created items: %v", r.Body)
+	}
+}

@@ -13,10 +13,12 @@ type DecideFunc = func(domain.ItemState) (domain.Outcome, error)
 // MovementRepository persists the ledger and the item state it changes.
 type MovementRepository interface {
 	// Record atomically locks the item, runs decide against its current
-	// state, then updates stock/location and appends the movement. Nothing is
-	// written when decide fails. Missing or soft-deleted items yield
-	// ErrItemNotFound; a dangling destination yields ErrLocationNotFound.
-	Record(ctx context.Context, itemID, userID string, decide DecideFunc) (domain.Movement, error)
+	// state (including its per-location stock), then writes the per-location
+	// quantities, the item total and the movement. Nothing is written when
+	// decide fails. It returns the movement and, for consumables, the
+	// resulting per-location stock. Missing or soft-deleted items yield
+	// ErrItemNotFound; a location deleted meanwhile yields ErrLocationNotFound.
+	Record(ctx context.Context, itemID, userID string, decide DecideFunc) (domain.Movement, []domain.LocationStock, error)
 	// List returns an item's movements, newest first, with the total count.
 	// typ filters by movement type when non-empty. Missing or soft-deleted
 	// items yield ErrItemNotFound.

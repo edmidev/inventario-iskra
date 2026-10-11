@@ -195,7 +195,8 @@ func TestUpdateNeverTouchesStockOrCode(t *testing.T) {
 	ctx := t.Context()
 	cons := f.create(t, domain.NewItemInput{Description: "Cinta", Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(8)}, "")
 	// Simulate a stock movement (T3) landing between read and write.
-	if _, err := f.pool.Exec(ctx, `UPDATE items SET stock_current = 20 WHERE id = $1`, cons.ID); err != nil {
+	if _, err := f.pool.Exec(ctx, `WITH a AS (UPDATE item_stocks SET quantity = 20 WHERE item_id = $1 RETURNING 1)
+		UPDATE items SET stock_current = 20 WHERE id = $1`, cons.ID); err != nil {
 		t.Fatal(err)
 	}
 	stale := cons
@@ -576,5 +577,95 @@ func TestStatusChangeRejectedWhileFailureIsOpen(t *testing.T) {
 	}
 	if got, err := f.svc.UpdateItem(ctx, it.ID, domain.ItemPatch{Status: ptr(domain.StatusInoperative)}); err != nil || got.Status != domain.StatusInoperative {
 		t.Errorf("after the failure is closed: %v %+v", err, got)
+	}
+}
+
+func (f fixture) location(t *testing.T, name string) int64 {
+	t.Helper()
+	l, err := f.svc.CreateLocation(t.Context(), name, domain.LocationStorage, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l.ID
+}
+
+func TestConsumableStocksAreStoredListedAndFilteredPerLocation(t *testing.T) {
+	f := setup(t)
+	ctx := t.Context()
+	taller, maleta, libre := f.location(t, "Taller"), f.location(t, "Maleta"), f.location(t, "Libre")
+	multi := f.create(t, domain.NewItemInput{Description: "Tornillos", Kind: domain.KindConsumable, Unit: ptr("u"), StockMin: 12,
+		Stocks: []domain.StockInput{{LocationID: taller, Quantity: 5}, {LocationID: maleta, Quantity: 5}}}, "")
+	legacy := f.create(t, domain.NewItemInput{Description: "Cinta", Kind: domain.KindConsumable, Unit: ptr("u"), StockCurrent: ptr(3)}, "")
+	asset := f.create(t, domain.NewItemInput{Description: "Taladro", Kind: domain.KindAsset, LocationID: &maleta}, "")
+	empty := f.create(t, domain.NewItemInput{Description: "Vacío", Kind: domain.KindConsumable, Unit: ptr("u")}, "")
+
+	if multi.StockCurrent != 10 || multi.LocationID != nil || len(multi.Stocks) != 2 || multi.Stocks[0].LocationName != "Maleta" {
+		t.Fatalf("multi: %+v", multi)
+	}
+	if len(legacy.Stocks) != 1 || legacy.Stocks[0].LocationName != "Sin ubicación" || len(asset.Stocks) != 0 || len(empty.Stocks) != 0 {
+		t.Fatalf("legacy/asset/empty: %+v %+v %+v", legacy.Stocks, asset.Stocks, empty.Stocks)
+	}
+	got, err := f.svc.GetItem(ctx, multi.ID)
+	if err != nil || len(got.Stocks) != 2 || got.StockCurrent != 10 {
+		t.Fatalf("get: %+v %v", got, err)
+	}
+	if byCode, err := f.svc.GetItemByCode(ctx, multi.Code); err != nil || len(byCode.Stocks) != 2 {
+		t.Fatalf("by code: %+v %v", byCode, err)
+	}
+
+	for loc, want := range map[int64][]string{taller: {"Tornillos"}, maleta: {"Taladro", "Tornillos"}, libre: nil} {
+		items, total, _, err := f.svc.ListItems(ctx, domain.ItemFilter{LocationID: &loc, Sort: domain.SortDescription})
+		if err != nil || total != len(want) {
+			t.Fatalf("location %d: total=%d err=%v", loc, total, err)
+		}
+		for i, d := range want {
+			if items[i].Description != d {
+				t.Errorf("location %d [%d] = %s, want %s", loc, i, items[i].Description, d)
+			}
+		}
+	}
+	// The list carries the breakdown too; low_stock reads the total (10 <= 12).
+	items, total, _, _ := f.svc.ListItems(ctx, domain.ItemFilter{LowStock: true})
+	if total != 1 || items[0].ID != multi.ID || len(items[0].Stocks) != 2 {
+		t.Errorf("low stock: %+v", items)
+	}
+
+	// PATCH keeps the rows and refuses to move a consumable.
+	if _, err := f.svc.UpdateItem(ctx, multi.ID, domain.ItemPatch{LocationID: domain.Nullable[int64]{Set: true, Value: libre}}); !errors.Is(err, domain.ErrNotApplicable) {
+		t.Errorf("patch location: %v", err)
+	}
+	upd, err := f.svc.UpdateItem(ctx, multi.ID, domain.ItemPatch{Notes: ptr("x")})
+	if err != nil || len(upd.Stocks) != 2 || upd.LocationID != nil {
+		t.Errorf("patch notes: %+v %v", upd, err)
+	}
+
+	// Soft-deleted consumables vanish from reads and filters but keep their rows.
+	if err := f.svc.DeleteItem(ctx, multi.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, total, _, _ := f.svc.ListItems(ctx, domain.ItemFilter{LocationID: &taller}); total != 0 {
+		t.Errorf("deleted consumable still listed at its location: %d", total)
+	}
+	if err := f.svc.DeleteLocation(ctx, taller); !errors.Is(err, domain.ErrLocationInUse) {
+		t.Errorf("a deleted item's stock still pins its location: %v", err)
+	}
+	if err := f.svc.DeleteLocation(ctx, libre); err != nil {
+		t.Errorf("unused location: %v", err)
+	}
+}
+
+func TestCreateWithDanglingStockLocationRollsBack(t *testing.T) {
+	f := setup(t)
+	taller := f.location(t, "Taller")
+	_, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
+		Description: "Roto", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"),
+		Stocks: []domain.StockInput{{LocationID: taller, Quantity: 1}, {LocationID: 9999, Quantity: 1}}}})
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("err = %v", err)
+	}
+	var n int
+	_ = f.pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM items) + (SELECT count(*) FROM item_stocks)`).Scan(&n)
+	if n != 0 {
+		t.Errorf("rejected creation left %d rows behind", n)
 	}
 }

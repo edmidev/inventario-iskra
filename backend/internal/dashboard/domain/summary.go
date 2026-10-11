@@ -34,7 +34,16 @@ type AssetCounts struct {
 	InRepair    int
 }
 
-// LowStockItem is a consumable at or below its configured minimum.
+// StockLocation is the quantity of a consumable held at one location.
+type StockLocation struct {
+	LocationID   int64
+	LocationName string
+	Quantity     int
+}
+
+// LowStockItem is a consumable at or below its configured minimum. The
+// comparison is on the total; Stocks is the per-location breakdown and
+// LocationName is set only when all the stock sits in one location.
 type LowStockItem struct {
 	ID           string
 	Code         string
@@ -43,6 +52,7 @@ type LowStockItem struct {
 	StockCurrent int
 	StockMin     int
 	LocationName *string
+	Stocks       []StockLocation
 }
 
 // LowStock counts low-stock consumables and lists the most severe.

@@ -94,18 +94,57 @@ func collect[T any](ctx context.Context, pool *pgxpool.Pool, op, sql string, sca
 }
 
 // lowStockTop lists the most severe first: lowest stock/min ratio, then code.
+// Consumables keep no single location: location_name is the location of the
+// only stock row, or null when the stock is spread over several (or none),
+// and stocks carries the per-location breakdown (table owned by stock).
 func (r *Repo) lowStockTop(ctx context.Context) ([]domain.LowStockItem, error) {
-	return collect(ctx, r.pool, "dashboard low stock", `
-		SELECT i.id::text, i.code, i.description, COALESCE(i.unit, ''), i.stock_current, i.stock_min, l.name
-		FROM items i LEFT JOIN locations l ON l.id = i.location_id
+	items, err := collect(ctx, r.pool, "dashboard low stock", `
+		SELECT i.id::text, i.code, i.description, COALESCE(i.unit, ''), i.stock_current, i.stock_min
+		FROM items i
 		WHERE i.deleted_at IS NULL AND `+lowStock+`
 		ORDER BY i.stock_current::float8 / i.stock_min ASC, i.code ASC
 		LIMIT $1`,
 		func(row pgx.Rows) (domain.LowStockItem, error) {
 			var it domain.LowStockItem
-			err := row.Scan(&it.ID, &it.Code, &it.Description, &it.Unit, &it.StockCurrent, &it.StockMin, &it.LocationName)
+			err := row.Scan(&it.ID, &it.Code, &it.Description, &it.Unit, &it.StockCurrent, &it.StockMin)
 			return it, err
 		}, domain.TopLimit)
+	if err != nil || len(items) == 0 {
+		return items, err
+	}
+	ids := make([]string, len(items))
+	for i, it := range items {
+		ids[i] = it.ID
+	}
+	type row struct {
+		item string
+		loc  domain.StockLocation
+	}
+	rows, err := collect(ctx, r.pool, "dashboard low stock breakdown", `
+		SELECT s.item_id::text, s.location_id, l.name, s.quantity
+		FROM item_stocks s JOIN locations l ON l.id = s.location_id
+		WHERE s.item_id = ANY($1::uuid[])
+		ORDER BY lower(l.name), l.id`,
+		func(r pgx.Rows) (row, error) {
+			var x row
+			err := r.Scan(&x.item, &x.loc.LocationID, &x.loc.LocationName, &x.loc.Quantity)
+			return x, err
+		}, ids)
+	if err != nil {
+		return nil, err
+	}
+	byItem := map[string][]domain.StockLocation{}
+	for _, x := range rows {
+		byItem[x.item] = append(byItem[x.item], x.loc)
+	}
+	for i := range items {
+		items[i].Stocks = byItem[items[i].ID]
+		if len(items[i].Stocks) == 1 {
+			name := items[i].Stocks[0].LocationName
+			items[i].LocationName = &name
+		}
+	}
+	return items, nil
 }
 
 // overdueLoansTop lists the oldest overdue loans first.

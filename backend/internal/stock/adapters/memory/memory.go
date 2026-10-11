@@ -4,10 +4,18 @@ package memory
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/edgar/inventario/backend/internal/stock/domain"
+)
+
+// defaultLocationID and defaultLocationName stand in for the "Sin ubicación"
+// location the SQL repository creates on demand.
+const (
+	defaultLocationID   int64 = 1_000_000
+	defaultLocationName       = "Sin ubicación"
 )
 
 // Item is a seeded item row.
@@ -19,9 +27,13 @@ type Item struct {
 	Unit         string
 	StockCurrent int
 	StockMin     int
-	LocationID   *int64
-	Deleted      bool
-	OnLoan       bool // active custody assignment
+	// LocationID is an asset's location. For a consumable seeded with stock
+	// and no Stocks it is shorthand for one stock row at that location.
+	LocationID *int64
+	// Stocks is a consumable's per-location quantity by location id.
+	Stocks  map[int64]int
+	Deleted bool
+	OnLoan  bool // active custody assignment
 }
 
 // Store holds items, known locations and the ledger. Safe for concurrent use.
@@ -46,6 +58,23 @@ func (s *Store) SeedItem(it Item) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := it
+	cp.Stocks = map[int64]int{}
+	for k, v := range it.Stocks {
+		cp.Stocks[k] = v
+	}
+	if cp.Kind == domain.KindConsumable {
+		if len(cp.Stocks) == 0 && cp.StockCurrent > 0 && cp.LocationID != nil {
+			cp.Stocks[*cp.LocationID] = cp.StockCurrent
+		}
+		cp.LocationID = nil
+		total := 0
+		for _, q := range cp.Stocks {
+			total += q
+		}
+		if len(cp.Stocks) > 0 {
+			cp.StockCurrent = total
+		}
+	}
 	s.items[it.ID] = &cp
 }
 
@@ -67,7 +96,12 @@ func (s *Store) SeedUser(id, name string) {
 func (s *Store) Item(id string) Item {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return *s.items[id]
+	cp := *s.items[id]
+	cp.Stocks = map[int64]int{}
+	for k, v := range s.items[id].Stocks {
+		cp.Stocks[k] = v
+	}
+	return cp
 }
 
 // Movements returns a copy of the ledger in insertion order.
@@ -77,26 +111,73 @@ func (s *Store) Movements() []domain.Movement {
 	return append([]domain.Movement(nil), s.moves...)
 }
 
+// stocksLocked returns an item's stock rows ordered by location name, then id.
+func (s *Store) stocksLocked(it *Item) []domain.LocationStock {
+	out := make([]domain.LocationStock, 0, len(it.Stocks))
+	for id, q := range it.Stocks {
+		out = append(out, domain.LocationStock{LocationID: id, LocationName: s.locations[id], Quantity: q})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := strings.ToLower(out[i].LocationName), strings.ToLower(out[j].LocationName)
+		if a != b {
+			return a < b
+		}
+		return out[i].LocationID < out[j].LocationID
+	})
+	return out
+}
+
 // Record implements app.MovementRepository.
-func (s *Store) Record(_ context.Context, itemID, userID string, decide func(domain.ItemState) (domain.Outcome, error)) (domain.Movement, error) {
+func (s *Store) Record(_ context.Context, itemID, userID string, decide func(domain.ItemState) (domain.Outcome, error)) (domain.Movement, []domain.LocationStock, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it, ok := s.items[itemID]
 	if !ok || it.Deleted {
-		return domain.Movement{}, domain.ErrItemNotFound
+		return domain.Movement{}, nil, domain.ErrItemNotFound
 	}
-	out, err := decide(domain.ItemState{Kind: it.Kind, StockCurrent: it.StockCurrent, LocationID: it.LocationID, OnLoan: it.OnLoan})
-	if err != nil {
-		return domain.Movement{}, err
+	locs := make(map[int64]string, len(s.locations))
+	for id, n := range s.locations {
+		locs[id] = n
 	}
-	if to := out.Movement.ToLocationID; to != nil {
-		if _, ok := s.locations[*to]; !ok {
-			return domain.Movement{}, domain.ErrLocationNotFound
+	st := domain.ItemState{Kind: it.Kind, StockCurrent: it.StockCurrent, LocationID: it.LocationID, OnLoan: it.OnLoan,
+		Stocks: s.stocksLocked(it), Locations: locs}
+	for i := len(s.moves) - 1; i >= 0 && st.LastLocationID == nil; i-- {
+		if m := s.moves[i]; m.ItemID == itemID {
+			if m.LocationID != nil {
+				st.LastLocationID = m.LocationID
+			} else if m.ToLocationID != nil {
+				st.LastLocationID = m.ToLocationID
+			}
 		}
 	}
-	it.StockCurrent, it.LocationID = out.StockCurrent, out.LocationID
-	s.nextID++
+	out, err := decide(st)
+	if err != nil {
+		return domain.Movement{}, nil, err
+	}
 	m := out.Movement
+	if out.DefaultLocation {
+		if _, ok := s.locations[defaultLocationID]; !ok {
+			s.locations[defaultLocationID] = defaultLocationName
+		}
+		id := defaultLocationID
+		m.LocationID = &id
+	}
+	for _, c := range out.Changes {
+		id := c.LocationID
+		if out.DefaultLocation && id == 0 {
+			id = defaultLocationID
+		}
+		if c.Quantity == 0 {
+			delete(it.Stocks, id)
+		} else {
+			it.Stocks[id] = c.Quantity
+		}
+	}
+	it.StockCurrent = out.StockCurrent
+	if it.Kind == domain.KindAsset {
+		it.LocationID = out.LocationID
+	}
+	s.nextID++
 	m.ID, m.ItemID, m.CreatedAt = s.nextID, itemID, s.now()
 	uid := userID
 	m.UserID = &uid
@@ -104,7 +185,10 @@ func (s *Store) Record(_ context.Context, itemID, userID string, decide func(dom
 		m.UserName = &name
 	}
 	s.moves = append(s.moves, m)
-	return m, nil
+	if it.Kind != domain.KindConsumable {
+		return m, nil, nil
+	}
+	return m, s.stocksLocked(it), nil
 }
 
 // List implements app.MovementRepository.
@@ -134,11 +218,10 @@ func (s *Store) Alerts(_ context.Context, p domain.Page) ([]domain.Alert, int, e
 			continue
 		}
 		a := domain.Alert{ItemID: it.ID, Code: it.Code, Description: it.Description, Unit: it.Unit,
-			StockCurrent: it.StockCurrent, StockMin: it.StockMin, LocationID: it.LocationID}
-		if it.LocationID != nil {
-			if n, ok := s.locations[*it.LocationID]; ok {
-				a.LocationName = &n
-			}
+			StockCurrent: it.StockCurrent, StockMin: it.StockMin, Stocks: s.stocksLocked(it)}
+		if len(a.Stocks) == 1 {
+			id, n := a.Stocks[0].LocationID, a.Stocks[0].LocationName
+			a.LocationID, a.LocationName = &id, &n
 		}
 		all = append(all, a)
 	}

@@ -52,9 +52,14 @@ func (h *Handler) Register(r chi.Router) {
 func writeError(w http.ResponseWriter, err error) {
 	var ve *domain.ValidationError
 	var ie *domain.InsufficientStockError
+	var lr *domain.LocationRequiredError
 	switch {
 	case errors.As(err, &ve):
 		httpx.WriteFieldErrors(w, ve.Fields)
+	case errors.As(err, &lr):
+		httpx.WriteJSON(w, http.StatusUnprocessableEntity, httpx.ErrorBody{Error: httpx.ErrorDetail{
+			Code: "location_required", Fields: lr.Fields,
+			Message: "this consumable is stocked in several locations; say which one"}})
 	case errors.Is(err, domain.ErrItemNotFound):
 		httpx.WriteError(w, http.StatusNotFound, httpx.CodeNotFound, "item not found")
 	case errors.Is(err, domain.ErrNotApplicable):
@@ -64,8 +69,11 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "item_on_loan",
 			"item is on loan; return it before changing its location")
 	case errors.As(err, &ie):
-		httpx.WriteError(w, http.StatusConflict, "insufficient_stock",
-			fmt.Sprintf("only %d in stock, %d requested", ie.Available, ie.Requested))
+		msg := fmt.Sprintf("only %d in stock, %d requested", ie.Available, ie.Requested)
+		if ie.LocationName != "" {
+			msg = fmt.Sprintf("only %d available in %q, %d requested", ie.Available, ie.LocationName, ie.Requested)
+		}
+		httpx.WriteError(w, http.StatusConflict, "insufficient_stock", msg)
 	default:
 		slog.Error("internal error", "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, httpx.CodeInternal, "internal error")
@@ -79,8 +87,10 @@ type movementDTO struct {
 	Qty            int       `json:"qty"`
 	StockBefore    int       `json:"stock_before"`
 	StockAfter     int       `json:"stock_after"`
+	LocationID     *int64    `json:"location_id"`
 	FromLocationID *int64    `json:"from_location_id"`
 	ToLocationID   *int64    `json:"to_location_id"`
+	MovedQty       int       `json:"moved_qty"`
 	UserID         *string   `json:"user_id"`
 	UserName       *string   `json:"user_name"`
 	Note           string    `json:"note"`
@@ -89,7 +99,8 @@ type movementDTO struct {
 
 func toMovementDTO(m domain.Movement) movementDTO {
 	return movementDTO{ID: m.ID, ItemID: m.ItemID, Type: string(m.Type), Qty: m.Qty, StockBefore: m.StockBefore,
-		StockAfter: m.StockAfter, FromLocationID: m.FromLocationID, ToLocationID: m.ToLocationID, UserID: m.UserID,
+		StockAfter: m.StockAfter, LocationID: m.LocationID, FromLocationID: m.FromLocationID, ToLocationID: m.ToLocationID,
+		MovedQty: m.MovedQty, UserID: m.UserID,
 		UserName: m.UserName, Note: m.Note, CreatedAt: m.CreatedAt}
 }
 
@@ -100,10 +111,12 @@ func (h *Handler) record(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Type         string `json:"type"`
-		Qty          int    `json:"qty"`
-		ToLocationID *int64 `json:"to_location_id"`
-		Note         string `json:"note"`
+		Type           string `json:"type"`
+		Qty            int    `json:"qty"`
+		LocationID     *int64 `json:"location_id"`
+		FromLocationID *int64 `json:"from_location_id"`
+		ToLocationID   *int64 `json:"to_location_id"`
+		Note           string `json:"note"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
@@ -113,7 +126,8 @@ func (h *Handler) record(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.svc.Record(r.Context(), chi.URLParam(r, "id"), p.UserID, domain.Request{
-		Type: domain.MovementType(in.Type), Qty: in.Qty, ToLocationID: in.ToLocationID, Note: in.Note})
+		Type: domain.MovementType(in.Type), Qty: in.Qty, LocationID: in.LocationID,
+		FromLocationID: in.FromLocationID, ToLocationID: in.ToLocationID, Note: in.Note})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -122,6 +136,7 @@ func (h *Handler) record(w http.ResponseWriter, r *http.Request) {
 		"movement":      toMovementDTO(res.Movement),
 		"stock_current": res.StockCurrent,
 		"location_id":   res.LocationID,
+		"stocks":        toStockDTOs(res.Stocks),
 	})
 }
 
@@ -161,6 +176,21 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": out, "total": total, "limit": page.Limit, "offset": page.Offset})
 }
 
+// stockDTO is one location's quantity of a consumable.
+type stockDTO struct {
+	LocationID   int64  `json:"location_id"`
+	LocationName string `json:"location_name"`
+	Quantity     int    `json:"quantity"`
+}
+
+func toStockDTOs(in []domain.LocationStock) []stockDTO {
+	out := make([]stockDTO, len(in))
+	for i, s := range in {
+		out[i] = stockDTO{LocationID: s.LocationID, LocationName: s.LocationName, Quantity: s.Quantity}
+	}
+	return out
+}
+
 type alertDTO struct {
 	ItemID       string  `json:"item_id"`
 	Code         string  `json:"code"`
@@ -171,6 +201,8 @@ type alertDTO struct {
 	Shortage     int     `json:"shortage"`
 	LocationID   *int64  `json:"location_id"`
 	LocationName *string `json:"location_name"`
+	// Stocks is the per-location breakdown behind StockCurrent.
+	Stocks []stockDTO `json:"stocks"`
 }
 
 func (h *Handler) alerts(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +220,7 @@ func (h *Handler) alerts(w http.ResponseWriter, r *http.Request) {
 	for i, a := range as {
 		out[i] = alertDTO{ItemID: a.ItemID, Code: a.Code, Description: a.Description, Unit: a.Unit,
 			StockCurrent: a.StockCurrent, StockMin: a.StockMin, Shortage: a.Shortage(),
-			LocationID: a.LocationID, LocationName: a.LocationName}
+			LocationID: a.LocationID, LocationName: a.LocationName, Stocks: toStockDTOs(a.Stocks)}
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": out, "total": total, "limit": page.Limit, "offset": page.Offset})
 }

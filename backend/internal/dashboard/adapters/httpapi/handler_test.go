@@ -114,7 +114,7 @@ func TestSummaryShape(t *testing.T) {
 		t.Fatalf("low_stock = %v", low)
 	}
 	first := top[0].(map[string]any)
-	for _, k := range []string{"id", "code", "description", "unit", "stock_current", "stock_min", "location_name"} {
+	for _, k := range []string{"id", "code", "description", "unit", "stock_current", "stock_min", "location_name", "stocks"} {
 		if _, ok := first[k]; !ok {
 			t.Errorf("low_stock.top[0].%s missing", k)
 		}

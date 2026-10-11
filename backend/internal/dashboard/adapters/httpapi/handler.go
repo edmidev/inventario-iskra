@@ -47,6 +47,14 @@ type lowStockItemDTO struct {
 	StockCurrent int     `json:"stock_current"`
 	StockMin     int     `json:"stock_min"`
 	LocationName *string `json:"location_name"`
+	// Stocks is the per-location breakdown behind StockCurrent.
+	Stocks []stockLocationDTO `json:"stocks"`
+}
+
+type stockLocationDTO struct {
+	LocationID   int64  `json:"location_id"`
+	LocationName string `json:"location_name"`
+	Quantity     int    `json:"quantity"`
 }
 
 type overdueLoanDTO struct {
@@ -103,7 +111,11 @@ func toDTO(s domain.Summary) summaryDTO {
 	d.LowStock.Count = s.LowStock.Count
 	d.LowStock.Top = make([]lowStockItemDTO, len(s.LowStock.Top)) // never null in JSON
 	for i, it := range s.LowStock.Top {
-		d.LowStock.Top[i] = lowStockItemDTO{it.ID, it.Code, it.Description, it.Unit, it.StockCurrent, it.StockMin, it.LocationName}
+		stocks := make([]stockLocationDTO, len(it.Stocks)) // never null in JSON
+		for j, st := range it.Stocks {
+			stocks[j] = stockLocationDTO{st.LocationID, st.LocationName, st.Quantity}
+		}
+		d.LowStock.Top[i] = lowStockItemDTO{it.ID, it.Code, it.Description, it.Unit, it.StockCurrent, it.StockMin, it.LocationName, stocks}
 	}
 	d.Loans.Active, d.Loans.Overdue = s.Loans.Active, s.Loans.Overdue
 	d.Loans.OverdueTop = make([]overdueLoanDTO, len(s.Loans.OverdueTop))

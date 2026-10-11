@@ -27,6 +27,7 @@ import (
 	stockapi "github.com/edgar/inventario/backend/internal/stock/adapters/httpapi"
 	stockpg "github.com/edgar/inventario/backend/internal/stock/adapters/postgres"
 	stockapp "github.com/edgar/inventario/backend/internal/stock/app"
+	stockdomain "github.com/edgar/inventario/backend/internal/stock/domain"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -58,14 +59,18 @@ func wireIdentity(pool *pgxpool.Pool, cfg config.Config) (*httpapi.Handler, *app
 // consumable created with stock gets its opening movement inside the same
 // transaction as the item. The acting user comes from the request principal.
 func openingBalanceHook(ctx context.Context, tx pgx.Tx, it catalogdomain.Item) error {
-	if it.Kind != catalogdomain.KindConsumable || it.StockCurrent <= 0 {
+	if it.Kind != catalogdomain.KindConsumable || len(it.Stocks) == 0 {
 		return nil
 	}
 	userID := ""
 	if p, ok := httpx.PrincipalFrom(ctx); ok {
 		userID = p.UserID
 	}
-	return stockpg.RecordOpening(ctx, tx, it.ID, it.StockCurrent, it.LocationID, userID)
+	stocks := make([]stockdomain.LocationStock, len(it.Stocks))
+	for i, st := range it.Stocks {
+		stocks[i] = stockdomain.LocationStock{LocationID: st.LocationID, LocationName: st.LocationName, Quantity: st.Quantity}
+	}
+	return stockpg.RecordOpenings(ctx, tx, it.ID, stocks, userID)
 }
 
 // wireCatalog builds the catalog handler, reusing identity's bearer-token

@@ -189,9 +189,19 @@ func (s *Service) CreateItem(ctx context.Context, in CreateItemInput) (domain.It
 	if err != nil {
 		return domain.Item{}, err
 	}
-	if it.LocationID != nil {
-		if _, err := s.locs.Get(ctx, *it.LocationID); errors.Is(err, domain.ErrLocationNotFound) {
+	if in.LocationID != nil {
+		if _, err := s.locs.Get(ctx, *in.LocationID); errors.Is(err, domain.ErrLocationNotFound) {
 			return domain.Item{}, domain.FieldError("location_id", "location does not exist")
+		} else if err != nil {
+			return domain.Item{}, err
+		}
+	}
+	for i, st := range it.Stocks {
+		if st.LocationID == 0 {
+			continue // default location, resolved when stored
+		}
+		if _, err := s.locs.Get(ctx, st.LocationID); errors.Is(err, domain.ErrLocationNotFound) {
+			return domain.Item{}, domain.FieldError(fmt.Sprintf("stocks[%d].location_id", i), "location does not exist")
 		} else if err != nil {
 			return domain.Item{}, err
 		}

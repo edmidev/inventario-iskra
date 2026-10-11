@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	identity "github.com/edgar/inventario/backend/internal/identity/domain"
@@ -273,5 +274,130 @@ func TestTransferOfAssetOnLoanIs409(t *testing.T) {
 	}
 	if n := len(e.st.Movements()); n != 0 {
 		t.Errorf("recorded %d movements", n)
+	}
+}
+
+// seedMulti adds a consumable stocked in two locations (warehouse 6,
+// workshop 4) with a minimum of 5.
+func seedMulti(e env) {
+	e.st.SeedItem(memory.Item{ID: "m1", Code: "ISK-CON-050", Description: "Screws", Kind: domain.KindConsumable, Unit: "u",
+		StockMin: 5, Stocks: map[int64]int{1: 6, 2: 4}})
+}
+
+func TestOutPerLocationAndInsufficientStockNamesTheLocation(t *testing.T) {
+	e := newEnv(t)
+	seedMulti(e)
+	got := e.do(t, "POST", "/items/m1/movements", "operator", m{"type": "out", "qty": 3, "location_id": 2})
+	if got.Status != 201 || got.Body["stock_current"] != 7.0 {
+		t.Fatalf("%d %v", got.Status, got.Body)
+	}
+	mv := got.Body["movement"].(map[string]any)
+	if mv["location_id"] != 2.0 || mv["moved_qty"] != 0.0 || mv["qty"] != -3.0 {
+		t.Errorf("movement: %v", mv)
+	}
+	stocks := got.Body["stocks"].([]any)
+	if len(stocks) != 2 || stocks[0].(map[string]any)["location_name"] != "Warehouse" || stocks[1].(map[string]any)["quantity"] != 1.0 {
+		t.Errorf("stocks: %v", stocks)
+	}
+	over := e.do(t, "POST", "/items/m1/movements", "operator", m{"type": "out", "qty": 2, "location_id": 2}) // only 1 left there
+	if over.Status != 409 || over.errCode() != "insufficient_stock" {
+		t.Fatalf("%d %v", over.Status, over.Body)
+	}
+	msg := over.Body["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(msg, "Workshop") || !strings.Contains(msg, "1") {
+		t.Errorf("message does not name the location and quantity: %q", msg)
+	}
+}
+
+func TestAmbiguousLocationIs422WithFields(t *testing.T) {
+	e := newEnv(t)
+	seedMulti(e)
+	for _, body := range []m{
+		{"type": "in", "qty": 1}, {"type": "out", "qty": 1}, {"type": "adjust", "qty": 1, "note": "n"},
+	} {
+		got := e.do(t, "POST", "/items/m1/movements", "operator", body)
+		if got.Status != 422 || got.errCode() != "location_required" || got.field("location_id") == "" {
+			t.Errorf("%v: %d %v", body, got.Status, got.Body)
+		}
+	}
+	got := e.do(t, "POST", "/items/m1/movements", "operator", m{"type": "transfer", "qty": 1, "to_location_id": 2})
+	if got.Status != 422 || got.errCode() != "location_required" || got.field("from_location_id") == "" {
+		t.Errorf("transfer: %d %v", got.Status, got.Body)
+	}
+	if n := len(e.st.Movements()); n != 0 {
+		t.Errorf("recorded %d movements", n)
+	}
+	if got := e.do(t, "POST", "/items/m1/movements", "viewer", m{"type": "in", "qty": 1, "location_id": 1}); got.Status != 403 {
+		t.Errorf("viewer: %d", got.Status)
+	}
+	if got := e.do(t, "POST", "/items/m1/movements", "", m{"type": "in", "qty": 1, "location_id": 1}); got.Status != 401 {
+		t.Errorf("anonymous: %d", got.Status)
+	}
+}
+
+func TestLegacySingleLocationRequestsStillWork(t *testing.T) {
+	e := newEnv(t) // c1: 5 gloves, one location (Warehouse)
+	got := e.do(t, "POST", "/items/c1/movements", "operator", m{"type": "out", "qty": 2})
+	if got.Status != 201 || got.Body["stock_current"] != 3.0 {
+		t.Fatalf("%d %v", got.Status, got.Body)
+	}
+	if mv := got.Body["movement"].(map[string]any); mv["location_id"] != 1.0 {
+		t.Errorf("inferred location: %v", mv)
+	}
+	got = e.do(t, "POST", "/items/c1/movements", "operator", m{"type": "adjust", "qty": 8, "note": "count"})
+	if got.Status != 201 || got.Body["stock_current"] != 8.0 {
+		t.Errorf("adjust: %d %v", got.Status, got.Body)
+	}
+}
+
+func TestPartialTransferBetweenLocations(t *testing.T) {
+	e := newEnv(t)
+	seedMulti(e)
+	got := e.do(t, "POST", "/items/m1/movements", "operator", m{"type": "transfer", "qty": 2, "from_location_id": 1, "to_location_id": 2})
+	if got.Status != 201 || got.Body["stock_current"] != 10.0 {
+		t.Fatalf("%d %v", got.Status, got.Body)
+	}
+	mv := got.Body["movement"].(map[string]any)
+	if mv["qty"] != 0.0 || mv["moved_qty"] != 2.0 || mv["from_location_id"] != 1.0 || mv["to_location_id"] != 2.0 || mv["location_id"] != nil {
+		t.Errorf("movement: %v", mv)
+	}
+	stocks := got.Body["stocks"].([]any)
+	if stocks[0].(map[string]any)["quantity"] != 4.0 || stocks[1].(map[string]any)["quantity"] != 6.0 {
+		t.Errorf("stocks: %v", stocks)
+	}
+	if over := e.do(t, "POST", "/items/m1/movements", "operator", m{"type": "transfer", "qty": 5, "from_location_id": 1, "to_location_id": 2}); over.Status != 409 || over.errCode() != "insufficient_stock" {
+		t.Errorf("over-transfer: %d %v", over.Status, over.Body)
+	}
+	for _, body := range []m{
+		{"type": "transfer", "from_location_id": 1, "to_location_id": 2},            // no qty
+		{"type": "transfer", "qty": 1, "from_location_id": 1, "to_location_id": 1},  // same location
+		{"type": "transfer", "qty": 1, "from_location_id": 1, "to_location_id": 99}, // unknown
+		{"type": "out", "qty": 1, "location_id": 99},                                // unknown
+		{"type": "in", "qty": 1, "location_id": 1, "from_location_id": 2},           // from only for transfer
+	} {
+		if got := e.do(t, "POST", "/items/m1/movements", "operator", body); got.Status != 422 || got.errCode() != "validation_failed" {
+			t.Errorf("%v: %d %v", body, got.Status, got.Body)
+		}
+	}
+}
+
+func TestAlertsReturnTheBreakdown(t *testing.T) {
+	e := newEnv(t)
+	seedMulti(e) // total 10 > min 5: no alert yet
+	e.do(t, "POST", "/items/m1/movements", "operator", m{"type": "out", "qty": 4, "location_id": 2})
+	e.do(t, "POST", "/items/m1/movements", "operator", m{"type": "out", "qty": 1, "location_id": 1}) // total 5 = min
+	got := e.do(t, "GET", "/stock/alerts", "viewer", nil)
+	var alert map[string]any
+	for _, a := range got.Body["data"].([]any) {
+		if a.(map[string]any)["code"] == "ISK-CON-050" {
+			alert = a.(map[string]any)
+		}
+	}
+	if alert == nil || alert["stock_current"] != 5.0 {
+		t.Fatalf("alerts: %v", got.Body)
+	}
+	stocks := alert["stocks"].([]any)
+	if len(stocks) != 1 || stocks[0].(map[string]any)["location_name"] != "Warehouse" || stocks[0].(map[string]any)["quantity"] != 5.0 {
+		t.Errorf("breakdown: %v", stocks)
 	}
 }

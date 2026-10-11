@@ -17,6 +17,7 @@ import (
 	maintenanceapp "github.com/edgar/inventario/backend/internal/maintenance/app"
 	"github.com/edgar/inventario/backend/internal/platform/httpx"
 	stockpg "github.com/edgar/inventario/backend/internal/stock/adapters/postgres"
+	stockdomain "github.com/edgar/inventario/backend/internal/stock/domain"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -25,14 +26,18 @@ import (
 // with stock gets its opening movement in the same transaction as the item,
 // attributed to the acting user carried by the context.
 func openingBalanceHook(ctx context.Context, tx pgx.Tx, it catalogdomain.Item) error {
-	if it.Kind != catalogdomain.KindConsumable || it.StockCurrent <= 0 {
+	if it.Kind != catalogdomain.KindConsumable || len(it.Stocks) == 0 {
 		return nil
 	}
 	userID := ""
 	if p, ok := httpx.PrincipalFrom(ctx); ok {
 		userID = p.UserID
 	}
-	return stockpg.RecordOpening(ctx, tx, it.ID, it.StockCurrent, it.LocationID, userID)
+	stocks := make([]stockdomain.LocationStock, len(it.Stocks))
+	for i, st := range it.Stocks {
+		stocks[i] = stockdomain.LocationStock{LocationID: st.LocationID, LocationName: st.LocationName, Quantity: st.Quantity}
+	}
+	return stockpg.RecordOpenings(ctx, tx, it.ID, stocks, userID)
 }
 
 // NewDeps builds the importer's dependencies on pool: the same catalog and

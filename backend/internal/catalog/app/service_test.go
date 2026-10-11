@@ -449,3 +449,114 @@ func TestStatusChangeRejectedWhileFailureIsOpen(t *testing.T) {
 		t.Errorf("after close: %v %+v", err, got)
 	}
 }
+
+func (f fixture) location(t *testing.T, name string) domain.Location {
+	t.Helper()
+	l, err := f.svc.CreateLocation(t.Context(), name, domain.LocationStorage, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+func TestCreateConsumableWithOpeningStockInSeveralLocations(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.location(t, "Taller"), f.location(t, "Maleta y caja de Alejandro")
+	it, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
+		Description: "Tornillos", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"),
+		Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}, {LocationID: b.ID, Quantity: 5}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it.StockCurrent != 10 || len(it.Stocks) != 2 || it.Stocks[0].LocationName != "Maleta y caja de Alejandro" || it.Stocks[1].LocationName != "Taller" {
+		t.Fatalf("created: %+v", it)
+	}
+	got, _ := f.svc.GetItem(t.Context(), it.ID)
+	if len(got.Stocks) != 2 {
+		t.Errorf("stored: %+v", got)
+	}
+}
+
+func TestCreateConsumableUnknownStockLocationIsAFieldError(t *testing.T) {
+	f := newFixture(t)
+	a := f.location(t, "Taller")
+	_, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
+		Description: "Tornillos", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"),
+		Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}, {LocationID: 999, Quantity: 1}}}})
+	var ve *domain.ValidationError
+	if !errors.As(err, &ve) || ve.Fields["stocks[1].location_id"] == "" {
+		t.Fatalf("err = %v", err)
+	}
+	_, err = f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
+		Description: "Tornillos", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"),
+		StockCurrent: ptr(0), LocationID: ptr(int64(999))}})
+	if !errors.As(err, &ve) || ve.Fields["location_id"] == "" {
+		t.Errorf("legacy dangling location: %v", err)
+	}
+}
+
+func TestLegacyCreateWithoutLocationUsesTheDefaultLocationOnce(t *testing.T) {
+	f := newFixture(t)
+	for range 2 {
+		it, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
+			Description: "Cinta", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"), StockCurrent: ptr(3)}})
+		if err != nil || len(it.Stocks) != 1 || it.Stocks[0].LocationName != "Sin ubicación" {
+			t.Fatalf("created: %+v %v", it, err)
+		}
+	}
+	locs, _ := f.svc.ListLocations(t.Context())
+	if len(locs) != 1 {
+		t.Errorf("default location duplicated: %+v", locs)
+	}
+}
+
+func TestListFiltersConsumablesByAnyStockLocationAndAssetsByLocation(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	a, b, c := f.location(t, "A"), f.location(t, "B"), f.location(t, "C")
+	multi, _ := f.svc.CreateItem(ctx, app.CreateItemInput{NewItemInput: domain.NewItemInput{Description: "Tornillos", CategoryID: f.cat.ID,
+		Kind: domain.KindConsumable, Unit: ptr("u"), Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}, {LocationID: b.ID, Quantity: 5}}}})
+	asset, _ := f.svc.CreateItem(ctx, app.CreateItemInput{NewItemInput: domain.NewItemInput{Description: "Taladro", CategoryID: f.cat.ID,
+		Kind: domain.KindAsset, LocationID: &b.ID}})
+	for loc, want := range map[int64][]string{a.ID: {multi.ID}, b.ID: {asset.ID, multi.ID}, c.ID: nil} {
+		items, total, _, err := f.svc.ListItems(ctx, domain.ItemFilter{LocationID: &loc, Sort: domain.SortDescription})
+		if err != nil || total != len(want) {
+			t.Fatalf("location %d: %d items %v", loc, total, err)
+		}
+		// Taladro sorts before Tornillos.
+		for i, id := range want {
+			if items[i].ID != id {
+				t.Errorf("location %d item %d = %s, want %s", loc, i, items[i].Description, id)
+			}
+		}
+	}
+}
+
+func TestUpdateConsumableLocationIsNotApplicable(t *testing.T) {
+	f := newFixture(t)
+	a := f.location(t, "A")
+	it, _ := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{Description: "Tornillos", CategoryID: f.cat.ID,
+		Kind: domain.KindConsumable, Unit: ptr("u"), Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}}}})
+	if _, err := f.svc.UpdateItem(t.Context(), it.ID, domain.ItemPatch{LocationID: domain.Nullable[int64]{Set: true, Value: a.ID}}); !errors.Is(err, domain.ErrNotApplicable) {
+		t.Fatalf("err = %v", err)
+	}
+	upd, err := f.svc.UpdateItem(t.Context(), it.ID, domain.ItemPatch{StockMin: ptr(2)})
+	if err != nil || upd.StockMin != 2 || len(upd.Stocks) != 1 || upd.Stocks[0].Quantity != 5 {
+		t.Errorf("unrelated edit must keep the stock rows: %+v %v", upd, err)
+	}
+}
+
+func TestLocationWithStockCannotBeDeleted(t *testing.T) {
+	f := newFixture(t)
+	a, free := f.location(t, "A"), f.location(t, "Libre")
+	if _, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{Description: "Tornillos", CategoryID: f.cat.ID,
+		Kind: domain.KindConsumable, Unit: ptr("u"), Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.DeleteLocation(t.Context(), a.ID); !errors.Is(err, domain.ErrLocationInUse) {
+		t.Errorf("location with stock: %v", err)
+	}
+	if err := f.svc.DeleteLocation(t.Context(), free.ID); err != nil {
+		t.Errorf("unused location: %v", err)
+	}
+}

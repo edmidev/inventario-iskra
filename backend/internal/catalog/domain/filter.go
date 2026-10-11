@@ -84,7 +84,7 @@ func (f ItemFilter) Matches(it Item) bool {
 	if f.Availability != "" && it.Availability() != f.Availability {
 		return false
 	}
-	if f.LocationID != nil && (it.LocationID == nil || *it.LocationID != *f.LocationID) {
+	if f.LocationID != nil && !it.InLocation(*f.LocationID) {
 		return false
 	}
 	if f.LowStock && !it.LowStock() {

@@ -112,6 +112,9 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "location_in_use", "location still has child locations or items")
 	case errors.Is(err, domain.ErrLocationCycle):
 		httpx.WriteError(w, http.StatusConflict, "location_cycle", "the new parent would create a cycle")
+	case errors.Is(err, domain.ErrNotApplicable):
+		httpx.WriteError(w, http.StatusUnprocessableEntity, "not_applicable",
+			"consumables are stocked per location; move stock with a stock transfer instead of editing the location")
 	case errors.Is(err, domain.ErrItemOnLoan):
 		httpx.WriteError(w, http.StatusConflict, "item_on_loan", "item is on loan; return it first")
 	case errors.Is(err, domain.ErrItemUnderRepair):
@@ -291,6 +294,7 @@ type itemDTO struct {
 	Unit                    *string        `json:"unit"`
 	StockCurrent            int            `json:"stock_current"`
 	StockMin                int            `json:"stock_min"`
+	Stocks                  []stockDTO     `json:"stocks"`
 	LowStock                bool           `json:"low_stock"`
 	OnLoan                  bool           `json:"on_loan"`
 	Custody                 *custodyDTO    `json:"custody,omitempty"`
@@ -303,6 +307,13 @@ type itemDTO struct {
 	Notes                   string         `json:"notes"`
 	CreatedAt               time.Time      `json:"created_at"`
 	UpdatedAt               time.Time      `json:"updated_at"`
+}
+
+// stockDTO is a consumable's quantity at one location.
+type stockDTO struct {
+	LocationID   int64  `json:"location_id"`
+	LocationName string `json:"location_name"`
+	Quantity     int    `json:"quantity"`
 }
 
 // custodyDTO is the active loan embedded in an item response.
@@ -324,8 +335,13 @@ func toItemDTO(it domain.Item) itemDTO {
 	if attrs == nil {
 		attrs = map[string]any{}
 	}
+	stocks := make([]stockDTO, len(it.Stocks))
+	for i, st := range it.Stocks {
+		stocks[i] = stockDTO{LocationID: st.LocationID, LocationName: st.LocationName, Quantity: st.Quantity}
+	}
 	return itemDTO{
-		ID: it.ID, Code: it.Code, Description: it.Description, CategoryID: it.CategoryID,
+		Stocks: stocks,
+		ID:     it.ID, Code: it.Code, Description: it.Description, CategoryID: it.CategoryID,
 		Kind: string(it.Kind), Status: string(it.Status), Availability: string(it.Availability()),
 		Unit: it.Unit, StockCurrent: it.StockCurrent, StockMin: it.StockMin, LowStock: it.LowStock(),
 		OnLoan: it.OnLoan(), Custody: loan,
@@ -461,15 +477,19 @@ func (h *Handler) getItemByCode(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createItem(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Code                    string         `json:"code"`
-		Description             string         `json:"description"`
-		CategoryID              int64          `json:"category_id"`
-		Kind                    string         `json:"kind"`
-		Status                  string         `json:"status"`
-		Unit                    *string        `json:"unit"`
-		StockCurrent            *int           `json:"stock_current"`
-		StockMin                int            `json:"stock_min"`
-		LocationID              *int64         `json:"location_id"`
+		Code         string  `json:"code"`
+		Description  string  `json:"description"`
+		CategoryID   int64   `json:"category_id"`
+		Kind         string  `json:"kind"`
+		Status       string  `json:"status"`
+		Unit         *string `json:"unit"`
+		StockCurrent *int    `json:"stock_current"`
+		StockMin     int     `json:"stock_min"`
+		LocationID   *int64  `json:"location_id"`
+		Stocks       []struct {
+			LocationID int64 `json:"location_id"`
+			Quantity   int   `json:"quantity"`
+		} `json:"stocks"`
 		LastMaintenanceAt       *time.Time     `json:"last_maintenance_at"`
 		MaintenanceIntervalDays *int           `json:"maintenance_interval_days"`
 		Attributes              map[string]any `json:"attributes"`
@@ -485,12 +505,19 @@ func (h *Handler) createItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var stocks []domain.StockInput
+	if in.Stocks != nil {
+		stocks = make([]domain.StockInput, len(in.Stocks))
+		for i, st := range in.Stocks {
+			stocks[i] = domain.StockInput{LocationID: st.LocationID, Quantity: st.Quantity}
+		}
+	}
 	it, err := h.svc.CreateItem(r.Context(), app.CreateItemInput{
 		Code: in.Code,
 		NewItemInput: domain.NewItemInput{
 			Description: in.Description, CategoryID: in.CategoryID, Kind: domain.Kind(in.Kind),
 			Status: domain.Status(in.Status), Unit: in.Unit, StockCurrent: in.StockCurrent,
-			StockMin: in.StockMin, LocationID: in.LocationID, LastMaintenanceAt: in.LastMaintenanceAt,
+			StockMin: in.StockMin, LocationID: in.LocationID, Stocks: stocks, LastMaintenanceAt: in.LastMaintenanceAt,
 			MaintenanceIntervalDays: in.MaintenanceIntervalDays, Attributes: in.Attributes, Notes: in.Notes,
 		},
 	})

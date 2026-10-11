@@ -309,7 +309,7 @@ func TestEmptyDefaultLocationLeavesSheetOneAndThreeItemsWithoutLocation(t *testi
 	if code, _, errs := e.cli("--file", synthetic(t), "--apply", "--user-email", "admin@example.test", "--default-location", ""); code != 0 {
 		t.Fatalf("apply: %d %s", code, errs)
 	}
-	if n := e.count(t, `SELECT count(*) FROM items WHERE location_id IS NULL`); n != 6 { // 4 on sheet 1 + 2 on sheet 3
+	if n := e.count(t, `SELECT count(*) FROM items WHERE kind = 'asset' AND location_id IS NULL`); n != 6 { // 4 on sheet 1 + 2 on sheet 3
 		t.Errorf("items without location = %d, want 6", n)
 	}
 	if n := e.count(t, `SELECT count(*) FROM locations`); n != 1 {
