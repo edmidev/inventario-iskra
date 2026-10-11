@@ -17,6 +17,8 @@ const (
 	ActionSkipConflict    Action = "skip_conflict"
 	ActionSkipInvalid     Action = "skip_invalid"
 	ActionAlreadyImported Action = "already_imported"
+	ActionCreated         Action = "created" // after a successful Apply
+	ActionFailed          Action = "failed"  // Apply could not create it
 )
 
 // Flag classes: each one becomes a section of the report.
@@ -67,9 +69,10 @@ type PlannedItem struct {
 	Action            Action         `json:"action"`
 	Flags             []Flag         `json:"flags,omitempty"`
 
-	sheetRole sheetRole
-	rawQty    string // for exact-repeat detection
-	seq       int    // position among the sheet's data rows
+	existingID string // set when the row was matched with an item in the database
+	sheetRole  sheetRole
+	rawQty     string // for exact-repeat detection
+	seq        int    // position among the sheet's data rows
 }
 
 // Ref is a short "sheet row N" reference used in messages.
@@ -278,7 +281,7 @@ func markCodeConflicts(plan *Plan) {
 func collectNeeds(plan *Plan) {
 	cats, locs := map[string]bool{}, map[string]bool{}
 	for _, it := range plan.Items {
-		if it.Action != ActionCreate && it.Action != ActionAlreadyImported {
+		if it.Action != ActionCreate {
 			continue
 		}
 		cats[it.Category] = true

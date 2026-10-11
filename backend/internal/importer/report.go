@@ -56,7 +56,7 @@ func statsFor(plan *Plan, sheet string) sheetStats {
 		}
 		s.rows++
 		switch it.Action {
-		case ActionCreate:
+		case ActionCreate, ActionCreated:
 			s.create++
 		case ActionSkipDuplicate:
 			s.dup++
@@ -67,7 +67,7 @@ func statsFor(plan *Plan, sheet string) sheetStats {
 		case ActionAlreadyImported:
 			s.already++
 		}
-		if it.Action == ActionCreate || it.Action == ActionAlreadyImported {
+		if it.Action == ActionCreate || it.Action == ActionCreated || it.Action == ActionAlreadyImported {
 			if it.Kind == "asset" {
 				s.assets++
 			} else {
@@ -104,7 +104,7 @@ func RenderMarkdown(plan *Plan, result *Result) string {
 	}
 
 	b.WriteString("\n## Totals per sheet\n\n")
-	b.WriteString("| Sheet | Rows read | Assets | Consumables | To create | Already imported | Skipped: duplicate | Skipped: conflict | Skipped: invalid |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Sheet | Rows read | Assets | Consumables | To create / created | Already imported | Skipped: duplicate | Skipped: conflict | Skipped: invalid |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	row := func(name string, s sheetStats) {
 		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d |\n", mdCell(name), s.rows, s.assets, s.consumables, s.create, s.already, s.dup, s.conflict, s.invalid)
 	}

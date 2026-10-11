@@ -3,21 +3,26 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"time"
 
 	_ "time/tzdata" // zone database for minimal images
 
 	"github.com/edgar/inventario/backend/internal/importer"
+	importerpg "github.com/edgar/inventario/backend/internal/importer/adapters/postgres"
+	"github.com/edgar/inventario/backend/internal/platform/db"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv)) }
 
 type config struct {
-	file, report, format, defaultLocation, timezone string
+	file, report, format, defaultLocation, timezone, userEmail string
+	apply                                                      bool
 }
 
 func run(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
@@ -28,6 +33,8 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	fs.StringVar(&cfg.report, "report", "", "write the report to this file instead of stdout")
 	fs.StringVar(&cfg.format, "format", "md", "report format: md or json")
 	fs.StringVar(&cfg.defaultLocation, "default-location", "Almacén principal", "location of the items of sheets 1 and 3 (empty: no location)")
+	fs.BoolVar(&cfg.apply, "apply", false, "write to the database (default is a dry-run that writes nothing)")
+	fs.StringVar(&cfg.userEmail, "user-email", "", "email of the admin/operator the import acts as (required with --apply)")
 	fs.StringVar(&cfg.timezone, "timezone", "", "IANA time zone for dates (default: the local zone)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -50,12 +57,54 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		loc = l
 	}
 
+	dbURL := getenv("DATABASE_URL")
+	if cfg.apply && (cfg.userEmail == "" || dbURL == "") {
+		fmt.Fprintln(stderr, "import-xlsx: --apply needs --user-email and DATABASE_URL")
+		return 2
+	}
+
 	plan, err := importer.Parse(cfg.file, importer.Options{DefaultLocation: cfg.defaultLocation, Location: loc})
 	if err != nil {
 		fmt.Fprintf(stderr, "import-xlsx: %v\n", err)
 		return 1
 	}
-	return emit(cfg, plan, nil, stdout, stderr)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	var result *importer.Result
+	if dbURL != "" {
+		pool, err := db.NewPool(ctx, dbURL)
+		if err != nil {
+			fmt.Fprintf(stderr, "import-xlsx: database unavailable: %v\n", err)
+			return 1
+		}
+		defer pool.Close()
+		deps := importerpg.NewDeps(pool)
+		if cfg.apply {
+			actor, err := importerpg.ResolveActor(ctx, pool, cfg.userEmail)
+			if err != nil {
+				fmt.Fprintf(stderr, "import-xlsx: %v\n", err)
+				return 1
+			}
+			result, err = importer.Apply(ctx, plan, deps, actor)
+			if err != nil {
+				fmt.Fprintf(stderr, "import-xlsx: apply failed: %v\n", err)
+				return 1
+			}
+		} else if err := importer.Inspect(ctx, plan, deps); err != nil {
+			fmt.Fprintf(stderr, "import-xlsx: %v (is the database migrated? start the API once)\n", err)
+			return 1
+		}
+	}
+	code := emit(cfg, plan, result, stdout, stderr)
+	if result != nil {
+		fmt.Fprintf(stderr, "applied: %d items created (%d assets, %d consumables), %d already imported, %d conflicts, %d maintenance records opened, %d errors\n",
+			result.ItemsCreated, result.AssetsCreated, result.ConsumablesCreated, result.AlreadyImported, result.Conflicts, result.MaintenanceOpened, len(result.Errors))
+		if len(result.Errors) > 0 && code == 0 {
+			code = 1
+		}
+	}
+	return code
 }
 
 // emit writes the report to --report or stdout.
