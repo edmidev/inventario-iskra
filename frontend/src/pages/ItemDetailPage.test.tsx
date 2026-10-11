@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 import type { Item } from "../lib/api/schemas";
-import { consumable, item, onLoanItem } from "../test/fixtures";
+import { consumable, item, onLoanItem, stock } from "../test/fixtures";
 import { api, errorBody, renderApp, useAuthenticatedApi } from "../test/render";
 import { server } from "../test/server";
 
@@ -39,14 +39,48 @@ describe("item detail", () => {
     expect(screen.getByText("Revisar batería")).toBeInTheDocument();
   });
 
-  it("shows stock and a low-stock warning for consumables", async () => {
+  it("shows the stock per location, the total and a low-stock warning for consumables", async () => {
     useAuthenticatedApi("viewer");
-    const supply = consumable();
+    const supply = consumable({ stocks: [stock(10, 2), stock(11, 1)], stock_min: 5 });
     serveItem(supply);
     renderApp(`/materiales/${supply.id}`);
-    expect(await screen.findByText("Stock bajo")).toBeInTheDocument();
-    expect(screen.getByText("2 caja")).toBeInTheDocument();
-    expect(screen.getByText("5 caja")).toBeInTheDocument();
+
+    const section = await screen.findByRole("region", { name: "Stock por ubicación" });
+    const rows = within(within(section).getByRole("list", { name: "Existencias por ubicación" })).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Bodega2 caja");
+    expect(rows[1]).toHaveTextContent("Estante A1 caja");
+    expect(within(section).getByText("Total")).toBeInTheDocument();
+    expect(within(section).getByText("3 caja")).toBeInTheDocument();
+    expect(within(section).getByText("En o por debajo del mínimo de 5 caja.")).toBeInTheDocument();
+    expect(screen.getAllByText("Stock bajo").length).toBeGreaterThan(0);
+  });
+
+  it("does not show a single location row for consumables, nor the section for assets", async () => {
+    useAuthenticatedApi("viewer");
+    const supply = consumable({ stocks: [stock(10, 9)], stock_min: 2, low_stock: false });
+    serveItem(supply);
+    renderApp(`/materiales/${supply.id}`);
+    await screen.findByRole("region", { name: "Stock por ubicación" });
+    expect(screen.queryByText("Ubicación")).not.toBeInTheDocument();
+    expect(screen.queryByText(/por debajo del mínimo/)).not.toBeInTheDocument();
+  });
+
+  it("says so when a consumable has no stock anywhere", async () => {
+    useAuthenticatedApi("viewer");
+    const supply = consumable({ stock_current: 0 });
+    serveItem(supply);
+    renderApp(`/materiales/${supply.id}`);
+    expect(await screen.findByText("No hay existencias en ninguna ubicación.")).toBeInTheDocument();
+  });
+
+  it("keeps the location row and no stock section for assets", async () => {
+    useAuthenticatedApi("viewer");
+    const asset = item();
+    serveItem(asset);
+    renderApp(`/materiales/${asset.id}`);
+    await screen.findByText("Ubicación");
+    expect(screen.queryByRole("region", { name: "Stock por ubicación" })).not.toBeInTheDocument();
   });
 
   it("copies the code to the clipboard", async () => {

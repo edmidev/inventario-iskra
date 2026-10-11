@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Icon } from "../atoms/Icon";
 import { AvailabilityBadge, LowStockBadge, StatusBadge } from "./ItemBadges";
+import { stockPlaces } from "../../features/stock/stocks";
 import type { Item } from "../../lib/api/schemas";
 
 interface ItemCardProps {
@@ -22,9 +23,12 @@ export function ItemCard({ item, categoryName, locationName }: ItemCardProps) {
         <span className="text-sm text-ink-soft">{categoryName ?? "—"}</span>
         <span className="text-sm text-ink-soft md:block">
           {item.kind === "consumable" ? (
-            <span className="font-semibold text-ink tabular-nums">
-              {item.stock_current} {item.unit}
-              <span className="font-normal text-ink-soft"> (mín. {item.stock_min})</span>
+            <span className="flex flex-col">
+              <span className="font-semibold text-ink tabular-nums">
+                {item.stock_current} {item.unit}
+                <span className="font-normal text-ink-soft"> (mín. {item.stock_min})</span>
+              </span>
+              <span className="text-xs">{stockPlaces(item.stocks)}</span>
             </span>
           ) : (
             (locationName ?? "Sin ubicación")

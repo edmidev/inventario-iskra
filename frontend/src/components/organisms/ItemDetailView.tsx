@@ -4,6 +4,7 @@ import { Button } from "../atoms/Button";
 import { Icon } from "../atoms/Icon";
 import { IconButton } from "../atoms/IconButton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../atoms/Tabs";
+import { StockByLocation } from "./StockByLocation";
 import { AvailabilityBadge, LowStockBadge, StatusBadge } from "../molecules/ItemBadges";
 import { formatDate, kindLabels } from "../../lib/format";
 import type { Item } from "../../lib/api/schemas";
@@ -87,6 +88,10 @@ export function ItemDetailView({
 
       {actions}
 
+      {item.kind === "consumable" && (
+        <StockByLocation stocks={item.stocks} total={item.stock_current} min={item.stock_min} unit={item.unit} lowStock={item.low_stock} />
+      )}
+
       {item.custody && (
         <section
           aria-label="Préstamo vigente"
@@ -111,18 +116,13 @@ export function ItemDetailView({
         <TabsContent value="info" className="pt-4">
           <dl className="grid gap-2 sm:grid-cols-2">
             <InfoRow label="Categoría">{categoryName ?? "—"}</InfoRow>
-            <InfoRow label="Ubicación">{locationName ?? "Sin ubicación"}</InfoRow>
             {item.kind === "consumable" ? (
-              <>
-                <InfoRow label="Existencias">
-                  {item.stock_current} {item.unit}
-                </InfoRow>
-                <InfoRow label="Stock mínimo">
-                  {item.stock_min} {item.unit}
-                </InfoRow>
-              </>
+              <InfoRow label="Stock mínimo">
+                {item.stock_min} {item.unit}
+              </InfoRow>
             ) : (
               <>
+                <InfoRow label="Ubicación">{locationName ?? "Sin ubicación"}</InfoRow>
                 <InfoRow label="Mantenimiento cada">
                   {item.maintenance_interval_days ? `${item.maintenance_interval_days} días` : "Sin programar"}
                 </InfoRow>

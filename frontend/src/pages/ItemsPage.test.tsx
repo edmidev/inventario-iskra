@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 import type { Item } from "../lib/api/schemas";
-import { consumable, item, onLoanItem } from "../test/fixtures";
+import { consumable, item, onLoanItem, stock } from "../test/fixtures";
 import { api, errorBody, renderApp, useAuthenticatedApi } from "../test/render";
 import { server } from "../test/server";
 
@@ -21,6 +21,24 @@ function serveItems(handler: (params: URLSearchParams) => { data: Item[]; total?
 }
 
 describe("items list", () => {
+  it("tells where a consumable is: one place by name, several by count, none as no stock", async () => {
+    useAuthenticatedApi("viewer");
+    serveItems(() => ({
+      data: [
+        consumable({ id: "c-1", code: "ISK-CON-001", stocks: [stock(10, 3)] }),
+        consumable({ id: "c-2", code: "ISK-CON-002", stocks: [stock(10, 3), stock(11, 4)] }),
+        consumable({ id: "c-3", code: "ISK-CON-003", stock_current: 0 }),
+      ],
+    }));
+    renderApp("/materiales");
+    const one = await screen.findByRole("link", { name: /ISK-CON-001/ });
+    expect(within(one).getByText("Bodega")).toBeInTheDocument();
+    const many = screen.getByRole("link", { name: /ISK-CON-002/ });
+    expect(within(many).getByText(/7 caja/)).toBeInTheDocument();
+    expect(within(many).getByText("en 2 ubicaciones")).toBeInTheDocument();
+    expect(within(screen.getByRole("link", { name: /ISK-CON-003/ })).getByText("Sin existencias")).toBeInTheDocument();
+  });
+
   it("renders item cards with status, availability and stock information", async () => {
     useAuthenticatedApi("viewer");
     serveItems(() => ({ data: [item(), onLoanItem(), consumable()] }));
@@ -31,9 +49,10 @@ describe("items list", () => {
     expect(within(loan).getByText("Prestado a Juan Gómez")).toBeInTheDocument();
     expect(within(loan).getByText("Vencido")).toBeInTheDocument();
 
-    const stock = screen.getByRole("link", { name: /ISK-CON-001/ });
-    expect(within(stock).getByText(/2 caja/)).toBeInTheDocument();
-    expect(within(stock).getByText("Stock bajo")).toBeInTheDocument();
+    const stockCard = screen.getByRole("link", { name: /ISK-CON-001/ });
+    expect(within(stockCard).getByText(/2 caja/)).toBeInTheDocument();
+    expect(within(stockCard).getByText("Bodega")).toBeInTheDocument();
+    expect(within(stockCard).getByText("Stock bajo")).toBeInTheDocument();
 
     const asset = screen.getByRole("link", { name: /ISK-HER-001/ });
     expect(within(asset).getByText("Disponible")).toBeInTheDocument();
