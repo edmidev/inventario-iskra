@@ -6,3 +6,5 @@ backend/bin/
 *.test
 coverage/
 .DS_Store
+import-report*
+*.report.md

@@ -28,6 +28,23 @@ services:
       db:
         condition: service_healthy
 
+  # One-off Excel import: `docker compose --profile tools run --rm -T importer ...`
+  # (see README, "Importing the Excel"). Never started by `docker compose up`.
+  importer:
+    profiles: ["tools"]
+    build: ./backend
+    entrypoint: ["/import-xlsx"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-inventario}:${POSTGRES_PASSWORD:-inventario}@db:5432/${POSTGRES_DB:-inventario}?sslmode=disable
+    volumes:
+      - type: bind
+        source: "${IMPORT_FILE:-./inventario_iskra (2).xlsx}"
+        target: /data/inventario.xlsx
+        read_only: true
+    depends_on:
+      db:
+        condition: service_healthy
+
   web:
     build: ./frontend
     ports:
