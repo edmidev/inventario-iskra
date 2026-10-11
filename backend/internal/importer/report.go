@@ -260,7 +260,7 @@ func renderIssues(b *strings.Builder, plan *Plan) {
 		n := 0
 		for _, it := range plan.Items {
 			for _, f := range it.Flags {
-				if f.Class != sec.class {
+				if f.Class != sec.class || skippedAsRepeat(it, f) {
 					continue
 				}
 				n++
@@ -283,7 +283,7 @@ func renderGrouped(b *strings.Builder, plan *Plan, class, empty string) {
 	var order []string
 	for _, it := range plan.Items {
 		for _, f := range it.Flags {
-			if f.Class != class {
+			if f.Class != class || skippedAsRepeat(it, f) {
 				continue
 			}
 			if _, ok := groups[f.Message]; !ok {
@@ -326,4 +326,10 @@ func renderResult(b *strings.Builder, r *Result) {
 			b.WriteString("None.\n")
 		}
 	}
+}
+
+// skippedAsRepeat hides the other observations of a row that is skipped as an
+// exact repeat: its original row already carries them.
+func skippedAsRepeat(it PlannedItem, f Flag) bool {
+	return it.Action == ActionSkipDuplicate && f.Class != FlagDuplicate
 }

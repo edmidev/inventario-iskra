@@ -41,7 +41,7 @@ func (p *parseCtx) resolveCategory(it *PlannedItem, raw, fallback string) {
 		return
 	}
 	it.Category = name
-	if raw != strings.ToLower(name) {
+	if Fold(raw) != Fold(name) {
 		it.flag(FlagCategoryNormalized, "%q normalized to %s", raw, name)
 	}
 }
@@ -193,7 +193,7 @@ func (p *parseCtx) caseRow(v rowView, c columns, inConsumables bool) PlannedItem
 		if cat := b; cat != "" {
 			if name, ok := CanonicalCategory(cat); ok {
 				it.Category = name
-				if cat != strings.ToLower(name) {
+				if Fold(cat) != Fold(name) {
 					it.flag(FlagCategoryNormalized, "%q normalized to %s", cat, name)
 				}
 			} else {

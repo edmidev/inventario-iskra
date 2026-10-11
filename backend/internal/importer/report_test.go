@@ -54,6 +54,10 @@ func TestMarkdownReportHasASectionForEveryIssueClass(t *testing.T) {
 			t.Errorf("report misses %q", want)
 		}
 	}
+	// Skipped repeats appear only in the duplicate section, not under every issue class.
+	if n := strings.Count(md, `"cables": no code`); n != 1 {
+		t.Errorf("uncoded repeat listed %d times in the no-code section, want 1", n)
+	}
 	if strings.Contains(md, "## Apply result") {
 		t.Error("dry-run report must not have an apply result")
 	}

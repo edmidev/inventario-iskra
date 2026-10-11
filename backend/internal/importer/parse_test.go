@@ -22,7 +22,7 @@ func TestAssetsSheetHeaderOffsetAndCategoryNoise(t *testing.T) {
 		t.Fatalf("location/flags = %q %v", a.Location, a.Flags)
 	}
 	b := byRow(p, sheetAssets, 4)
-	if b.Code != "ISK-BBB-002" || b.Category != CatTools || !hasFlag(b, FlagCategoryNormalized) {
+	if b.Code != "ISK-BBB-002" || b.Category != CatTools || hasFlag(b, FlagCategoryNormalized) {
 		t.Fatalf("row 4 = %+v", b)
 	}
 	if a.Attributes["import_source"] != "xlsx:Activos y Disponibles:r3" {
