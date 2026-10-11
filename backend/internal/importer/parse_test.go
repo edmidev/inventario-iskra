@@ -167,36 +167,179 @@ func TestInvalidQuantityAndMissingDescriptionAreSkippedNotGuessed(t *testing.T) 
 	}
 }
 
-func TestExactRepeatedBlockIsSkippedAndGroupedIntoRanges(t *testing.T) {
-	block := func() [][]any {
+// twoBlocks builds a sheet 2 with a first block, a middle row and a repeat.
+func consumableRows(first, repeat [][]any) [][]any {
+	rows := [][]any{{nil, "CONSUMIBLES"}}
+	rows = append(rows, first...)
+	return append(rows, repeat...)
+}
+
+func stockOf(it PlannedItem, loc string) int {
+	q, _ := it.stockAt(loc)
+	return q
+}
+
+func TestRepeatedBlockBecomesASecondStockRowAtTheRepeatLocation(t *testing.T) {
+	// header r2, CONSUMIBLES r3; first block r4-r8 (r7 blank); repeat r9-r13.
+	block := func(qtyAmarras, qtyTerminales int) [][]any {
 		return [][]any{
-			{"ISK-MD7-APT", "AMARRAS TRASPARENTE ", nil, nil, nil, 100},
-			{"ISK-MD8-APB", "AMARRAS BLANCAS", nil, nil, nil, 40},
+			{"ISK-MD7-APT", "AMARRAS TRASPARENTE ", nil, nil, nil, qtyAmarras},
 			{"capuchones amarillos", "electricidad", nil, nil, 6},
 			nil,
-			{"terminales azul", nil, nil, nil, 74},
+			{"terminales azul", nil, nil, nil, qtyTerminales},
+			{"ISK-MD8-CG", "CINTA GRIS", nil, nil, nil, 1},
 		}
 	}
-	rows := [][]any{{nil, "CONSUMIBLES"}, {"ISK-MD1-PT", "PASTA", nil, nil, nil, 2}}
-	rows = append(rows, block()...)
-	rows = append(rows, []any{"ISK-MD9-NEW", "nuevo", nil, nil, nil, 1})
-	rows = append(rows, block()...)
-	p := parseSynthetic(t, Options{}, caseSheet(rows...))
+	first := append([][]any{{"ISK-MD1-PT", "PASTA", nil, nil, nil, 2}}, block(100, 74)...)
+	repeat := block(100, 70) // same item, a different quantity in the workshop
+	p := parseSynthetic(t, Options{}, caseSheet(consumableRows(first, repeat)...))
 
-	// header row 2; CONSUMIBLES r3; PASTA r4; first block r5-r9 (r8 blank); NEW r10; repeat r11-r15.
-	if len(p.Duplicates) != 1 {
-		t.Fatalf("blocks = %+v", p.Duplicates)
+	amarras := byRow(p, sheetCase, 5)
+	if amarras.Action != ActionCreate || len(amarras.Stocks) != 2 || stockOf(amarras, LocationCase) != 100 || stockOf(amarras, "Taller") != 100 || amarras.Stock != 200 {
+		t.Fatalf("amarras = %+v", amarras)
 	}
-	d := p.Duplicates[0]
-	if d.FirstRow != 11 || d.LastRow != 15 || d.OfFirstRow != 5 || d.OfLastRow != 9 || d.Items != 4 {
-		t.Fatalf("block = %+v", d)
+	if amarras.Attributes["import_source"] != "xlsx:"+sheetCase+":r5" || amarras.Attributes["import_source_repeat"] != "xlsx:"+sheetCase+":r10" {
+		t.Fatalf("provenance = %v", amarras.Attributes)
 	}
-	created := p.Count(ActionCreate)
-	if p.Count(ActionSkipDuplicate) != 4 || created != 6 {
-		t.Fatalf("dups=%d created=%d", p.Count(ActionSkipDuplicate), created)
+	rep := byRow(p, sheetCase, 10)
+	if rep.Action != ActionStockRow || rep.MergedInto != amarras.Ref() {
+		t.Fatalf("repeat row = %+v", rep)
 	}
-	if !hasFlag(byRow(p, sheetCase, 11), FlagDuplicate) {
-		t.Fatal("duplicate row not flagged")
+	var terminales PlannedItem
+	for _, it := range p.Items {
+		if it.Description == "terminales azul" && it.Action == ActionCreate {
+			terminales = it
+		}
+	}
+	if stockOf(terminales, LocationCase) != 74 || stockOf(terminales, "Taller") != 70 || terminales.Stock != 144 || terminales.Code != "" {
+		t.Fatalf("terminales (different quantities) = %+v", terminales)
+	}
+	// Only the first block item has one row; nothing is skipped as duplicate.
+	pasta := byRow(p, sheetCase, 4)
+	if len(pasta.Stocks) != 1 || pasta.Stocks[0].Location != LocationCase {
+		t.Fatalf("pasta = %+v", pasta)
+	}
+	if p.Count(ActionStockRow) != 4 || p.Count(ActionCreate) != 5 || p.Count(ActionSkipConflict) != 0 {
+		t.Fatalf("stock rows=%d create=%d conflicts=%d", p.Count(ActionStockRow), p.Count(ActionCreate), p.Count(ActionSkipConflict))
+	}
+	st := p.splitStats()
+	if st.items != 5 || st.two != 4 || st.onlyFirst != 1 || st.onlySecond != 0 || st.extra != 0 {
+		t.Fatalf("stats = %+v", st)
+	}
+	if len(p.Locations) != 2 || p.Locations[0].Name != LocationCase || p.Locations[0].Kind != "container" || p.Locations[1].Name != "Taller" || p.Locations[1].Kind != "storage" {
+		t.Fatalf("locations = %+v", p.Locations)
+	}
+}
+
+func TestItemOnlyInTheRepeatedBlockGetsASingleRowAtTheRepeatLocation(t *testing.T) {
+	first := [][]any{{"ISK-MD1-A", "uno", nil, nil, nil, 1}, {"dos", "electricidad", nil, nil, 2}}
+	repeat := [][]any{{"ISK-MD1-A", "uno", nil, nil, nil, 5}, {"solo taller", nil, nil, nil, 9}}
+	p := parseSynthetic(t, Options{}, caseSheet(consumableRows(first, repeat)...))
+	only := byRow(p, sheetCase, 7)
+	if only.Action != ActionCreate || len(only.Stocks) != 1 || only.Stocks[0].Location != "Taller" || only.Stock != 9 || !hasFlag(only, FlagStockSplit) {
+		t.Fatalf("second-only = %+v", only)
+	}
+	if two := byRow(p, sheetCase, 4); stockOf(two, LocationCase) != 1 || stockOf(two, "Taller") != 5 {
+		t.Fatalf("two rows = %+v", two)
+	}
+	if byRow(p, sheetCase, 5).Stocks[0].Location != LocationCase {
+		t.Fatal("only-first item must stay in the first location")
+	}
+	if st := p.splitStats(); st.two != 1 || st.onlyFirst != 1 || st.onlySecond != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+}
+
+func TestThirdOccurrenceIsAnIssueAndNeverMergedSilently(t *testing.T) {
+	row := []any{"ISK-MD1-A", "uno", nil, nil, nil, 1}
+	p := parseSynthetic(t, Options{}, caseSheet(consumableRows([][]any{row}, [][]any{row, row})...))
+	third := byRow(p, sheetCase, 6)
+	if third.Action != ActionSkipConflict || !hasFlag(third, FlagExtraOccurrence) {
+		t.Fatalf("third = %+v", third)
+	}
+	if o := byRow(p, sheetCase, 4); o.Stock != 2 || len(o.Stocks) != 2 {
+		t.Fatalf("owner must keep only two stock rows: %+v", o)
+	}
+	if st := p.splitStats(); st.extra != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+	// An uncoded item listed three times is reported the same way.
+	u := []any{"cables", "electricidad", nil, nil, 3}
+	p = parseSynthetic(t, Options{}, caseSheet(consumableRows([][]any{u}, [][]any{u, u})...))
+	if !hasFlag(byRow(p, sheetCase, 6), FlagExtraOccurrence) {
+		t.Fatal("uncoded third occurrence not reported")
+	}
+}
+
+func TestRepeatedCodeWithADifferentDescriptionIsAConflictNotAStockRow(t *testing.T) {
+	first := [][]any{{"ISK-MD1-A", "uno", nil, nil, nil, 1}}
+	repeat := [][]any{{"ISK-MD1-A", "otra cosa", nil, nil, nil, 4}}
+	p := parseSynthetic(t, Options{}, caseSheet(consumableRows(first, repeat)...))
+	c := byRow(p, sheetCase, 5)
+	if c.Action != ActionSkipConflict || !hasFlag(c, FlagConflict) || p.Count(ActionStockRow) != 0 {
+		t.Fatalf("conflict row = %+v", c)
+	}
+	if o := byRow(p, sheetCase, 4); len(o.Stocks) != 1 {
+		t.Fatalf("owner = %+v", o)
+	}
+}
+
+func TestUncodedItemsMatchByNormalizedDescriptionAndGenerateOneCode(t *testing.T) {
+	first := [][]any{{"Terminales  AZUL", nil, nil, nil, 7}}
+	repeat := [][]any{{"terminales azúl ", nil, nil, nil, 8}}
+	p := parseSynthetic(t, Options{}, caseSheet(consumableRows(first, repeat)...))
+	o := byRow(p, sheetCase, 4)
+	if o.Code != "" || len(o.Stocks) != 2 || o.Stock != 15 || p.Count(ActionStockRow) != 1 {
+		t.Fatalf("owner = %+v", o)
+	}
+	if got := p.Count(ActionCreate); got != 1 {
+		t.Fatalf("items to create = %d: a code is generated once per item, so one row is created", got)
+	}
+}
+
+func TestLocationOptionsAndDefaults(t *testing.T) {
+	first := [][]any{{"cables", "electricidad", nil, nil, 3}}
+	p := parseSynthetic(t, Options{FirstBlockLocation: "Maleta", RepeatLocation: "Bodega"}, caseSheet(consumableRows(first, first)...))
+	if o := byRow(p, sheetCase, 4); stockOf(o, "Maleta") != 3 || stockOf(o, "Bodega") != 3 {
+		t.Fatalf("owner = %+v", o)
+	}
+	if p.Locations[0].Name != "Bodega" || p.Locations[0].Kind != "storage" || p.Locations[1].Name != "Maleta" || p.Locations[1].Kind != "container" {
+		t.Fatalf("locations = %+v", p.Locations)
+	}
+	d := parseSynthetic(t, Options{}, caseSheet(consumableRows(first, first)...))
+	if d.FirstBlockLocation != LocationCase || d.RepeatLocation != "Taller" {
+		t.Fatalf("defaults = %q %q", d.FirstBlockLocation, d.RepeatLocation)
+	}
+	if _, err := Parse(writeWorkbook(t, caseSheet(consumableRows(first, first)...)), Options{FirstBlockLocation: "Taller", RepeatLocation: " taller "}); err == nil {
+		t.Fatal("equal locations must be rejected")
+	}
+}
+
+func TestWorkshopIsSharedBetweenTheRepeatAndTheDefaultLocation(t *testing.T) {
+	first := [][]any{{"cables", "electricidad", nil, nil, 3}}
+	p := parseSynthetic(t, Options{DefaultLocation: "Taller"},
+		assetsSheet([]any{nil, "ISK-A-001", "uno", "herramientas", "funcional", "disponible"}),
+		caseSheet(consumableRows(first, first)...))
+	n := 0
+	for _, l := range p.Locations {
+		if l.Name == "Taller" {
+			n++
+		}
+	}
+	if n != 1 || len(p.Locations) != 2 {
+		t.Fatalf("locations = %+v", p.Locations)
+	}
+}
+
+func TestSameConsumableRepeatedInsideTheFirstBlockStartsTheRepeat(t *testing.T) {
+	// Documented heuristic: the first repeating row starts the repeated block.
+	rows := consumableRows([][]any{{"a", "electricidad", nil, nil, 1}, {"a", "electricidad", nil, nil, 2}, {"b", nil, nil, nil, 3}}, nil)
+	p := parseSynthetic(t, Options{}, caseSheet(rows...))
+	if a := byRow(p, sheetCase, 4); stockOf(a, "Taller") != 2 {
+		t.Fatalf("a = %+v", a)
+	}
+	if b := byRow(p, sheetCase, 6); b.Stocks[0].Location != "Taller" {
+		t.Fatalf("b (after the repeat starts) = %+v", b)
 	}
 }
 
@@ -210,7 +353,7 @@ func TestSameCodeWithDifferentContentIsAConflictNotADuplicate(t *testing.T) {
 	if p.Items[0].Action != ActionCreate || p.Items[1].Action != ActionSkipConflict || p.Items[2].Action != ActionSkipConflict {
 		t.Fatalf("actions: %s %s %s", p.Items[0].Action, p.Items[1].Action, p.Items[2].Action)
 	}
-	if len(p.Duplicates) != 0 || !hasFlag(p.Items[1], FlagConflict) || !strings.Contains(p.Items[1].Flags[0].Message, "ISK-A-001") {
+	if !hasFlag(p.Items[1], FlagConflict) || !strings.Contains(p.Items[1].Flags[0].Message, "ISK-A-001") {
 		t.Fatalf("flags = %+v", p.Items[1].Flags)
 	}
 }

@@ -25,6 +25,8 @@ func issuesPlan(t *testing.T) *Plan {
 			[]any{"cables", "electricidad", nil, nil, 3},
 			[]any{"ISK-MD1-X", "amarras", nil, nil, nil, 5},
 			[]any{"cables", "electricidad", nil, nil, 3},
+			[]any{"ISK-MD1-X", "amarras", nil, nil, nil, 5},
+			[]any{"solo taller", nil, nil, nil, 4},
 		),
 		inactiveSheet(
 			[]any{"ISK-HER-013", "Llave (fisura)", "Herramientas", "No Funcional", "28/08/2026", "Taller interno"},
@@ -38,7 +40,14 @@ func TestMarkdownReportHasASectionForEveryIssueClass(t *testing.T) {
 		"## Totals per sheet", "| Activos y Disponibles (header row 1) | 5 |", "**Total**",
 		"## Categories and locations", "| category | Maquinaria | MAQ |", "| location | Maleta y caja de Alejandro | container |",
 		"## Items", "(generated)", "ISK-M16-PAR",
-		"### Probable duplicate blocks (skipped)", "rows 7-8 (2 items) exactly repeat rows 5-6",
+		"Assumption to confirm (sheets 1 and 3)", "placed at **`Almacén principal`**",
+		"## Stock split across locations", "- With two stock rows (Maleta y caja de Alejandro and Taller): 2",
+		"- Only in the repeated block (Taller, informational): 1", "- Third or later occurrences (issues, skipped): 1",
+		"| ISK-MD1-X | amarras | 5 | 5 | 10 | r5 + r7 | create |", "| (generated) | cables | 3 | 3 | 6 | r6 + r8 | create |",
+		"| (generated) | solo taller | - | 4 | 4 | r10 | create |",
+		"### Stock per location (after the import)", "| Taller | 0 | 3 | 12 |",
+		"### Third or later occurrences of a consumable", "already has stock rows from",
+		"| Became a stock row |", "stock row of Maleta y caja de alejandro r5",
 		"### Code conflicts", "code ISK-A-003 is already used by",
 		"### Inconsistencies between Estado and Disponibilidad", "no disponible but Estado is functional",
 		"### Suspicious values", "VACIO on something that is not a cylinder",
@@ -54,7 +63,7 @@ func TestMarkdownReportHasASectionForEveryIssueClass(t *testing.T) {
 			t.Errorf("report misses %q", want)
 		}
 	}
-	// Skipped repeats appear only in the duplicate section, not under every issue class.
+	// A repeat occurrence does not repeat the observations its first row carries.
 	if n := strings.Count(md, `"cables": no code`); n != 1 {
 		t.Errorf("uncoded repeat listed %d times in the no-code section, want 1", n)
 	}
@@ -66,7 +75,7 @@ func TestMarkdownReportHasASectionForEveryIssueClass(t *testing.T) {
 func TestMarkdownReportSaysWhenThereAreNoIssues(t *testing.T) {
 	p := parseSynthetic(t, Options{}, assetsSheet([]any{nil, "ISK-A-001", "uno", "herramientas", "funcional", "disponible"}))
 	md := RenderMarkdown(p, nil)
-	for _, want := range []string{"No repeated blocks found.", "No code conflicts.", "No inconsistencies.", "No suspicious values."} {
+	for _, want := range []string{"- Third or later occurrences (issues, skipped): 0", "No code conflicts.", "No inconsistencies.", "No suspicious values."} {
 		if !strings.Contains(md, want) {
 			t.Errorf("report misses %q", want)
 		}

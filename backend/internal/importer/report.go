@@ -45,7 +45,7 @@ func modeName(r *Result) string {
 
 // sheetStats are the per-sheet counters of the summary table.
 type sheetStats struct {
-	rows, assets, consumables, create, dup, conflict, invalid, already int
+	rows, assets, consumables, create, stockRows, conflict, invalid, already int
 }
 
 func statsFor(plan *Plan, sheet string) sheetStats {
@@ -58,8 +58,8 @@ func statsFor(plan *Plan, sheet string) sheetStats {
 		switch it.Action {
 		case ActionCreate, ActionCreated:
 			s.create++
-		case ActionSkipDuplicate:
-			s.dup++
+		case ActionStockRow:
+			s.stockRows++
 		case ActionSkipConflict:
 			s.conflict++
 		case ActionSkipInvalid:
@@ -88,12 +88,14 @@ func RenderMarkdown(plan *Plan, result *Result) string {
 	fmt.Fprintf(&b, "# %s\n\n", title)
 	fmt.Fprintf(&b, "- Workbook: `%s`\n", filepath.Base(plan.File))
 	fmt.Fprintf(&b, "- Time zone for dates: `%s` (dates become midnight of that day)\n", plan.Timezone)
+	b.WriteString("\n> **Assumption to confirm (sheets 1 and 3).** The workbook does not say where the items of \"Activos y Disponibles\" and \"Inactivos y Reparación\" are kept. ")
 	if plan.DefaultLocation == "" {
-		b.WriteString("- **Default location for sheets 1 and 3: none** (those items get no location)\n")
+		b.WriteString("They get **no location** (`--default-location` is empty). Pass `--default-location <name>` to place them.\n\n")
 	} else {
-		fmt.Fprintf(&b, "- **Default location for sheets 1 and 3: `%s`** (kind storage; change with `--default-location`)\n", plan.DefaultLocation)
+		fmt.Fprintf(&b, "They are placed at **`%s`** (kind storage; `--default-location`, an assumption, not data from the workbook). Change it with `--default-location` before applying; an empty value means no location.\n\n", plan.DefaultLocation)
 	}
-	fmt.Fprintf(&b, "- **Sheet 2 items go to location `%s`** (kind container)\n", LocationCase)
+	fmt.Fprintf(&b, "- **Sheet 2, first block** (first occurrence of each consumable, and its tools) -> location `%s` (kind container; `--first-block-location`)\n", plan.FirstBlockLocation)
+	fmt.Fprintf(&b, "- **Sheet 2, repeated block** (second occurrence of the same consumable) -> a second stock row at location `%s` (kind storage; `--repeat-location`)\n", plan.RepeatLocation)
 	if plan.DatabaseChecked {
 		b.WriteString("- Database consulted read-only: existing codes, categories and locations are taken into account.\n")
 	} else {
@@ -104,15 +106,15 @@ func RenderMarkdown(plan *Plan, result *Result) string {
 	}
 
 	b.WriteString("\n## Totals per sheet\n\n")
-	b.WriteString("| Sheet | Rows read | Assets | Consumables | To create / created | Already imported | Skipped: duplicate | Skipped: conflict | Skipped: invalid |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Sheet | Rows read | Assets | Consumables | To create / created | Already imported | Became a stock row | Skipped: conflict / extra | Skipped: invalid |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	row := func(name string, s sheetStats) {
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d |\n", mdCell(name), s.rows, s.assets, s.consumables, s.create, s.already, s.dup, s.conflict, s.invalid)
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d |\n", mdCell(name), s.rows, s.assets, s.consumables, s.create, s.already, s.stockRows, s.conflict, s.invalid)
 	}
 	for _, sh := range plan.Sheets {
 		row(fmt.Sprintf("%s (header row %d)", sh.Name, sh.HeaderRow), statsFor(plan, sh.Name))
 	}
 	row("**Total**", statsFor(plan, ""))
-	b.WriteString("\nAssets and consumables count the rows that will be created or are already imported.\n")
+	b.WriteString("\nAssets and consumables count the rows that will be created or are already imported. \"Became a stock row\" counts repeat occurrences of a consumable that add a stock row to the item of its first occurrence (they are not items of their own).\n")
 
 	b.WriteString("\n## Categories and locations\n\n")
 	b.WriteString("| Kind | Name | Code prefix / kind | Will be created |\n|---|---|---|---|\n")
@@ -122,6 +124,8 @@ func RenderMarkdown(plan *Plan, result *Result) string {
 	for _, l := range plan.Locations {
 		fmt.Fprintf(&b, "| location | %s | %s | %s |\n", mdCell(l.Name), l.Kind, existsText(l.Exists, plan.DatabaseChecked))
 	}
+
+	renderStockSplit(&b, plan)
 
 	b.WriteString("\n## Items\n\n")
 	b.WriteString("| Sheet | Row | Code | Description | Kind | Category | Status | Stock | Location | Action | Notes / flags |\n|---|---:|---|---|---|---|---|---:|---|---|---|\n")
@@ -134,9 +138,20 @@ func RenderMarkdown(plan *Plan, result *Result) string {
 		if it.Kind == "consumable" {
 			stock += " " + it.Unit
 		}
+		loc := it.Location
+		if len(it.Stocks) > 0 {
+			names := make([]string, len(it.Stocks))
+			for i, s := range it.Stocks {
+				names[i] = fmt.Sprintf("%s: %d", s.Location, s.Quantity)
+			}
+			loc = strings.Join(names, " + ")
+		}
+		if it.MergedInto != "" {
+			loc = "stock row of " + it.MergedInto
+		}
 		fmt.Fprintf(&b, "| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			mdCell(shortSheet(it.Sheet)), it.Row, code, mdCell(it.Description), it.Kind, it.Category, it.Status, stock,
-			mdCell(it.Location), it.Action, mdCell(flagSummary(it)))
+			mdCell(loc), it.Action, mdCell(flagSummary(it)))
 	}
 
 	b.WriteString("\n## Issues to review\n")
@@ -177,8 +192,9 @@ func RenderMarkdown(plan *Plan, result *Result) string {
 const checklist = `
 ## Review checklist
 
-- [ ] The default location (and the case location for sheet 2) are the right places for these items.
-- [ ] The probable duplicate block(s) are really accidental copies and may be skipped.
+- [ ] **Assumption:** the default location for sheets 1 and 3 is where those items really are (the workbook does not say).
+- [ ] The first block of sheet 2 is what is in the maleta and the repeated block is what is in the workshop, with the quantities as written (see "Stock split across locations").
+- [ ] Items listed three times, or only in the repeated block, are understood.
 - [ ] Every code conflict is understood; conflicting rows are skipped, never renumbered.
 - [ ] Inconsistencies between Estado and Disponibilidad are resolved or accepted (availability is derived by the system, not imported).
 - [ ] Suspicious values (for example a VACIO on something that is not a cylinder, or a borrowed "prestamo" item) are understood.
@@ -232,6 +248,8 @@ func mdCell(s string) string {
 // issue sections in report order.
 var issueSections = []struct{ class, title, empty string }{
 	{FlagConflict, "Code conflicts", "No code conflicts."},
+	{FlagExtraOccurrence, "Third or later occurrences of a consumable (skipped, not merged)", "None."},
+	{FlagNeedsStock, "Stock rows to add to items already in the database", "None."},
 	{FlagInconsistency, "Inconsistencies between Estado and Disponibilidad", "No inconsistencies."},
 	{FlagSuspicious, "Suspicious values", "No suspicious values."},
 	{FlagNoFailureRecord, "Inoperative items without a failure record", "None."},
@@ -243,14 +261,6 @@ var issueSections = []struct{ class, title, empty string }{
 }
 
 func renderIssues(b *strings.Builder, plan *Plan) {
-	b.WriteString("\n### Probable duplicate blocks (skipped)\n\n")
-	if len(plan.Duplicates) == 0 {
-		b.WriteString("No repeated blocks found.\n")
-	}
-	for _, d := range plan.Duplicates {
-		fmt.Fprintf(b, "- Sheet \"%s\": rows %d-%d (%d items) exactly repeat rows %d-%d (same code, description and quantity). They look like an accidental paste and are **skipped**; confirm that they are not real second units.\n",
-			d.Sheet, d.FirstRow, d.LastRow, d.Items, d.OfFirstRow, d.OfLastRow)
-	}
 	for _, sec := range issueSections {
 		fmt.Fprintf(b, "\n### %s\n\n", sec.title)
 		if sec.class == FlagCategoryNormalized {
@@ -306,7 +316,8 @@ func renderResult(b *strings.Builder, r *Result) {
 	b.WriteString("\n## Apply result\n\n")
 	fmt.Fprintf(b, "- Categories created: %d\n- Locations created: %d\n", r.CategoriesCreated, r.LocationsCreated)
 	fmt.Fprintf(b, "- Items created: %d (assets %d, consumables %d)\n", r.ItemsCreated, r.AssetsCreated, r.ConsumablesCreated)
-	fmt.Fprintf(b, "- Opening movements recorded: %d\n", r.OpeningMovements)
+	fmt.Fprintf(b, "- Opening movements recorded: %d (items with two stock rows: %d)\n", r.OpeningMovements, r.SplitItems)
+	fmt.Fprintf(b, "- Stock rows added to items already in the database: %d\n", r.StockRowsAdded)
 	fmt.Fprintf(b, "- Maintenance records opened: %d\n", r.MaintenanceOpened)
 	fmt.Fprintf(b, "- Already imported (skipped): %d\n- Conflicts (skipped): %d\n", r.AlreadyImported, r.Conflicts)
 	fmt.Fprintf(b, "- Errors: %d\n", len(r.Errors))
@@ -328,8 +339,117 @@ func renderResult(b *strings.Builder, r *Result) {
 	}
 }
 
-// skippedAsRepeat hides the other observations of a row that is skipped as an
-// exact repeat: its original row already carries them.
+// skippedAsRepeat hides the observations of a repeat occurrence that its first
+// occurrence already carries (no code, normalized category).
 func skippedAsRepeat(it PlannedItem, f Flag) bool {
-	return it.Action == ActionSkipDuplicate && f.Class != FlagDuplicate
+	return it.Action == ActionStockRow && (f.Class == FlagNoCode || f.Class == FlagCategoryNormalized)
+}
+
+// splitStats counts how the consumables are spread over the two blocks.
+type splitStats struct {
+	items, two, onlyFirst, onlySecond, extra int
+}
+
+func (p *Plan) splitStats() splitStats {
+	var s splitStats
+	for _, it := range p.Items {
+		if it.HasFlag(FlagExtraOccurrence) {
+			s.extra++
+		}
+		if it.Kind != "consumable" || len(it.Stocks) == 0 || it.Action == ActionSkipConflict || it.Action == ActionSkipInvalid {
+			continue
+		}
+		s.items++
+		switch {
+		case len(it.Stocks) == 2:
+			s.two++
+		case Fold(it.Stocks[0].Location) == Fold(p.RepeatLocation):
+			s.onlySecond++
+		default:
+			s.onlyFirst++
+		}
+	}
+	return s
+}
+
+// stockAt returns the planned quantity of a consumable at a location and
+// whether it has a stock row there.
+func (it PlannedItem) stockAt(loc string) (int, bool) {
+	for _, r := range it.Stocks {
+		if Fold(r.Location) == Fold(loc) {
+			return r.Quantity, true
+		}
+	}
+	return 0, false
+}
+
+func renderStockSplit(b *strings.Builder, plan *Plan) {
+	st := plan.splitStats()
+	b.WriteString("\n## Stock split across locations\n\n")
+	fmt.Fprintf(b, "The same consumable listed in both blocks of sheet 2 becomes **one item with one stock row per location** (quantities as written, added together in the total). Matching is by legacy code, or by normalized description when there is no code.\n\n")
+	fmt.Fprintf(b, "- Consumable items: %d\n- With two stock rows (%s and %s): %d\n- Only in the first block (%s): %d\n- Only in the repeated block (%s, informational): %d\n- Third or later occurrences (issues, skipped): %d\n\n",
+		st.items, plan.FirstBlockLocation, plan.RepeatLocation, st.two, plan.FirstBlockLocation, st.onlyFirst, plan.RepeatLocation, st.onlySecond, st.extra)
+	if st.items > 0 {
+		fmt.Fprintf(b, "| Code | Description | Qty in %s | Qty in %s | Total | Source rows | Action |\n|---|---|---:|---:|---:|---|---|\n", mdCell(plan.FirstBlockLocation), mdCell(plan.RepeatLocation))
+		for _, it := range plan.Items {
+			if it.Kind != "consumable" || len(it.Stocks) == 0 || it.Action == ActionSkipConflict || it.Action == ActionSkipInvalid {
+				continue
+			}
+			code := it.Code
+			if code == "" {
+				code = "(generated)"
+			}
+			cell := func(loc string) string {
+				if q, ok := it.stockAt(loc); ok {
+					return fmt.Sprint(q)
+				}
+				return "-"
+			}
+			rows := make([]string, len(it.Stocks))
+			for i, r := range it.Stocks {
+				rows[i] = fmt.Sprintf("r%d", r.Row)
+			}
+			fmt.Fprintf(b, "| %s | %s | %s | %s | %d | %s | %s |\n", code, mdCell(it.Description), cell(plan.FirstBlockLocation), cell(plan.RepeatLocation), it.Stock, strings.Join(rows, " + "), it.Action)
+		}
+	}
+	b.WriteString("\n### Stock per location (after the import)\n\n")
+	type tot struct{ assets, items, units int }
+	totals := map[string]*tot{}
+	var order []string
+	get := func(loc string) *tot {
+		k := Fold(loc)
+		if totals[k] == nil {
+			totals[k] = &tot{}
+			order = append(order, loc)
+		}
+		return totals[k]
+	}
+	for _, it := range plan.Items {
+		switch it.Action {
+		case ActionCreate, ActionCreated, ActionAlreadyImported:
+		default:
+			continue
+		}
+		if it.Kind == "consumable" {
+			for _, r := range it.Stocks {
+				if r.Quantity > 0 {
+					t := get(r.Location)
+					t.items++
+					t.units += r.Quantity
+				}
+			}
+		} else if it.Location != "" {
+			get(it.Location).assets++
+		}
+	}
+	if len(order) == 0 {
+		b.WriteString("None.\n")
+		return
+	}
+	sort.Strings(order)
+	b.WriteString("| Location | Assets | Consumable items with stock | Consumable units |\n|---|---:|---:|---:|\n")
+	for _, loc := range order {
+		t := totals[Fold(loc)]
+		fmt.Fprintf(b, "| %s | %d | %d | %d |\n", mdCell(loc), t.assets, t.items, t.units)
+	}
 }

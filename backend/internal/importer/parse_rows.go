@@ -98,7 +98,6 @@ func (p *parseCtx) assetRow(v rowView, c columns) PlannedItem {
 	} else if present && q != 1 {
 		it.flag(FlagSuspicious, "stock cell says %d but assets always have stock 1", q)
 	}
-	it.rawQty = v.get(c.stock)
 
 	state := Fold(v.get(c.state))
 	switch state {
@@ -210,8 +209,7 @@ func (p *parseCtx) caseRow(v rowView, c columns, inConsumables bool) PlannedItem
 	default:
 		it = p.base("", "consumable", CatConsumables)
 	}
-	it.Location = LocationCase
-	it.rawQty = qtyRaw
+	it.Location = p.plan.FirstBlockLocation
 	it, ok := p.checkDescription(it)
 	if !ok {
 		return it

@@ -68,3 +68,22 @@ func TestBadArgumentsAndFatalErrors(t *testing.T) {
 		t.Errorf("corrupt file: exit %d, want 1", code)
 	}
 }
+
+func TestLocationFlagsDefaultsAndValidation(t *testing.T) {
+	code, out, errs := runCLI("--file", workbook(t), "--timezone", "UTC")
+	if code != 0 || !strings.Contains(out, "placed at **`Taller`**") || !strings.Contains(out, "`Maleta y caja de Alejandro` (kind container; `--first-block-location`)") ||
+		!strings.Contains(out, "`Taller` (kind storage; `--repeat-location`)") {
+		t.Fatalf("defaults not reported: code=%d err=%q\n%s", code, errs, out)
+	}
+	code, out, _ = runCLI("--file", workbook(t), "--timezone", "UTC", "--default-location", "Bodega", "--first-block-location", "Maleta", "--repeat-location", "Mesa")
+	if code != 0 || !strings.Contains(out, "placed at **`Bodega`**") || !strings.Contains(out, "`Maleta` (kind container") || !strings.Contains(out, "`Mesa` (kind storage") {
+		t.Fatalf("flags not honored:\n%s", out)
+	}
+	code, out, _ = runCLI("--file", workbook(t), "--default-location", "")
+	if code != 0 || !strings.Contains(out, "**no location**") {
+		t.Fatalf("empty default location:\n%s", out)
+	}
+	if code, _, errs := runCLI("--file", workbook(t), "--first-block-location", "Taller", "--repeat-location", "taller"); code != 2 || !strings.Contains(errs, "must differ") {
+		t.Errorf("equal locations: exit %d %q, want 2", code, errs)
+	}
+}

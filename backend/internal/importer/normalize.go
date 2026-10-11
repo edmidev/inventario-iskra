@@ -21,7 +21,11 @@ const (
 	CatElectrical  = "Electricidad"
 	CatConsumables = "Consumibles"
 
+	// LocationCase is the default location of the first block of sheet 2.
 	LocationCase = "Maleta y caja de Alejandro"
+	// DefaultRepeatLocation is the default location of the repeated block of
+	// sheet 2 (the workshop); the CLI uses it for sheets 1 and 3 as well.
+	DefaultRepeatLocation = "Taller"
 )
 
 // categoryPrefixes are the code prefixes of the categories the importer may

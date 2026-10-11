@@ -17,6 +17,7 @@ import (
 	maintenanceapp "github.com/edgar/inventario/backend/internal/maintenance/app"
 	"github.com/edgar/inventario/backend/internal/platform/httpx"
 	stockpg "github.com/edgar/inventario/backend/internal/stock/adapters/postgres"
+	stockapp "github.com/edgar/inventario/backend/internal/stock/app"
 	stockdomain "github.com/edgar/inventario/backend/internal/stock/domain"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,7 @@ func NewDeps(pool *pgxpool.Pool) importer.Deps {
 	return importer.Deps{
 		Catalog:     catalogapp.NewService(repo.Categories(), repo.Locations(), repo.Items()),
 		Maintenance: maintenanceapp.NewService(maintenancepg.New(pool), nil),
+		Stock:       stockapp.NewService(stockpg.New(pool)),
 		Lookup:      Lookup{pool: pool},
 	}
 }
@@ -67,18 +69,67 @@ func (l Lookup) Find(ctx context.Context, codes, sources []string) (importer.Exi
 		return ex, err
 	}
 	defer rows.Close()
+	var found []importer.ExistingItem
+	var codesOf []string
 	for rows.Next() {
 		var code string
 		var e importer.ExistingItem
 		if err := rows.Scan(&e.ID, &code, &e.Description, &e.ImportSource, &e.Deleted); err != nil {
 			return ex, err
 		}
-		ex.ByCode[code] = e
+		found, codesOf = append(found, e), append(codesOf, code)
+	}
+	if err := rows.Err(); err != nil {
+		return ex, err
+	}
+	rows.Close()
+	locs, err := l.locations(ctx, found)
+	if err != nil {
+		return ex, err
+	}
+	for i, e := range found {
+		e.Locations = locs[e.ID]
+		ex.ByCode[codesOf[i]] = e
 		if e.ImportSource != "" {
 			ex.BySource[e.ImportSource] = e
 		}
 	}
-	return ex, rows.Err()
+	return ex, nil
+}
+
+// locations returns, per item id, the names of the locations where the item
+// has a stock row or ever had a stock movement.
+func (l Lookup) locations(ctx context.Context, items []importer.ExistingItem) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(items) == 0 {
+		return out, nil
+	}
+	ids := make([]string, len(items))
+	for i, e := range items {
+		ids[i] = e.ID
+	}
+	rows, err := l.pool.Query(ctx, `
+		SELECT DISTINCT x.item_id::text, loc.name
+		FROM (
+			SELECT item_id, location_id FROM item_stocks
+			UNION SELECT item_id, location_id FROM stock_movements WHERE location_id IS NOT NULL
+			UNION SELECT item_id, to_location_id FROM stock_movements WHERE to_location_id IS NOT NULL
+			UNION SELECT item_id, from_location_id FROM stock_movements WHERE from_location_id IS NOT NULL
+		) x
+		JOIN locations loc ON loc.id = x.location_id
+		WHERE x.item_id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], name)
+	}
+	return out, rows.Err()
 }
 
 // ResolveActor finds the active admin or operator the import acts as.

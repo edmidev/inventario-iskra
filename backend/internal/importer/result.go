@@ -16,6 +16,8 @@ type Result struct {
 	AssetsCreated      int           `json:"assets_created"`
 	ConsumablesCreated int           `json:"consumables_created"`
 	OpeningMovements   int           `json:"opening_movements"`
+	SplitItems         int           `json:"items_with_two_stock_rows"`
+	StockRowsAdded     int           `json:"stock_rows_added_to_existing"`
 	MaintenanceOpened  int           `json:"maintenance_opened"`
 	AlreadyImported    int           `json:"already_imported"`
 	Conflicts          int           `json:"conflicts"`

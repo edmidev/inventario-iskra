@@ -3,8 +3,9 @@ package importer
 import (
 	"fmt"
 	"sort"
-	"strings"
 	"time"
+
+	catalogdomain "github.com/edgar/inventario/backend/internal/catalog/domain"
 )
 
 // Action is what the importer will do with one workbook row.
@@ -13,7 +14,7 @@ type Action string
 // Row actions.
 const (
 	ActionCreate          Action = "create"
-	ActionSkipDuplicate   Action = "skip_duplicate"
+	ActionStockRow        Action = "stock_row" // repeat occurrence: becomes a stock row of an earlier item
 	ActionSkipConflict    Action = "skip_conflict"
 	ActionSkipInvalid     Action = "skip_invalid"
 	ActionAlreadyImported Action = "already_imported"
@@ -23,7 +24,9 @@ const (
 
 // Flag classes: each one becomes a section of the report.
 const (
-	FlagDuplicate          = "duplicate"
+	FlagExtraOccurrence    = "extra_occurrence"
+	FlagStockSplit         = "stock_split"
+	FlagNeedsStock         = "needs_stock"
 	FlagConflict           = "conflict"
 	FlagInconsistency      = "inconsistency"
 	FlagSuspicious         = "suspicious"
@@ -59,7 +62,10 @@ type PlannedItem struct {
 	Kind              string         `json:"kind"`
 	Category          string         `json:"category"`
 	Status            string         `json:"status"`
-	Stock             int            `json:"stock"`
+	Stock             int            `json:"stock"` // consumables: total over Stocks
+	Stocks            []StockRow     `json:"stocks,omitempty"`
+	MergedInto        string         `json:"merged_into,omitempty"`
+	NeedsStock        []StockRow     `json:"needs_stock,omitempty"`
 	Unit              string         `json:"unit,omitempty"`
 	Location          string         `json:"location,omitempty"`
 	LastMaintenanceAt *time.Time     `json:"last_maintenance_at,omitempty"`
@@ -71,8 +77,17 @@ type PlannedItem struct {
 
 	existingID string // set when the row was matched with an item in the database
 	sheetRole  sheetRole
-	rawQty     string // for exact-repeat detection
-	seq        int    // position among the sheet's data rows
+	seq        int // position among the sheet's data rows
+	owner      int // for ActionStockRow: index in Plan.Items of the item it feeds
+}
+
+// StockRow is the quantity of a consumable at one location and the workbook
+// row it was read from.
+type StockRow struct {
+	Location string `json:"location"`
+	Quantity int    `json:"quantity"`
+	Sheet    string `json:"sheet"`
+	Row      int    `json:"row"`
 }
 
 // Ref is a short "sheet row N" reference used in messages.
@@ -93,17 +108,6 @@ func (p PlannedItem) HasFlag(class string) bool {
 		}
 	}
 	return false
-}
-
-// DuplicateBlock is a run of rows that exactly repeats an earlier run of the
-// same sheet. They are skipped and listed for the user to confirm.
-type DuplicateBlock struct {
-	Sheet      string `json:"sheet"`
-	FirstRow   int    `json:"first_row"`
-	LastRow    int    `json:"last_row"`
-	OfFirstRow int    `json:"of_first_row"`
-	OfLastRow  int    `json:"of_last_row"`
-	Items      int    `json:"items"`
 }
 
 // PlannedCategory is a category the import needs. Exists is nil until the
@@ -131,16 +135,17 @@ type SheetSummary struct {
 
 // Plan is the full, reviewable outcome of reading the workbook.
 type Plan struct {
-	File            string            `json:"file"`
-	Timezone        string            `json:"timezone"`
-	DefaultLocation string            `json:"default_location"`
-	Sheets          []SheetSummary    `json:"sheets"`
-	Items           []PlannedItem     `json:"items"`
-	Duplicates      []DuplicateBlock  `json:"duplicate_blocks,omitempty"`
-	Categories      []PlannedCategory `json:"categories"`
-	Locations       []PlannedLocation `json:"locations"`
-	Warnings        []string          `json:"warnings,omitempty"`
-	DatabaseChecked bool              `json:"database_checked"`
+	File               string            `json:"file"`
+	Timezone           string            `json:"timezone"`
+	DefaultLocation    string            `json:"default_location"`
+	FirstBlockLocation string            `json:"first_block_location"`
+	RepeatLocation     string            `json:"repeat_location"`
+	Sheets             []SheetSummary    `json:"sheets"`
+	Items              []PlannedItem     `json:"items"`
+	Categories         []PlannedCategory `json:"categories"`
+	Locations          []PlannedLocation `json:"locations"`
+	Warnings           []string          `json:"warnings,omitempty"`
+	DatabaseChecked    bool              `json:"database_checked"`
 }
 
 // Options tune parsing.
@@ -148,6 +153,10 @@ type Options struct {
 	// DefaultLocation names the storage location of sheet 1 and 3 items; empty
 	// means those items get no location.
 	DefaultLocation string
+	// FirstBlockLocation is where the first occurrence of every sheet 2 item
+	// lives (default LocationCase); RepeatLocation is where the second
+	// occurrence lives (default DefaultRepeatLocation). They must differ.
+	FirstBlockLocation, RepeatLocation string
 	// Location is the time zone used to turn dates into timestamps; nil means
 	// time.Local.
 	Location *time.Location
@@ -177,7 +186,17 @@ func buildPlan(sheets []rawSheet, opts Options) (*Plan, error) {
 		abbr, _ := time.Now().In(loc).Zone()
 		tz = "Local (" + abbr + ")"
 	}
-	plan := &Plan{Timezone: tz, DefaultLocation: Clean(opts.DefaultLocation)}
+	plan := &Plan{Timezone: tz, DefaultLocation: Clean(opts.DefaultLocation),
+		FirstBlockLocation: Clean(opts.FirstBlockLocation), RepeatLocation: Clean(opts.RepeatLocation)}
+	if plan.FirstBlockLocation == "" {
+		plan.FirstBlockLocation = LocationCase
+	}
+	if plan.RepeatLocation == "" {
+		plan.RepeatLocation = DefaultRepeatLocation
+	}
+	if Fold(plan.FirstBlockLocation) == Fold(plan.RepeatLocation) {
+		return nil, fmt.Errorf("the first-block and repeat locations must differ (both are %q)", plan.FirstBlockLocation)
+	}
 	ctx := &parseCtx{plan: plan, loc: loc}
 	found := map[sheetRole]bool{}
 	for _, s := range sheets {
@@ -208,55 +227,11 @@ func buildPlan(sheets []rawSheet, opts Options) (*Plan, error) {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf("expected a %s worksheet but none was found", r))
 		}
 	}
-	markDuplicates(plan)
+	groupConsumables(plan)
 	markCodeConflicts(plan)
+	propagateOwnerSkips(plan)
 	collectNeeds(plan)
 	return plan, nil
-}
-
-// markDuplicates flags rows that exactly repeat an earlier row of the same
-// sheet (same code, description and quantity) and groups consecutive ones
-// into blocks.
-func markDuplicates(plan *Plan) {
-	type orig struct{ row, seq int }
-	seen := map[string]orig{}
-	type dup struct {
-		it   *PlannedItem
-		orig orig
-	}
-	var dups []dup
-	for i := range plan.Items {
-		it := &plan.Items[i]
-		if it.Action != ActionCreate {
-			continue
-		}
-		key := strings.Join([]string{it.Sheet, it.Code, Fold(it.Description), it.rawQty}, "|")
-		if o, ok := seen[key]; ok {
-			it.Action = ActionSkipDuplicate
-			it.flag(FlagDuplicate, "exact repeat of row %d (same code, description and quantity); skipped", o.row)
-			dups = append(dups, dup{it, o})
-			continue
-		}
-		seen[key] = orig{it.Row, it.seq}
-	}
-	var cur *DuplicateBlock
-	var lastSeq, lastOrigSeq int
-	for _, d := range dups {
-		if cur != nil && cur.Sheet == d.it.Sheet && d.it.seq == lastSeq+1 && d.orig.seq == lastOrigSeq+1 {
-			cur.LastRow, cur.OfLastRow = d.it.Row, d.orig.row
-			cur.Items++
-		} else {
-			if cur != nil {
-				plan.Duplicates = append(plan.Duplicates, *cur)
-			}
-			cur = &DuplicateBlock{Sheet: d.it.Sheet, FirstRow: d.it.Row, LastRow: d.it.Row,
-				OfFirstRow: d.orig.row, OfLastRow: d.orig.row, Items: 1}
-		}
-		lastSeq, lastOrigSeq = d.it.seq, d.orig.seq
-	}
-	if cur != nil {
-		plan.Duplicates = append(plan.Duplicates, *cur)
-	}
 }
 
 // markCodeConflicts keeps the first row of every legacy code and marks later
@@ -277,15 +252,25 @@ func markCodeConflicts(plan *Plan) {
 	}
 }
 
-// collectNeeds lists the categories and locations the rows to create need.
+// collectNeeds lists the categories and locations the rows to create need,
+// plus the locations of stock rows still to be added to existing items.
 func collectNeeds(plan *Plan) {
 	cats, locs := map[string]bool{}, map[string]bool{}
 	for _, it := range plan.Items {
+		for _, r := range it.NeedsStock {
+			locs[r.Location] = true
+		}
 		if it.Action != ActionCreate {
 			continue
 		}
 		cats[it.Category] = true
-		if it.Location != "" {
+		if it.Kind == "consumable" {
+			for _, r := range it.Stocks {
+				if r.Quantity > 0 {
+					locs[r.Location] = true
+				}
+			}
+		} else if it.Location != "" {
 			locs[it.Location] = true
 		}
 	}
@@ -302,12 +287,17 @@ func collectNeeds(plan *Plan) {
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		kind := "storage"
-		if n == LocationCase {
-			kind = "container"
-		}
-		plan.Locations = append(plan.Locations, PlannedLocation{Name: n, Kind: kind})
+		plan.Locations = append(plan.Locations, PlannedLocation{Name: n, Kind: string(plan.locationKind(n))})
 	}
+}
+
+// locationKind is container for the first-block location (the maleta) and
+// storage for every other location.
+func (p *Plan) locationKind(name string) catalogdomain.LocationKind {
+	if Fold(name) == Fold(p.FirstBlockLocation) {
+		return catalogdomain.LocationContainer
+	}
+	return catalogdomain.LocationStorage
 }
 
 // Count returns how many rows have the given action.

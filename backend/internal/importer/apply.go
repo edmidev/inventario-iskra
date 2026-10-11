@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	catalogapp "github.com/edgar/inventario/backend/internal/catalog/app"
 	catalogdomain "github.com/edgar/inventario/backend/internal/catalog/domain"
 	maintdomain "github.com/edgar/inventario/backend/internal/maintenance/domain"
 	"github.com/edgar/inventario/backend/internal/platform/httpx"
+	stockapp "github.com/edgar/inventario/backend/internal/stock/app"
+	stockdomain "github.com/edgar/inventario/backend/internal/stock/domain"
 )
 
 // Catalog is the part of the catalog service the importer uses.
@@ -28,12 +29,22 @@ type Maintenance interface {
 	List(ctx context.Context, f maintdomain.ListFilter, limit, offset int) ([]maintdomain.Record, int, maintdomain.Page, error)
 }
 
+// Stock is the part of the stock service the importer uses to add a stock row
+// to an item that was imported earlier.
+type Stock interface {
+	Record(ctx context.Context, itemID, userID string, req stockdomain.Request) (stockapp.Result, error)
+}
+
 // ExistingItem is an item already in the database.
 type ExistingItem struct {
 	ID           string
 	Description  string
 	ImportSource string
 	Deleted      bool
+	// Locations are the names of the locations where the item has (or ever
+	// had) stock: a stock row or a movement. A planned stock row at one of
+	// them is never added again, so consumed stock is not resurrected.
+	Locations []string
 }
 
 // Existing is what the database already holds for the codes and import
@@ -53,6 +64,7 @@ type Lookup interface {
 type Deps struct {
 	Catalog     Catalog
 	Maintenance Maintenance
+	Stock       Stock
 	Lookup      Lookup
 }
 
@@ -111,6 +123,8 @@ func (p *Plan) Reconcile(ex Existing, cats []catalogdomain.Category, locs []cata
 				it.Action, it.existingID = ActionAlreadyImported, e.ID
 				if e.Deleted {
 					it.flag(FlagSuspicious, "already imported but the item was deleted since; left deleted")
+				} else {
+					it.needStockRows(e)
 				}
 			default:
 				it.Action = ActionSkipConflict
@@ -120,8 +134,12 @@ func (p *Plan) Reconcile(ex Existing, cats []catalogdomain.Category, locs []cata
 		}
 		if e, ok := ex.BySource[it.ImportSource()]; ok {
 			it.Action, it.existingID = ActionAlreadyImported, e.ID
+			if !e.Deleted {
+				it.needStockRows(e)
+			}
 		}
 	}
+	propagateOwnerSkips(p)
 	collectNeeds(p)
 	have := map[string]bool{}
 	for _, c := range cats {
@@ -138,6 +156,26 @@ func (p *Plan) Reconcile(ex Existing, cats []catalogdomain.Category, locs []cata
 	for i := range p.Locations {
 		v := haveLoc[Fold(p.Locations[i].Name)]
 		p.Locations[i].Exists = &v
+	}
+}
+
+// needStockRows records the planned stock rows of an already-imported
+// consumable at locations where the item never had stock, so Apply can add
+// them (the item was imported before its second occurrence was understood).
+func (p *PlannedItem) needStockRows(e ExistingItem) {
+	if p.Kind != "consumable" {
+		return
+	}
+	have := map[string]bool{}
+	for _, l := range e.Locations {
+		have[Fold(l)] = true
+	}
+	p.NeedsStock = nil
+	for _, r := range p.Stocks {
+		if r.Quantity > 0 && !have[Fold(r.Location)] {
+			p.NeedsStock = append(p.NeedsStock, r)
+			p.flag(FlagNeedsStock, "needs stock row at %s (%d units from %s r%d); it will be added as an in movement", r.Location, r.Quantity, r.Sheet, r.Row)
+		}
 	}
 }
 
@@ -179,6 +217,9 @@ func Apply(ctx context.Context, plan *Plan, d Deps, actor Actor) (*Result, error
 		switch it.Action {
 		case ActionAlreadyImported:
 			res.AlreadyImported++
+			if err := addMissingStock(ctx, d, actor, *it, res); err != nil {
+				res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", it.Ref(), err))
+			}
 			if it.Failure != nil && it.existingID != "" {
 				if err := ensureFailure(ctx, d, actor, *it, it.existingID, res); err != nil {
 					res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", it.Ref(), err))
@@ -243,26 +284,16 @@ func ensureLocations(ctx context.Context, plan *Plan, c Catalog, res *Result) (m
 	for _, e := range existing {
 		ids[Fold(e.Name)] = e.ID
 	}
-	set := map[string]bool{}
-	for _, it := range plan.Items {
-		if it.Action == ActionCreate && it.Location != "" {
-			set[it.Location] = true
-		}
+	collectNeeds(plan)
+	names := make([]string, 0, len(plan.Locations))
+	for _, l := range plan.Locations {
+		names = append(names, l.Name)
 	}
-	names := make([]string, 0, len(set))
-	for n := range set {
-		names = append(names, n)
-	}
-	sort.Strings(names)
 	for _, n := range names {
 		if _, ok := ids[Fold(n)]; ok {
 			continue
 		}
-		kind := catalogdomain.LocationStorage
-		if n == LocationCase {
-			kind = catalogdomain.LocationContainer
-		}
-		loc, err := c.CreateLocation(ctx, n, kind, nil)
+		loc, err := c.CreateLocation(ctx, n, plan.locationKind(n), nil)
 		if err != nil {
 			return nil, fmt.Errorf("create location %q: %w", n, err)
 		}
@@ -286,13 +317,18 @@ func createRow(ctx context.Context, d Deps, actor Actor, it *PlannedItem, catIDs
 		Attributes:        it.Attributes,
 		Notes:             it.Notes,
 	}}
-	if it.Location != "" {
+	if it.Kind == string(catalogdomain.KindConsumable) {
+		unit := it.Unit
+		in.Unit = &unit
+		in.Stocks = []catalogdomain.StockInput{}
+		for _, r := range it.Stocks {
+			if r.Quantity > 0 {
+				in.Stocks = append(in.Stocks, catalogdomain.StockInput{LocationID: locIDs[Fold(r.Location)], Quantity: r.Quantity})
+			}
+		}
+	} else if it.Location != "" {
 		id := locIDs[Fold(it.Location)]
 		in.LocationID = &id
-	}
-	if it.Kind == string(catalogdomain.KindConsumable) {
-		unit, stock := it.Unit, it.Stock
-		in.Unit, in.StockCurrent = &unit, &stock
 	}
 	created, err := d.Catalog.CreateItem(ctx, in)
 	if err != nil {
@@ -311,8 +347,9 @@ func createRow(ctx context.Context, d Deps, actor Actor, it *PlannedItem, catIDs
 		res.AssetsCreated++
 	} else {
 		res.ConsumablesCreated++
-		if created.StockCurrent > 0 {
-			res.OpeningMovements++
+		res.OpeningMovements += len(created.Stocks)
+		if len(created.Stocks) > 1 {
+			res.SplitItems++
 		}
 	}
 	res.Created = append(res.Created, CreatedItem{Sheet: it.Sheet, Row: it.Row, Code: created.Code, Generated: it.Code == ""})
@@ -321,6 +358,42 @@ func createRow(ctx context.Context, d Deps, actor Actor, it *PlannedItem, catIDs
 			res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): item created but its failure record was not: %v", it.Ref(), created.Code, err))
 		}
 	}
+}
+
+// addMissingStock adds the stock rows an already-imported consumable lacks
+// through the stock service, as in movements at their location.
+func addMissingStock(ctx context.Context, d Deps, actor Actor, it PlannedItem, res *Result) error {
+	for _, r := range it.NeedsStock {
+		if d.Stock == nil {
+			return errors.New("no stock service to add the missing stock row")
+		}
+		loc, ok := locationIDFrom(ctx, d, r.Location)
+		if !ok {
+			return fmt.Errorf("location %q not found for its stock row", r.Location)
+		}
+		_, err := d.Stock.Record(ctx, it.existingID, actor.UserID, stockdomain.Request{
+			Type: stockdomain.TypeIn, Qty: r.Quantity, LocationID: &loc,
+			Note: fmt.Sprintf("Excel import: %s r%d", r.Sheet, r.Row),
+		})
+		if err != nil {
+			return fmt.Errorf("add %d units at %s: %w", r.Quantity, r.Location, err)
+		}
+		res.StockRowsAdded++
+	}
+	return nil
+}
+
+func locationIDFrom(ctx context.Context, d Deps, name string) (int64, bool) {
+	locs, err := d.Catalog.ListLocations(ctx)
+	if err != nil {
+		return 0, false
+	}
+	for _, l := range locs {
+		if Fold(l.Name) == Fold(name) {
+			return l.ID, true
+		}
+	}
+	return 0, false
 }
 
 // ensureFailure opens the failure record of an already-imported item only if
