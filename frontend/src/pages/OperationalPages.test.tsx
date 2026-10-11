@@ -2,15 +2,24 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
-import { assignment, dueMaintenance, maintenanceRecord, page, stockAlert, summary } from "../test/fixtures";
+import { assignment, dueMaintenance, maintenanceRecord, page, stock, stockAlert, summary } from "../test/fixtures";
 import { api, errorBody, renderApp, useAuthenticatedApi } from "../test/render";
 import { server } from "../test/server";
 
 describe("stock alerts page", () => {
   const alerts = [
-    stockAlert({ item_id: "a1", code: "ISK-CON-001", stock_current: 0, shortage: -5 }),
-    stockAlert({ item_id: "a2", code: "ISK-CON-002", description: "Cinta", stock_current: 3, shortage: -2 }),
-    stockAlert({ item_id: "a3", code: "ISK-CON-003", description: "Tornillos", stock_current: 5, shortage: 0 }),
+    stockAlert({ item_id: "a1", code: "ISK-CON-001", stock_current: 0, shortage: -5, location_id: null, location_name: null, stocks: [] }),
+    stockAlert({ item_id: "a2", code: "ISK-CON-002", description: "Cinta", stock_current: 3, shortage: -2, stocks: [stock(10, 3)] }),
+    stockAlert({
+      item_id: "a3",
+      code: "ISK-CON-003",
+      description: "Tornillos",
+      stock_current: 5,
+      shortage: 0,
+      location_id: null,
+      location_name: null,
+      stocks: [stock(10, 2), stock(11, 3)],
+    }),
   ];
 
   it("lists alerts with severity and restocks with one sheet", async () => {
@@ -29,7 +38,7 @@ describe("stock alerts page", () => {
     const user = userEvent.setup();
     renderApp("/stock-bajo");
     const list = await screen.findByRole("list", { name: "Consumibles con stock bajo" });
-    const rows = within(list).getAllByRole("listitem");
+    const rows = within(list).getAllByRole("listitem").filter((row) => row.parentElement === list);
     expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("Agotado");
     expect(rows[1]).toHaveTextContent("Bajo el mínimo");
@@ -40,8 +49,49 @@ describe("stock alerts page", () => {
     const dialog = await screen.findByRole("dialog", { name: "Entrada de existencias" });
     await user.click(within(dialog).getByRole("button", { name: "10" }));
     await user.click(within(dialog).getByRole("button", { name: "Registrar entrada" }));
-    expect(await screen.findByText(/Entrada registrada. Existencias: 13 caja/)).toBeInTheDocument();
-    expect(body).toEqual({ type: "in", qty: 10 });
+    expect(await screen.findByText(/Entrada registrada en Bodega. Existencias: 13 caja/)).toBeInTheDocument();
+    expect(body).toEqual({ type: "in", location_id: 10, qty: 10 });
+  });
+
+  it("shows the per-location breakdown of each alert", async () => {
+    useAuthenticatedApi("viewer");
+    server.use(http.get(api("/stock/alerts"), () => HttpResponse.json(page(alerts))));
+    renderApp("/stock-bajo");
+    const list = await screen.findByRole("list", { name: "Consumibles con stock bajo" });
+    const rows = within(list).getAllByRole("listitem").filter((row) => row.parentElement === list);
+    expect(rows).toHaveLength(3);
+    expect(within(rows[0]).queryByRole("list", { name: "Existencias por ubicación" })).not.toBeInTheDocument();
+    expect(within(rows[1]).getByRole("list", { name: "Existencias por ubicación" })).toHaveTextContent("Bodega 3 caja");
+    const split = within(rows[2]).getByRole("list", { name: "Existencias por ubicación" });
+    expect(split).toHaveTextContent("Bodega 2 caja");
+    expect(split).toHaveTextContent("Estante A 3 caja");
+  });
+
+  it("asks for the location when restocking an item held in several places", async () => {
+    useAuthenticatedApi("operator");
+    let body: unknown;
+    server.use(
+      http.get(api("/stock/alerts"), () => HttpResponse.json(page(alerts))),
+      http.post(api("/items/a3/movements"), async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(
+          { movement: { id: 2, item_id: "a3", type: "in", qty: 4, stock_before: 5, stock_after: 9, location_id: 11, moved_qty: 0, from_location_id: null, to_location_id: null, user_id: null, user_name: null, note: "", created_at: "2026-10-10T00:00:00Z" }, stock_current: 9, location_id: null, stocks: [stock(10, 2), stock(11, 7)] },
+          { status: 201 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/stock-bajo");
+    await user.click(await screen.findByRole("button", { name: "Entrada de ISK-CON-003" }));
+    const dialog = await screen.findByRole("dialog", { name: "Entrada de existencias" });
+    expect(within(dialog).getByRole("combobox", { name: /Ubicación/ })).toHaveTextContent("Elige una ubicación");
+    await user.click(within(dialog).getByRole("combobox", { name: /Ubicación/ }));
+    await user.click(screen.getByRole("option", { name: /Estante A/ }));
+    await user.clear(within(dialog).getByLabelText(/Cantidad que entra/));
+    await user.type(within(dialog).getByLabelText(/Cantidad que entra/), "4");
+    await user.click(within(dialog).getByRole("button", { name: "Registrar entrada" }));
+    expect(await screen.findByText(/Entrada registrada en Bodega › Estante A. Existencias: 9 caja/)).toBeInTheDocument();
+    expect(body).toEqual({ type: "in", location_id: 11, qty: 4 });
   });
 
   it("is read-only for viewers and shows an empty state", async () => {

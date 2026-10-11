@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Badge } from "../components/atoms/Badge";
 import { Button } from "../components/atoms/Button";
 import { Icon } from "../components/atoms/Icon";
+import { StockChips } from "../components/molecules/StockChips";
 import { OpsRow } from "../components/molecules/OpsRow";
 import { PagedList } from "../components/molecules/PagedList";
 import { usePermissions } from "../features/auth/session";
@@ -72,6 +73,7 @@ export function StockAlertsPage() {
                       unit: alert.unit,
                       stock_current: alert.stock_current,
                       stock_min: alert.stock_min,
+                      stocks: alert.stocks,
                     })
                   }
                 >
@@ -80,7 +82,7 @@ export function StockAlertsPage() {
               )
             }
           >
-            {alert.location_name && <span>{alert.location_name}</span>}
+            <StockChips stocks={alert.stocks} unit={alert.unit} />
           </OpsRow>
         ))}
       </PagedList>

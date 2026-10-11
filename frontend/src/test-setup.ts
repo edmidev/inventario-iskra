@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, configure } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll } from "vitest";
+import { forgetRememberedLocations } from "./features/stock/stocks";
 import { tokenStore } from "./lib/api/session-store";
 import { server } from "./test/server";
 
@@ -24,5 +25,6 @@ afterEach(() => {
   cleanup();
   server.resetHandlers();
   tokenStore.set(null);
+  forgetRememberedLocations();
 });
 afterAll(() => server.close());

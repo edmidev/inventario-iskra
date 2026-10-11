@@ -19,6 +19,10 @@ export function useStockAlerts() {
 export interface MovementPayload {
   type: "in" | "out" | "adjust" | "transfer";
   qty?: number;
+  /** Consumable in/out/adjust: where it applies. */
+  location_id?: number;
+  /** Consumable transfer: where the quantity leaves from. */
+  from_location_id?: number;
   to_location_id?: number;
   note?: string;
 }
