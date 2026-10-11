@@ -48,8 +48,10 @@ export interface ItemCreatePayload {
   kind: "asset" | "consumable";
   status?: "functional" | "inoperative" | "in_repair";
   unit?: string;
-  stock_current?: number;
+  /** Consumables: opening balance per location (multi-location form). */
+  stocks?: { location_id: number; quantity: number }[];
   stock_min?: number;
+  /** An asset's location. */
   location_id?: number | null;
   maintenance_interval_days?: number | null;
   attributes?: Record<string, unknown>;

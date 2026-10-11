@@ -6,6 +6,7 @@ import { Icon } from "../atoms/Icon";
 import { Input, Textarea } from "../atoms/Input";
 import { ControlledSelect } from "../molecules/ControlledSelect";
 import { FieldGroup, FormField } from "../molecules/FormField";
+import { OpeningStockEditor } from "./OpeningStockEditor";
 import { locationPath } from "../../features/catalog/locationPath";
 import {
   formFieldNames,
@@ -93,15 +94,17 @@ export function ItemForm({ mode, initialValues, categories, locations, isAdmin, 
         options={categories.map((c) => ({ value: String(c.id), label: c.name }))}
       />
 
-      <ControlledSelect
-        control={control}
-        name="location_id"
-        label="Ubicación"
-        error={errors.location_id?.message}
-        placeholder="Sin ubicación"
-        clearLabel="Sin ubicación"
-        options={locations.map((l) => ({ value: String(l.id), label: locationPath(locations, l.id) ?? l.name }))}
-      />
+      {kind === "asset" && (
+        <ControlledSelect
+          control={control}
+          name="location_id"
+          label="Ubicación"
+          error={errors.location_id?.message}
+          placeholder="Sin ubicación"
+          clearLabel="Sin ubicación"
+          options={locations.map((l) => ({ value: String(l.id), label: locationPath(locations, l.id) ?? l.name }))}
+        />
+      )}
 
       {mode === "edit" && (
         <ControlledSelect
@@ -119,16 +122,16 @@ export function ItemForm({ mode, initialValues, categories, locations, isAdmin, 
           <FormField label="Unidad" required error={errors.unit?.message}>
             <Input placeholder="pza, caja, litro…" {...register("unit")} />
           </FormField>
-          <div className="grid grid-cols-2 gap-3">
-            {mode === "create" && (
-              <FormField label="Existencias iniciales" error={errors.stock_current?.message}>
-                <Input type="number" inputMode="numeric" min={0} {...register("stock_current")} />
-              </FormField>
-            )}
-            <FormField label="Stock mínimo" error={errors.stock_min?.message}>
-              <Input type="number" inputMode="numeric" min={0} {...register("stock_min")} />
-            </FormField>
-          </div>
+          <FormField label="Stock mínimo" hint="Se compara con el total de todas las ubicaciones." error={errors.stock_min?.message}>
+            <Input type="number" inputMode="numeric" min={0} {...register("stock_min")} />
+          </FormField>
+          {mode === "create" ? (
+            <OpeningStockEditor control={control} register={register} errors={errors} locations={locations} />
+          ) : (
+            <p className="rounded-xl bg-sunken px-4 py-3 text-sm text-ink-soft">
+              Las existencias y su ubicación se cambian con entradas, salidas, ajustes y traslados desde el detalle del material.
+            </p>
+          )}
         </>
       ) : (
         <FormField

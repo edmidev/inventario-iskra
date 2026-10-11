@@ -7,15 +7,22 @@ export interface AttributeRow {
   value: string;
 }
 
+export interface StockRow {
+  location_id: string;
+  quantity: string;
+}
+
 export interface ItemFormValues {
   kind: "asset" | "consumable";
   code: string;
   description: string;
   category_id: string;
+  /** An asset's location; consumables are stocked per location (see `stocks`). */
   location_id: string;
   status: "functional" | "inoperative" | "in_repair";
   unit: string;
-  stock_current: string;
+  /** Opening balance of a new consumable, one row per location. */
+  stocks: StockRow[];
   stock_min: string;
   maintenance_interval_days: string;
   notes: string;
@@ -30,7 +37,9 @@ export const formFieldNames = [
   "location_id",
   "status",
   "unit",
-  "stock_current",
+  "stocks",
+  "stocks.*.location_id",
+  "stocks.*.quantity",
   "stock_min",
   "maintenance_interval_days",
   "notes",
@@ -53,7 +62,7 @@ export const itemFormSchema = z
     location_id: z.string(),
     status: z.enum(["functional", "inoperative", "in_repair"]),
     unit: z.string().trim().max(30, "Máximo 30 caracteres."),
-    stock_current: z.string().refine(wholeNumber(0), "Usa un número entero mayor o igual a 0."),
+    stocks: z.array(z.object({ location_id: z.string(), quantity: z.string() })),
     stock_min: z.string().refine(wholeNumber(0), "Usa un número entero mayor o igual a 0."),
     maintenance_interval_days: z.string().refine(wholeNumber(1, 3650), "Usa un número de días entre 1 y 3650."),
     notes: z.string().max(4000, "Máximo 4000 caracteres."),
@@ -62,6 +71,20 @@ export const itemFormSchema = z
   .superRefine((values, ctx) => {
     if (values.kind === "consumable" && values.unit.trim() === "") {
       ctx.addIssue({ code: "custom", path: ["unit"], message: "Indica la unidad (por ejemplo: pza, caja)." });
+    }
+    if (values.kind === "consumable") {
+      const seen = new Set<string>();
+      values.stocks.forEach((row, index) => {
+        if (row.location_id === "") {
+          ctx.addIssue({ code: "custom", path: ["stocks", index, "location_id"], message: "Elige la ubicación." });
+        } else if (seen.has(row.location_id)) {
+          ctx.addIssue({ code: "custom", path: ["stocks", index, "location_id"], message: "Esa ubicación ya está en la lista." });
+        }
+        seen.add(row.location_id);
+        if (!/^\d+$/.test(row.quantity.trim()) || Number(row.quantity) < 1) {
+          ctx.addIssue({ code: "custom", path: ["stocks", index, "quantity"], message: "Indica un entero mayor a 0." });
+        }
+      });
     }
     const keys = values.attributes.map((row) => row.key.trim()).filter(Boolean);
     if (new Set(keys.map((k) => k.toLowerCase())).size !== keys.length) {
@@ -80,7 +103,7 @@ export const emptyItemForm: ItemFormValues = {
   location_id: "",
   status: "functional",
   unit: "",
-  stock_current: "0",
+  stocks: [],
   stock_min: "0",
   maintenance_interval_days: "",
   notes: "",
@@ -102,7 +125,8 @@ export function itemToFormValues(item: Item): ItemFormValues {
     location_id: item.location_id === null ? "" : String(item.location_id),
     status: item.status,
     unit: item.unit ?? "",
-    stock_current: String(item.stock_current),
+    // Existing stock is changed through movements, never through the item form.
+    stocks: [],
     stock_min: String(item.stock_min),
     maintenance_interval_days: item.maintenance_interval_days === null ? "" : String(item.maintenance_interval_days),
     notes: item.notes,
@@ -127,12 +151,14 @@ export function toCreatePayload(values: ItemFormValues, isAdmin: boolean): ItemC
     notes: values.notes,
   };
   if (isAdmin && values.code.trim()) payload.code = values.code.trim().toUpperCase();
-  if (values.location_id) payload.location_id = Number(values.location_id);
+  if (values.kind === "asset" && values.location_id) payload.location_id = Number(values.location_id);
   const attributes = attributesToObject(values.attributes);
   if (Object.keys(attributes).length > 0) payload.attributes = attributes;
   if (values.kind === "consumable") {
     payload.unit = values.unit.trim();
-    payload.stock_current = Number(values.stock_current || "0");
+    if (values.stocks.length > 0) {
+      payload.stocks = values.stocks.map((row) => ({ location_id: Number(row.location_id), quantity: Number(row.quantity) }));
+    }
     payload.stock_min = Number(values.stock_min || "0");
   } else if (values.maintenance_interval_days.trim()) {
     payload.maintenance_interval_days = Number(values.maintenance_interval_days);
@@ -148,7 +174,7 @@ export function toUpdatePayload(values: ItemFormValues, initial: ItemFormValues)
     status: values.status,
     notes: values.notes,
   };
-  if (values.location_id !== initial.location_id) {
+  if (values.kind === "asset" && values.location_id !== initial.location_id) {
     payload.location_id = values.location_id ? Number(values.location_id) : null;
   }
   if (JSON.stringify(attributesToObject(values.attributes)) !== JSON.stringify(attributesToObject(initial.attributes))) {

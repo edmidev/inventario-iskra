@@ -154,6 +154,43 @@ describe("item editing", () => {
     expect(body).not.toHaveProperty("kind");
   });
 
+  it("edits a consumable without a location field and never sends location or stock", async () => {
+    useAuthenticatedApi("operator");
+    const supply = consumable({ stocks: [stock(10, 2), stock(11, 1)] });
+    let body: Record<string, unknown> = {};
+    server.use(
+      http.get(api(`/items/${supply.id}`), () => HttpResponse.json(supply)),
+      http.patch(api(`/items/${supply.id}`), async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...supply, stock_min: 8 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp(`/materiales/${supply.id}`);
+    await user.click(await screen.findByRole("button", { name: /editar/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Editar material" });
+    expect(within(dialog).queryByRole("combobox", { name: /^Ubicación/ })).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Stock inicial por ubicación")).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/se cambian con entradas, salidas, ajustes y traslados/)).toBeInTheDocument();
+    await user.clear(within(dialog).getByLabelText("Stock mínimo"));
+    await user.type(within(dialog).getByLabelText("Stock mínimo"), "8");
+    await user.click(within(dialog).getByRole("button", { name: "Guardar cambios" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(body).toMatchObject({ unit: "caja", stock_min: 8 });
+    for (const key of ["location_id", "stocks", "stock_current"]) expect(body).not.toHaveProperty(key);
+  });
+
+  it("shows the location select when editing an asset", async () => {
+    useAuthenticatedApi("operator");
+    const asset = item();
+    serveItem(asset);
+    const user = userEvent.setup();
+    renderApp(`/materiales/${asset.id}`);
+    await user.click(await screen.findByRole("button", { name: /editar/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Editar material" });
+    expect(within(dialog).getByRole("combobox", { name: /^Ubicación/ })).toBeInTheDocument();
+  });
+
   it("maps 422 field errors onto the inputs", async () => {
     useAuthenticatedApi("operator");
     const asset = item();
