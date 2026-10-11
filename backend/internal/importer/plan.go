@@ -169,7 +169,12 @@ func buildPlan(sheets []rawSheet, opts Options) (*Plan, error) {
 	if loc == nil {
 		loc = time.Local
 	}
-	plan := &Plan{Timezone: loc.String(), DefaultLocation: Clean(opts.DefaultLocation)}
+	tz := loc.String()
+	if loc == time.Local {
+		abbr, _ := time.Now().In(loc).Zone()
+		tz = "Local (" + abbr + ")"
+	}
+	plan := &Plan{Timezone: tz, DefaultLocation: Clean(opts.DefaultLocation)}
 	ctx := &parseCtx{plan: plan, loc: loc}
 	found := map[sheetRole]bool{}
 	for _, s := range sheets {
