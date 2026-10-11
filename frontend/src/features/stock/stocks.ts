@@ -69,3 +69,8 @@ export function locationDisplayName(locations: readonly Location[], stocks: read
 
 /** For tests: forget the remembered locations. */
 export const forgetRememberedLocations = () => lastLocationByItem.clear();
+
+/** "Bodega 2 · Estante A 3": the breakdown as one line of text. */
+export function stockBreakdownText(stocks: readonly ItemStock[]): string {
+  return stocks.map((row) => `${row.location_name} ${row.quantity}`).join(" · ");
+}

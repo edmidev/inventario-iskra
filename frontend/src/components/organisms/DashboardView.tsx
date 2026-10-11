@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../atoms/Badge";
 import { StatCard } from "../molecules/StatCard";
+import { stockBreakdownText } from "../../features/stock/stocks";
 import { formatDate } from "../../lib/format";
 import type { DashboardSummary } from "../../lib/api/schemas";
 
@@ -36,13 +37,14 @@ function AlertList({
   );
 }
 
-function Row({ id, code, description, aside }: { id: string; code: string; description: string; aside: ReactNode }) {
+function Row({ id, code, description, detail, aside }: { id: string; code: string; description: string; detail?: string; aside: ReactNode }) {
   return (
     <li className="border-b border-line last:border-b-0">
       <Link to={`/materiales/${id}`} className="flex min-h-14 items-center justify-between gap-3 px-4 py-2 hover:bg-sunken">
         <span className="min-w-0">
           <span className="block font-mono text-sm font-semibold text-accent">{code}</span>
           <span className="block truncate text-sm">{description}</span>
+          {detail && <span className="block truncate text-xs text-ink-soft">{detail}</span>}
         </span>
         <span className="shrink-0 text-right text-sm text-ink-soft">{aside}</span>
       </Link>
@@ -69,6 +71,7 @@ export function DashboardView({ summary }: { summary: DashboardSummary }) {
               id={row.id}
               code={row.code}
               description={row.description}
+              detail={row.stocks.length > 1 ? stockBreakdownText(row.stocks) : (row.location_name ?? undefined)}
               aside={
                 <span className="font-semibold text-low tabular-nums">
                   {row.stock_current} / {row.stock_min} {row.unit}

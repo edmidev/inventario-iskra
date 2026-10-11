@@ -2,7 +2,7 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
-import { item, summary } from "../test/fixtures";
+import { item, stock, summary } from "../test/fixtures";
 import { api, errorBody, renderApp, useAuthenticatedApi } from "../test/render";
 import { server } from "../test/server";
 
@@ -29,6 +29,30 @@ describe("dashboard", () => {
 
     const maintenance = screen.getByRole("region", { name: "Mantenimiento vencido" });
     expect(within(maintenance).getByText("ISK-HER-001")).toBeInTheDocument();
+  });
+
+  it("shows where the low stock is: the only location or the breakdown", async () => {
+    useAuthenticatedApi("viewer");
+    const base = summary.low_stock.top[0];
+    server.use(
+      http.get(api("/dashboard/summary"), () =>
+        HttpResponse.json({
+          ...summary,
+          low_stock: {
+            count: 2,
+            top: [
+              { ...base, stocks: [stock(10, 2)] },
+              { ...base, id: "c-2", code: "ISK-CON-002", location_name: null, stock_current: 4, stocks: [stock(10, 1), stock(11, 3)] },
+            ],
+          },
+        }),
+      ),
+    );
+    renderApp("/inicio");
+    const lowStock = await screen.findByRole("region", { name: "Stock bajo" });
+    const rows = within(lowStock).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("Bodega");
+    expect(rows[1]).toHaveTextContent("Bodega 1 · Estante A 3");
   });
 
   it("opens the item detail when a row is tapped", async () => {

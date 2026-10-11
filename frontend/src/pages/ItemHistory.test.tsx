@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 import type { Item } from "../lib/api/schemas";
-import { assignment, consumable, item, maintenanceRecord, movement, page } from "../test/fixtures";
+import { assignment, consumable, item, maintenanceRecord, movement, page, stock } from "../test/fixtures";
 import { api, errorBody, renderApp, useAuthenticatedApi } from "../test/render";
 import { server } from "../test/server";
 
@@ -39,12 +39,76 @@ describe("history tab", () => {
     expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("Salida");
     expect(rows[0]).toHaveTextContent("-2 caja");
-    expect(rows[0]).toHaveTextContent("7 → 5 caja");
+    expect(rows[0]).toHaveTextContent("Existencias totales: 7 → 5 caja");
     expect(rows[0]).toHaveTextContent("Obra norte");
     expect(rows[0]).toHaveTextContent("Ana Pérez");
     expect(rows[1]).toHaveTextContent("Entrada");
     expect(rows[2]).toHaveTextContent("Existencia inicial");
     expect(rows[2]).toHaveTextContent("Sistema");
+  });
+
+  it("shows where each consumable movement happened and renders quantity transfers", async () => {
+    useAuthenticatedApi("viewer");
+    const supply = consumable({ stocks: [stock(10, 3), stock(11, 4)] });
+    serve(supply);
+    server.use(
+      http.get(api(`/items/${supply.id}/movements`), () =>
+        HttpResponse.json(
+          page([
+            movement({ id: 4, type: "out", qty: -3, location_id: 11, stock_before: 10, stock_after: 7, created_at: "2026-10-08T10:00:00Z" }),
+            movement({
+              id: 3,
+              type: "transfer",
+              qty: 0,
+              moved_qty: 2,
+              location_id: null,
+              from_location_id: 10,
+              to_location_id: 11,
+              stock_before: 10,
+              stock_after: 10,
+              created_at: "2026-10-07T10:00:00Z",
+            }),
+            movement({ id: 2, type: "in", qty: 5, location_id: 10, created_at: "2026-10-02T10:00:00Z" }),
+            movement({ id: 1, type: "opening", qty: 5, location_id: 11, stock_before: 0, stock_after: 5, user_name: null, created_at: "2026-09-01T10:00:00Z" }),
+          ]),
+        ),
+      ),
+    );
+    await openTab("Historial", `/materiales/${supply.id}`);
+
+    const rows = within(await screen.findByRole("list", { name: "Historial del material" })).getAllByRole("listitem");
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toHaveTextContent("Salida");
+    expect(rows[0]).toHaveTextContent("-3 caja en Bodega › Estante A");
+    expect(rows[1]).toHaveTextContent("Traslado");
+    expect(rows[1]).toHaveTextContent("2 caja");
+    expect(rows[1]).toHaveTextContent("Bodega → Bodega › Estante A");
+    expect(rows[1]).not.toHaveTextContent("Existencias totales");
+    expect(rows[2]).toHaveTextContent("+5 caja en Bodega");
+    expect(rows[3]).toHaveTextContent("Existencia inicial");
+    expect(rows[3]).toHaveTextContent("+5 caja en Bodega › Estante A");
+  });
+
+  it("degrades gracefully for legacy movements without a location", async () => {
+    useAuthenticatedApi("viewer");
+    const supply = consumable();
+    serve(supply);
+    server.use(
+      http.get(api(`/items/${supply.id}/movements`), () =>
+        HttpResponse.json(
+          page([
+            movement({ id: 2, type: "transfer", qty: 0, moved_qty: 4, location_id: null, from_location_id: null, to_location_id: 10, created_at: "2026-10-03T10:00:00Z" }),
+            movement({ id: 1, type: "in", qty: 4, location_id: null, created_at: "2026-10-01T10:00:00Z" }),
+          ]),
+        ),
+      ),
+    );
+    await openTab("Historial", `/materiales/${supply.id}`);
+    const rows = within(await screen.findByRole("list", { name: "Historial del material" })).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("4 caja");
+    expect(rows[0]).toHaveTextContent("Sin ubicación → Bodega");
+    expect(rows[1]).toHaveTextContent("+4 caja");
+    expect(rows[1]).not.toHaveTextContent(" en ");
   });
 
   it("merges custody events with transfer movements for assets", async () => {

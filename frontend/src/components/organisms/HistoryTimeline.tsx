@@ -49,23 +49,30 @@ function Detail({ children, muted = true }: { children: ReactNode; muted?: boole
   return <p className={clsx("text-sm", muted && "text-ink-soft")}>{children}</p>;
 }
 
+const place = (name: string | null) => name ?? "Sin ubicación";
+
 function MovementEntry({ movement, unit, locationName }: { movement: Movement; unit: string | null; locationName: HistoryTimelineProps["locationName"] }) {
-  const transfer = movement.type === "transfer";
+  const suffix = unit ? ` ${unit}` : "";
   const delta = movement.qty > 0 ? `+${movement.qty}` : String(movement.qty);
+  // A consumable transfer moves a quantity between two locations; an asset transfer moves the unit (moved_qty is 0).
+  const stockTransfer = movement.type === "transfer" && movement.moved_qty > 0;
+  const assetTransfer = movement.type === "transfer" && !stockTransfer;
+  const where = movement.location_id === null ? null : locationName(movement.location_id);
+
+  let title = "";
+  if (stockTransfer) title = `${movement.moved_qty}${suffix}`;
+  else if (!assetTransfer) title = `${delta}${suffix}${where ? ` en ${where}` : ""}`;
+
   return (
-    <Entry
-      at={movement.created_at}
-      badge={<Badge tone={movementTone[movement.type]}>{movementLabels[movement.type]}</Badge>}
-      title={transfer ? "" : `${delta}${unit ? ` ${unit}` : ""}`}
-    >
-      {transfer ? (
+    <Entry at={movement.created_at} badge={<Badge tone={movementTone[movement.type]}>{movementLabels[movement.type]}</Badge>} title={title}>
+      {movement.type === "transfer" ? (
         <Detail muted={false}>
-          {locationName(movement.from_location_id) ?? "Sin ubicación"} → {locationName(movement.to_location_id) ?? "Sin ubicación"}
+          {place(locationName(movement.from_location_id))} → {place(locationName(movement.to_location_id))}
         </Detail>
       ) : (
         <Detail>
-          Existencias: {movement.stock_before} → {movement.stock_after}
-          {unit ? ` ${unit}` : ""}
+          Existencias totales: {movement.stock_before} → {movement.stock_after}
+          {suffix}
         </Detail>
       )}
       {movement.note && <Detail muted={false}>“{movement.note}”</Detail>}
