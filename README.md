@@ -173,6 +173,42 @@ The app is installable ("Inventario Iskra", standalone, light/dark `theme-color`
 
 Known limitation: the refresh cookie rotates on every full page load; aborting a load mid-flight (very fast navigations) can lose the rotated cookie and sign the user out.
 
+## Importing the Excel
+
+`import-xlsx` (`backend/cmd/import-xlsx`) loads the legacy workbook (`inventario_iskra (2).xlsx`, gitignored) through the same catalog, stock and maintenance services as the API. It is a **dry-run by default**: it writes nothing and produces a review report; only `--apply` writes.
+
+```sh
+# 1. Dry-run: offline, or read-only against the database when DATABASE_URL is set
+#    (the compose service sets it; start the API once first so migrations ran).
+docker compose --profile tools run --rm -T importer --file /data/inventario.xlsx > import-report.md
+
+# 2. Review import-report.md, then apply (acts as an existing active admin/operator).
+docker compose --profile tools run --rm -T importer --file /data/inventario.xlsx \
+  --apply --user-email you@example.com > import-report-applied.md
+```
+
+The workbook is mounted read-only from `${IMPORT_FILE:-./inventario_iskra (2).xlsx}`; set `IMPORT_FILE` to use another path. Without Docker: `go run ./cmd/import-xlsx --file <path> [flags]` from `backend/` (`DATABASE_URL` is only needed for `--apply`).
+
+| Flag | Meaning |
+| --- | --- |
+| `--file` | Path of the `.xlsx` (required). |
+| `--apply` | Write to the database. Requires `--user-email` and `DATABASE_URL`. |
+| `--user-email` | Active admin or operator used as maintenance reporter and for opening movements. |
+| `--default-location` | Location of the items of sheets 1 and 3 (default `Almacén principal`; empty means none). |
+| `--report`, `--format` | Write the report to a file instead of stdout; `md` (default) or `json`. |
+| `--timezone` | IANA zone for dates (default: the local zone); dates become midnight of that day. |
+
+What it does:
+
+- Sheets are recognized by name and headers (not by row numbers). Legacy codes are kept; rows without a code get a generated code from their category prefix (`MAQ`, `HER`, `ELE`, `CON`). Categories (`Maquinaria`, `Herramientas`, `Electricidad`, `Consumibles`) and the locations (`Maleta y caja de Alejandro` for sheet 2, the default location for sheets 1 and 3) are created when missing.
+- Sheet 2 consumables (everything after the `CONSUMIBLES` marker, plus uncoded rows) become consumables with unit `unidad` and an opening movement; coded tool rows become assets. A cell with code and description fused is split. Exact repeated blocks are skipped and listed.
+- `LLENO`/`VACIO` on cylinders becomes `attributes.nivel`; `Disponibilidad` is not imported (the system derives it) but contradictions are reported. Excel serial, date and `dd/mm/yyyy` values become timestamps (`last_maintenance_at`, failure dates).
+- Sheet 3 items become assets with an open corrective maintenance record (status `in_repair` when the destination mentions "taller", otherwise `inoperative`).
+- Every item gets `attributes.import_source = xlsx:<sheet>:r<row>`. Re-running `--apply` is safe: rows whose code (or source, for uncoded rows) already exist are reported as already imported, and a repair closed since the first run is never reopened. A code that belongs to a different existing item is reported as a conflict and skipped, never renumbered.
+- Rows are written one by one (no single transaction): failures are listed in the report and the exit code is non-zero; re-running resumes safely.
+
+The report lists totals per sheet, categories and locations to create, every item with its action and flags, one section per issue class, and a review checklist. Reports are gitignored (`import-report*`, `*.report.md`).
+
 ## Test
 
 ```sh
