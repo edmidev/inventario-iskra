@@ -358,7 +358,10 @@ paths:
         - { name: status, in: query, schema: { $ref: "#/components/schemas/ItemStatus" } }
         - { name: kind, in: query, schema: { $ref: "#/components/schemas/ItemKind" } }
         - { name: availability, in: query, schema: { $ref: "#/components/schemas/Availability" } }
-        - { name: location_id, in: query, schema: { type: integer, format: int64 } }
+        - name: location_id
+          in: query
+          description: Assets in that location, and consumables that have stock there (a consumable stocked in several locations matches any of them).
+          schema: { type: integer, format: int64 }
         - name: low_stock
           in: query
           description: "`true` keeps consumables with `stock_min > 0` and `stock_current <= stock_min`."
@@ -391,7 +394,7 @@ paths:
       operationId: createItem
       summary: Create an item (operator or admin)
       description: |
-        Assets are always stock 1 with no unit. Consumables require a `unit`; `stock_current` is the opening balance (later changes go through stock movements). The code is generated as `ISK-<category prefix>-<sequence>` unless an admin supplies `code` (pattern `ISK-[A-Z0-9]+(-[A-Z0-9]+)*`); supplying a code without admin rights returns 403. Codes are immutable and stay reserved after deletion.
+        Assets are always stock 1 with no unit. Consumables require a `unit` and are stocked per location: give the opening balance either as `stocks` (one row per location) or in the legacy form `stock_current` + optional `location_id` (no location puts it in the default location "Sin ubicación"); sending `stocks` together with `stock_current` or `location_id` is a 422. Each opening row writes one `opening` movement in the same transaction; later changes go through stock movements. The code is generated as `ISK-<category prefix>-<sequence>` unless an admin supplies `code` (pattern `ISK-[A-Z0-9]+(-[A-Z0-9]+)*`); supplying a code without admin rights returns 403. Codes are immutable and stay reserved after deletion.
       requestBody:
         required: true
         content:
@@ -441,7 +444,7 @@ paths:
       operationId: updateItem
       summary: Update an item (operator or admin)
       description: |
-        Partial update. `attributes` replaces the whole object. `location_id` and `maintenance_interval_days` accept `null` to clear. `code`, `kind` and `stock_current` cannot be changed (422 with the field named); stock changes belong to stock movements. While the item has an open failure (maintenance), changing `status` is rejected with 409 `item_under_repair`; re-sending the current status is allowed.
+        Partial update. `attributes` replaces the whole object. `location_id` (assets) and `maintenance_interval_days` accept `null` to clear. A consumable has no single location: sending a non-null `location_id` for one is 422 `not_applicable` (move stock with a `transfer` movement). `code`, `kind` and `stock_current` cannot be changed (422 with the field named); stock changes belong to stock movements. While the item has an open failure (maintenance), changing `status` is rejected with 409 `item_under_repair`; re-sending the current status is allowed.
       parameters:
         - { $ref: "#/components/parameters/ItemId" }
       requestBody:
@@ -477,9 +480,11 @@ paths:
       summary: Record a stock movement (operator or admin)
       description: |
         Atomically changes an item and appends an immutable movement; the acting user is the authenticated caller.
-        - `in` (`qty` > 0) adds, `out` (`qty` > 0) subtracts and never goes below 0 (409 `insufficient_stock`).
-        - `adjust` sets the absolute counted quantity (`qty` >= 0) and requires a non-empty `note`; the movement records the delta.
-        - `transfer` moves the item (asset or consumable) to `to_location_id`, which must exist and differ from the current location; `qty` must be omitted or 0. An asset on loan cannot be transferred (409 `item_on_loan`): custody owns its location until it is returned.
+        Consumables are stocked per location (`stocks` on the item); `items.stock_current` is always the sum of the locations.
+        - `in` (`qty` > 0) adds at `location_id`; `out` (`qty` > 0) subtracts at `location_id` and never takes that location below 0 (409 `insufficient_stock`, the message names the location and what it holds); `adjust` sets the absolute counted quantity (`qty` >= 0) at `location_id` (requires a non-empty `note`) and the total follows. The movement records the location and the signed delta.
+        - When `location_id` is omitted for in/out/adjust it is inferred: the item's only stocked location; for `in`/`adjust` on an item with no stock, the location of its latest movement or else the default location "Sin ubicación" (created on demand); `out` with no stock anywhere is 409 `insufficient_stock`. If the item is stocked in several locations the request is 422 `location_required` with the missing field in `fields`.
+        - `transfer` of a consumable moves `qty` (> 0, at most what `from_location_id` holds, else 409 `insufficient_stock`) from `from_location_id` to `to_location_id` (different, both existing); `from_location_id` is inferred when the item has a single stocked location (422 `location_required` when ambiguous). The total is unchanged (`qty` of the movement is 0, `moved_qty` is the quantity moved). A location whose quantity reaches 0 stops being listed.
+        - `transfer` of an asset moves it to `to_location_id`, which must exist and differ from its current location; `qty` and `from_location_id` must be omitted. An asset on loan cannot be transferred (409 `item_on_loan`): custody owns its location until it is returned.
         - `in`, `out` and `adjust` apply to consumables only (422 `not_applicable` for assets). `opening` movements are written by the system and cannot be requested.
       parameters:
         - { $ref: "#/components/parameters/ItemId" }
@@ -533,7 +538,7 @@ paths:
     get:
       operationId: listStockAlerts
       summary: Consumables at or below their minimum stock (any role)
-      description: Consumables with `stock_min > 0` and `stock_current <= stock_min`, most severe (lowest `stock_current - stock_min`) first, then by code.
+      description: Consumables with `stock_min > 0` and `stock_current <= stock_min` (the total across locations), most severe (lowest `stock_current - stock_min`) first, then by code. Each alert carries the per-location breakdown in `stocks`.
       parameters:
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Offset" }
@@ -881,12 +886,16 @@ components:
         status: { $ref: "#/components/schemas/ItemStatus" }
         availability: { $ref: "#/components/schemas/Availability" }
         unit: { type: string, nullable: true }
-        stock_current: { type: integer }
+        stock_current: { type: integer, description: "Total quantity. For consumables it always equals the sum of `stocks`." }
         stock_min: { type: integer }
+        stocks:
+          type: array
+          description: Consumables only (empty for assets and for consumables with no stock). Quantity per location with stock, ordered by location name.
+          items: { $ref: "#/components/schemas/ItemStock" }
         low_stock: { type: boolean }
         on_loan: { type: boolean, description: True while the item has an active custody assignment. While on loan the item cannot be deleted and its `location_id` cannot be changed through PATCH (409 `item_on_loan`). }
         custody: { $ref: "#/components/schemas/ItemCustody" }
-        location_id: { type: integer, format: int64, nullable: true }
+        location_id: { type: integer, format: int64, nullable: true, description: "An asset's location. Always null for consumables, which are stocked per location (see `stocks`)." }
         last_maintenance_at: { type: string, format: date-time, nullable: true }
         maintenance_interval_days: { type: integer, nullable: true }
         maintenance_due_at: { type: string, format: date-time, nullable: true, description: "Derived, never stored: `last_maintenance_at` (or `created_at` if never serviced) plus `maintenance_interval_days` 24-hour days. Null for consumables and assets without an interval." }
@@ -895,6 +904,19 @@ components:
         notes: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    ItemStock:
+      type: object
+      required: [location_id, location_name, quantity]
+      properties:
+        location_id: { type: integer, format: int64 }
+        location_name: { type: string }
+        quantity: { type: integer, minimum: 1 }
+    ItemStockInput:
+      type: object
+      required: [location_id, quantity]
+      properties:
+        location_id: { type: integer, format: int64, description: An existing location; each location at most once. }
+        quantity: { type: integer, minimum: 1 }
     ItemCustody:
       type: object
       description: Present only while the item is on loan.
@@ -915,9 +937,13 @@ components:
         kind: { $ref: "#/components/schemas/ItemKind" }
         status: { $ref: "#/components/schemas/ItemStatus" }
         unit: { type: string, maxLength: 30, description: Required for consumables; not allowed for assets. }
-        stock_current: { type: integer, minimum: 0, description: Opening balance (consumables). }
+        stock_current: { type: integer, minimum: 0, description: "Legacy opening balance (consumables), placed at `location_id` or, without one, in the default location \"Sin ubicación\". Cannot be combined with `stocks`." }
+        stocks:
+          type: array
+          description: "Multi-location opening balance (consumables), one `opening` movement per row. Cannot be combined with `stock_current` or `location_id`; not allowed for assets."
+          items: { $ref: "#/components/schemas/ItemStockInput" }
         stock_min: { type: integer, minimum: 0 }
-        location_id: { type: integer, format: int64, nullable: true }
+        location_id: { type: integer, format: int64, nullable: true, description: "An asset's location; for a consumable only the location of the legacy `stock_current` balance (it is not stored on the item)." }
         last_maintenance_at: { type: string, format: date-time, nullable: true }
         maintenance_interval_days: { type: integer, minimum: 1, maximum: 3650, nullable: true }
         attributes: { type: object, additionalProperties: true }
@@ -930,7 +956,7 @@ components:
         status: { $ref: "#/components/schemas/ItemStatus" }
         unit: { type: string, maxLength: 30 }
         stock_min: { type: integer, minimum: 0 }
-        location_id: { type: integer, format: int64, nullable: true }
+        location_id: { type: integer, format: int64, nullable: true, description: Assets only; a non-null value on a consumable is 422 `not_applicable`. }
         maintenance_interval_days: { type: integer, minimum: 1, maximum: 3650, nullable: true }
         attributes: { type: object, additionalProperties: true }
         notes: { type: string, maxLength: 4000 }
@@ -950,7 +976,7 @@ components:
                 invalid_current_password, email_taken, last_admin. Catalog: category_name_taken,
                 category_prefix_taken, category_in_use, location_in_use, location_cycle, code_taken.
                 Stock and custody: insufficient_stock, item_on_loan, already_assigned, not_assigned,
-                item_not_available, not_applicable. Maintenance: open_failure_exists, record_closed,
+                item_not_available, not_applicable, location_required (422, with `fields`). Maintenance: open_failure_exists, record_closed,
                 item_under_repair.
             message: { type: string }
             fields:
@@ -965,35 +991,43 @@ components:
       required: [type]
       properties:
         type: { type: string, enum: [in, out, adjust, transfer] }
-        qty: { type: integer, description: "Amount for in/out; absolute counted quantity for adjust; omit or 0 for transfer." }
+        qty: { type: integer, description: "Amount for in/out; absolute counted quantity at the location for adjust; quantity to move for a consumable transfer; omit or 0 for an asset transfer." }
+        location_id: { type: integer, format: int64, description: "Consumable in/out/adjust: the location it applies to. Inferred when omitted (see the endpoint description; 422 `location_required` when ambiguous). Not allowed for transfer." }
+        from_location_id: { type: integer, format: int64, description: Consumable transfer only. Source location; inferred when the item has a single stocked location. }
         to_location_id: { type: integer, format: int64, description: Required for transfer; not allowed otherwise. }
         note: { type: string, maxLength: 500, description: Required (non-empty) for adjust. }
     Movement:
       type: object
-      required: [id, item_id, type, qty, stock_before, stock_after, from_location_id, to_location_id, user_id, user_name, note, created_at]
+      required: [id, item_id, type, qty, stock_before, stock_after, location_id, from_location_id, to_location_id, moved_qty, user_id, user_name, note, created_at]
       properties:
         id: { type: integer, format: int64 }
         item_id: { type: string, format: uuid }
         type: { $ref: "#/components/schemas/MovementType" }
-        qty: { type: integer, description: Signed delta applied to stock; 0 for transfers. }
-        stock_before: { type: integer }
-        stock_after: { type: integer }
+        qty: { type: integer, description: Signed delta applied to the item's total stock; 0 for transfers. }
+        stock_before: { type: integer, description: Item total before the movement. }
+        stock_after: { type: integer, description: Item total after the movement. }
+        location_id: { type: integer, format: int64, nullable: true, description: "Consumable in/out/adjust/opening: the location affected. Null for transfers and for legacy rows whose location is unknown." }
         from_location_id: { type: integer, format: int64, nullable: true }
         to_location_id: { type: integer, format: int64, nullable: true }
+        moved_qty: { type: integer, description: Quantity moved by a consumable transfer; 0 otherwise. }
         user_id: { type: string, format: uuid, nullable: true, description: Null for system rows (migration backfill). }
         user_name: { type: string, nullable: true }
         note: { type: string }
         created_at: { type: string, format: date-time }
     MovementResult:
       type: object
-      required: [movement, stock_current, location_id]
+      required: [movement, stock_current, location_id, stocks]
       properties:
         movement: { $ref: "#/components/schemas/Movement" }
-        stock_current: { type: integer, description: Item stock after the movement. }
-        location_id: { type: integer, format: int64, nullable: true, description: Item location after the movement. }
+        stock_current: { type: integer, description: Item total stock after the movement. }
+        location_id: { type: integer, format: int64, nullable: true, description: An asset's location after the movement; null for consumables. }
+        stocks:
+          type: array
+          description: A consumable's per-location stock after the movement (empty for assets).
+          items: { $ref: "#/components/schemas/ItemStock" }
     StockAlert:
       type: object
-      required: [item_id, code, description, unit, stock_current, stock_min, shortage, location_id, location_name]
+      required: [item_id, code, description, unit, stock_current, stock_min, shortage, location_id, location_name, stocks]
       properties:
         item_id: { type: string, format: uuid }
         code: { type: string }
@@ -1002,8 +1036,12 @@ components:
         stock_current: { type: integer }
         stock_min: { type: integer }
         shortage: { type: integer, description: stock_current - stock_min; lower is more severe. }
-        location_id: { type: integer, format: int64, nullable: true }
-        location_name: { type: string, nullable: true }
+        location_id: { type: integer, format: int64, nullable: true, description: Set only when all the stock sits in one location. }
+        location_name: { type: string, nullable: true, description: Set only when all the stock sits in one location. }
+        stocks:
+          type: array
+          description: Per-location breakdown of `stock_current`, ordered by location name.
+          items: { $ref: "#/components/schemas/ItemStock" }
     AssignRequest:
       type: object
       required: [assignee_location_id]
@@ -1174,7 +1212,7 @@ components:
               maxItems: 5
               items:
                 type: object
-                required: [id, code, description, unit, stock_current, stock_min, location_name]
+                required: [id, code, description, unit, stock_current, stock_min, location_name, stocks]
                 properties:
                   id: { type: string, format: uuid }
                   code: { type: string }
@@ -1182,7 +1220,10 @@ components:
                   unit: { type: string }
                   stock_current: { type: integer }
                   stock_min: { type: integer }
-                  location_name: { type: string, nullable: true }
+                  location_name: { type: string, nullable: true, description: Set only when all the stock sits in one location. }
+                  stocks:
+                    type: array
+                    items: { $ref: "#/components/schemas/ItemStock" }
         loans:
           type: object
           required: [active, overdue, overdue_top]
