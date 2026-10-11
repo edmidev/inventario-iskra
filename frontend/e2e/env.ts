@@ -1,8 +1,18 @@
 /** Shared constants for the e2e stack. Everything here is throwaway test data, never real secrets. */
 export const PG_CONTAINER = "inv-test-pg";
-export const PG_PORT = 55432;
-export const API_PORT = 18080;
-export const WEB_PORT = 14173;
+
+/** Ports can be moved when the defaults are taken (e.g. a local compose stack): E2E_DB_PORT, E2E_API_PORT, E2E_WEB_PORT. */
+function port(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 65535) throw new Error(`${name} must be a port number, got "${raw}"`);
+  return value;
+}
+
+export const PG_PORT = port("E2E_DB_PORT", 55432);
+export const API_PORT = port("E2E_API_PORT", 18080);
+export const WEB_PORT = port("E2E_WEB_PORT", 14173);
 
 export const API_URL = `http://127.0.0.1:${API_PORT}`;
 export const WEB_URL = `http://127.0.0.1:${WEB_PORT}`;
@@ -19,5 +29,8 @@ export const SEED = {
   failureAsset: { code: "ISK-HER-003", description: "Lijadora orbital E2E" },
   qrAsset: { code: "ISK-HER-004", description: "Nivel láser E2E" },
   consumable: { code: "ISK-CON-001", description: "Guantes de nitrilo E2E", stock: 10, min: 5, unit: "caja" },
+  /** Locations created by the seed (the consumable above starts in the warehouse). */
+  warehouse: "Bodega E2E",
+  shelf: "Estante A",
   borrower: "Juan Gómez E2E",
 } as const;
