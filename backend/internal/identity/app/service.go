@@ -14,6 +14,10 @@ import (
 	"github.com/edgar/inventario/backend/internal/identity/domain"
 )
 
+// DefaultRotationGrace is the reuse window applied when Deps.RotationGrace is
+// zero.
+const DefaultRotationGrace = 15 * time.Second
+
 // Service implements the identity use cases.
 type Service struct {
 	users      UserRepository
@@ -22,6 +26,7 @@ type Service struct {
 	issuer     TokenIssuer
 	limiter    LoginLimiter
 	refreshTTL time.Duration
+	grace      time.Duration
 	now        func() time.Time
 
 	dummyOnce sync.Once
@@ -36,7 +41,11 @@ type Deps struct {
 	Issuer     TokenIssuer
 	Limiter    LoginLimiter
 	RefreshTTL time.Duration
-	Now        func() time.Time // optional
+	// RotationGrace is how long a just-rotated refresh token may be presented
+	// again and still succeed (it absorbs aborted page loads and concurrent
+	// tabs). Zero selects DefaultRotationGrace; negative disables the window.
+	RotationGrace time.Duration
+	Now           func() time.Time // optional
 }
 
 // NewService wires a Service.
@@ -45,7 +54,12 @@ func NewService(d Deps) *Service {
 	if now == nil {
 		now = time.Now
 	}
+	grace := d.RotationGrace
+	if grace == 0 {
+		grace = DefaultRotationGrace
+	}
 	return &Service{
+		grace: grace,
 		users: d.Users, tokens: d.Tokens, hasher: d.Hasher, issuer: d.Issuer,
 		limiter: d.Limiter, refreshTTL: d.RefreshTTL, now: now,
 	}
@@ -113,8 +127,10 @@ func (s *Service) dummy() string {
 }
 
 // Refresh rotates a refresh token: the presented token is revoked and a new
-// session is issued. Presenting an already-revoked token is treated as reuse
-// and revokes every token of that user.
+// session is issued. A token that was itself revoked by rotation less than the
+// grace window ago may be presented again: that is the aborted-page-load or
+// concurrent-tab race, and it gets a fresh sibling session. Any other use of a
+// revoked token is treated as reuse and revokes every token of that user.
 func (s *Service) Refresh(ctx context.Context, rawToken string) (Session, error) {
 	if rawToken == "" {
 		return Session{}, domain.ErrInvalidToken
@@ -125,35 +141,93 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (Session, error)
 		return Session{}, err
 	}
 	if rt.RevokedAt != nil {
-		if err := s.tokens.RevokeAllForUser(ctx, rt.UserID, now); err != nil {
-			return Session{}, err
-		}
-		return Session{}, domain.ErrInvalidToken
+		return s.refreshRevoked(ctx, rt, now)
 	}
 	if !now.Before(rt.ExpiresAt) {
 		return Session{}, domain.ErrInvalidToken
 	}
-	user, err := s.users.GetByID(ctx, rt.UserID)
-	if err != nil {
-		if errors.Is(err, domain.ErrUserNotFound) {
-			return Session{}, domain.ErrInvalidToken
-		}
-		return Session{}, err
-	}
-	if !user.Active {
-		return Session{}, domain.ErrInvalidToken
-	}
-	revoked, err := s.tokens.Revoke(ctx, rt.ID, now)
+	user, err := s.activeUser(ctx, rt.UserID)
 	if err != nil {
 		return Session{}, err
 	}
-	if !revoked { // lost a race with another use of the same token
-		if err := s.tokens.RevokeAllForUser(ctx, rt.UserID, now); err != nil {
+	sess, next, err := s.prepareSession(user, now)
+	if err != nil {
+		return Session{}, err
+	}
+	rotated, err := s.tokens.Rotate(ctx, rt.ID, next, now)
+	if err != nil {
+		return Session{}, err
+	}
+	if rotated {
+		return sess, nil
+	}
+	// Lost a race with another use of the same token: re-read what happened.
+	rt, err = s.tokens.GetByHash(ctx, hashToken(rawToken))
+	if err != nil {
+		return Session{}, err
+	}
+	return s.refreshRevoked(ctx, rt, now)
+}
+
+// refreshRevoked handles a presented token that is already revoked.
+func (s *Service) refreshRevoked(ctx context.Context, rt RefreshToken, now time.Time) (Session, error) {
+	if s.withinGrace(ctx, rt, now) {
+		user, err := s.activeUser(ctx, rt.UserID)
+		if err != nil {
 			return Session{}, err
 		}
-		return Session{}, domain.ErrInvalidToken
+		return s.newSession(ctx, user)
 	}
-	return s.newSession(ctx, user)
+	if err := s.tokens.RevokeAllForUser(ctx, rt.UserID, now); err != nil {
+		return Session{}, err
+	}
+	return Session{}, domain.ErrInvalidToken
+}
+
+// maxChainHops bounds how far withinGrace follows rotations; a chain longer
+// than this cannot fit in a sane grace window.
+const maxChainHops = 16
+
+// withinGrace reports whether a revoked token may still be exchanged: it was
+// revoked by rotation recently, has not expired, and its rotation chain still
+// ends in a live token. A logout or password change revokes that live token
+// without rotating it, which closes the window.
+func (s *Service) withinGrace(ctx context.Context, rt RefreshToken, now time.Time) bool {
+	if s.grace < 0 || rt.RotatedAt == nil || rt.ReplacedBy == nil {
+		return false
+	}
+	if now.Before(*rt.RotatedAt) || now.Sub(*rt.RotatedAt) >= s.grace || !now.Before(rt.ExpiresAt) {
+		return false
+	}
+	next := *rt.ReplacedBy
+	for range maxChainHops {
+		succ, err := s.tokens.GetByID(ctx, next)
+		if err != nil {
+			return false
+		}
+		if succ.RevokedAt == nil {
+			return true
+		}
+		if succ.RotatedAt == nil || succ.ReplacedBy == nil {
+			return false
+		}
+		next = *succ.ReplacedBy
+	}
+	return false
+}
+
+func (s *Service) activeUser(ctx context.Context, id string) (domain.User, error) {
+	user, err := s.users.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			return domain.User{}, domain.ErrInvalidToken
+		}
+		return domain.User{}, err
+	}
+	if !user.Active {
+		return domain.User{}, domain.ErrInvalidToken
+	}
+	return user, nil
 }
 
 // Logout revokes the presented refresh token. Unknown tokens are ignored so
@@ -344,25 +418,33 @@ func (s *Service) VerifyAccess(token string) (AccessClaims, error) {
 }
 
 func (s *Service) newSession(ctx context.Context, u domain.User) (Session, error) {
-	now := s.now()
+	sess, rt, err := s.prepareSession(u, s.now())
+	if err != nil {
+		return Session{}, err
+	}
+	if err := s.tokens.Create(ctx, rt); err != nil {
+		return Session{}, err
+	}
+	return sess, nil
+}
+
+// prepareSession builds a session and the hashed refresh token to persist for
+// it, without storing anything.
+func (s *Service) prepareSession(u domain.User, now time.Time) (Session, RefreshToken, error) {
 	access, accessExp, err := s.issuer.IssueAccess(u, now)
 	if err != nil {
-		return Session{}, fmt.Errorf("issue access token: %w", err)
+		return Session{}, RefreshToken{}, fmt.Errorf("issue access token: %w", err)
 	}
 	raw, err := newOpaqueToken()
 	if err != nil {
-		return Session{}, err
+		return Session{}, RefreshToken{}, err
 	}
 	exp := now.Add(s.refreshTTL)
-	if err := s.tokens.Create(ctx, RefreshToken{
-		UserID: u.ID, TokenHash: hashToken(raw), ExpiresAt: exp, CreatedAt: now,
-	}); err != nil {
-		return Session{}, err
-	}
+	rt := RefreshToken{UserID: u.ID, TokenHash: hashToken(raw), ExpiresAt: exp, CreatedAt: now}
 	return Session{
 		User: u, AccessToken: access, AccessExpires: accessExp,
 		RefreshToken: raw, RefreshExpires: exp,
-	}, nil
+	}, rt, nil
 }
 
 func newOpaqueToken() (string, error) {

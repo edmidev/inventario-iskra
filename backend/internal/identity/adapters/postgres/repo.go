@@ -138,6 +138,12 @@ func (r *Repo) Mutate(ctx context.Context, id string, fn func(*domain.User, int)
 	return updated, nil
 }
 
+const tokenCols = `id::text, user_id::text, token_hash, expires_at, revoked_at, created_at, rotated_at, replaced_by::text`
+
+func tokenDest(rt *app.RefreshToken) []any {
+	return []any{&rt.ID, &rt.UserID, &rt.TokenHash, &rt.ExpiresAt, &rt.RevokedAt, &rt.CreatedAt, &rt.RotatedAt, &rt.ReplacedBy}
+}
+
 type tokenRepo struct{ pool *pgxpool.Pool }
 
 func (t tokenRepo) Create(ctx context.Context, rt app.RefreshToken) error {
@@ -153,9 +159,8 @@ func (t tokenRepo) Create(ctx context.Context, rt app.RefreshToken) error {
 func (t tokenRepo) GetByHash(ctx context.Context, hash string) (app.RefreshToken, error) {
 	var rt app.RefreshToken
 	err := t.pool.QueryRow(ctx, `
-		SELECT id::text, user_id::text, token_hash, expires_at, revoked_at, created_at
-		FROM refresh_tokens WHERE token_hash = $1`, hash).
-		Scan(&rt.ID, &rt.UserID, &rt.TokenHash, &rt.ExpiresAt, &rt.RevokedAt, &rt.CreatedAt)
+		SELECT `+tokenCols+` FROM refresh_tokens WHERE token_hash = $1`, hash).
+		Scan(tokenDest(&rt)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.RefreshToken{}, domain.ErrInvalidToken
 	}
@@ -163,6 +168,53 @@ func (t tokenRepo) GetByHash(ctx context.Context, hash string) (app.RefreshToken
 		return app.RefreshToken{}, fmt.Errorf("get refresh token: %w", err)
 	}
 	return rt, nil
+}
+
+func (t tokenRepo) GetByID(ctx context.Context, id string) (app.RefreshToken, error) {
+	var rt app.RefreshToken
+	err := t.pool.QueryRow(ctx, `
+		SELECT `+tokenCols+` FROM refresh_tokens WHERE id = $1::uuid`, id).
+		Scan(tokenDest(&rt)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.RefreshToken{}, domain.ErrInvalidToken
+	}
+	if err != nil {
+		return app.RefreshToken{}, fmt.Errorf("get refresh token: %w", err)
+	}
+	return rt, nil
+}
+
+// Rotate revokes the token and inserts its successor in one transaction. The
+// UPDATE takes the row lock, so concurrent rotations of the same token are
+// serialized and exactly one of them sees the token still active.
+func (t tokenRepo) Rotate(ctx context.Context, id string, next app.RefreshToken, at time.Time) (bool, error) {
+	tx, err := t.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE refresh_tokens SET revoked_at = $2, rotated_at = $2 WHERE id = $1::uuid AND revoked_at IS NULL`, id, at)
+	if err != nil {
+		return false, fmt.Errorf("rotate refresh token: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return false, nil
+	}
+	var nextID string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1::uuid, $2, $3) RETURNING id::text`,
+		next.UserID, next.TokenHash, next.ExpiresAt).Scan(&nextID); err != nil {
+		return false, fmt.Errorf("create refresh token: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET replaced_by = $2::uuid WHERE id = $1::uuid`, id, nextID); err != nil {
+		return false, fmt.Errorf("link refresh token: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit: %w", err)
+	}
+	return true, nil
 }
 
 func (t tokenRepo) Revoke(ctx context.Context, id string, at time.Time) (bool, error) {

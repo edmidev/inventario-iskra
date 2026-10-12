@@ -170,8 +170,16 @@ func TestRefreshCookieFlow(t *testing.T) {
 	if c2 == nil || c2.Value == c1.Value {
 		t.Fatal("cookie not rotated")
 	}
-	if r := e.do(t, "POST", "/auth/refresh", "", nil, c1); r.StatusCode != 401 {
-		t.Fatalf("reused token = %d", r.StatusCode)
+	// The just-rotated cookie is still accepted inside the grace window
+	// (aborted page load) and yields a fresh cookie.
+	r := e.do(t, "POST", "/auth/refresh", "", nil, c1)
+	if r.StatusCode != 200 {
+		t.Fatalf("reused token inside grace = %d", r.StatusCode)
+	}
+	for _, c := range r.Cookies() {
+		if c.Name == "refresh_token" && (c.Value == c1.Value || c.Value == c2.Value) {
+			t.Fatal("grace refresh must set a fresh cookie")
+		}
 	}
 	if r := e.do(t, "POST", "/auth/refresh", "", nil); r.StatusCode != 401 {
 		t.Fatalf("no cookie = %d", r.StatusCode)

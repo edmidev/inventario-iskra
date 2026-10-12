@@ -16,10 +16,13 @@ type Config struct {
 	Port        string
 	DatabaseURL string
 
-	JWTSecret    string
-	AccessTTL    time.Duration
-	RefreshTTL   time.Duration
-	CookieSecure bool
+	JWTSecret  string
+	AccessTTL  time.Duration
+	RefreshTTL time.Duration
+	// RefreshRotationGrace is the window in which a just-rotated refresh
+	// token may be presented again (REFRESH_ROTATION_GRACE, default 15s).
+	RefreshRotationGrace time.Duration
+	CookieSecure         bool
 
 	BootstrapAdminEmail    string
 	BootstrapAdminPassword string
@@ -31,10 +34,11 @@ func Load() Config {
 		Port:        getenv("PORT", "8080"),
 		DatabaseURL: getenv("DATABASE_URL", ""),
 
-		JWTSecret:    getenv("JWT_SECRET", ""),
-		AccessTTL:    getDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
-		RefreshTTL:   getDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
-		CookieSecure: getenv("COOKIE_SECURE", "true") != "false",
+		JWTSecret:            getenv("JWT_SECRET", ""),
+		AccessTTL:            getDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTTL:           getDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		RefreshRotationGrace: getDuration("REFRESH_ROTATION_GRACE", 15*time.Second),
+		CookieSecure:         getenv("COOKIE_SECURE", "true") != "false",
 
 		BootstrapAdminEmail:    getenv("BOOTSTRAP_ADMIN_EMAIL", ""),
 		BootstrapAdminPassword: getenv("BOOTSTRAP_ADMIN_PASSWORD", ""),

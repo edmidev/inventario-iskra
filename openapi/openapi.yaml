@@ -48,7 +48,7 @@ paths:
     post:
       operationId: refreshSession
       summary: Rotate the refresh cookie and get a new access token
-      description: Reads the `refresh_token` cookie. The presented token is revoked; reusing it revokes every session of the user.
+      description: Reads the `refresh_token` cookie. The presented token is rotated. Presenting the just-rotated token again within a short grace window (15 s by default) is idempotent and returns a fresh session; reusing it after the window revokes every session of the user.
       security: []
       responses:
         "200": { $ref: "#/components/responses/Session" }

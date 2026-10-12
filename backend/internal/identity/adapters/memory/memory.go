@@ -139,6 +139,30 @@ func (v tokenView) GetByHash(_ context.Context, hash string) (app.RefreshToken, 
 	return app.RefreshToken{}, domain.ErrInvalidToken
 }
 
+func (v tokenView) GetByID(_ context.Context, id string) (app.RefreshToken, error) {
+	v.s.mu.Lock()
+	defer v.s.mu.Unlock()
+	t, ok := v.s.tokens[id]
+	if !ok {
+		return app.RefreshToken{}, domain.ErrInvalidToken
+	}
+	return t, nil
+}
+
+func (v tokenView) Rotate(_ context.Context, id string, next app.RefreshToken, at time.Time) (bool, error) {
+	v.s.mu.Lock()
+	defer v.s.mu.Unlock()
+	t, ok := v.s.tokens[id]
+	if !ok || t.RevokedAt != nil {
+		return false, nil
+	}
+	next.ID = v.s.nextID()
+	v.s.tokens[next.ID] = next
+	t.RevokedAt, t.RotatedAt, t.ReplacedBy = &at, &at, &next.ID
+	v.s.tokens[id] = t
+	return true, nil
+}
+
 func (v tokenView) Revoke(_ context.Context, id string, at time.Time) (bool, error) {
 	v.s.mu.Lock()
 	defer v.s.mu.Unlock()

@@ -16,6 +16,10 @@ type RefreshToken struct {
 	ExpiresAt time.Time
 	RevokedAt *time.Time
 	CreatedAt time.Time
+	// RotatedAt is set when the token was revoked by rotation (as opposed to
+	// logout or a security revocation). ReplacedBy is the id of its successor.
+	RotatedAt  *time.Time
+	ReplacedBy *string
 }
 
 // UserRepository persists users.
@@ -40,6 +44,12 @@ type RefreshTokenRepository interface {
 	Create(ctx context.Context, t RefreshToken) error
 	// GetByHash returns domain.ErrInvalidToken when absent.
 	GetByHash(ctx context.Context, hash string) (RefreshToken, error)
+	// GetByID returns domain.ErrInvalidToken when absent.
+	GetByID(ctx context.Context, id string) (RefreshToken, error)
+	// Rotate atomically revokes the token id as rotated at the given time and
+	// stores next as its successor. It returns false, storing nothing, when
+	// the token was already revoked (for example by a concurrent rotation).
+	Rotate(ctx context.Context, id string, next RefreshToken, at time.Time) (bool, error)
 	// Revoke marks the token revoked and reports whether this call did it
 	// (false when it was already revoked).
 	Revoke(ctx context.Context, id string, at time.Time) (bool, error)

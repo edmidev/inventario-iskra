@@ -45,12 +45,13 @@ func wireIdentity(pool *pgxpool.Pool, cfg config.Config) (*httpapi.Handler, *app
 	}
 	repo := postgres.New(pool)
 	svc := app.NewService(app.Deps{
-		Users:      repo,
-		Tokens:     repo.Tokens(),
-		Hasher:     adapters.DefaultArgon2idHasher(),
-		Issuer:     issuer,
-		Limiter:    app.NewMemoryLoginLimiter(loginMaxFails, loginWindow, nil),
-		RefreshTTL: cfg.RefreshTTL,
+		Users:         repo,
+		Tokens:        repo.Tokens(),
+		Hasher:        adapters.DefaultArgon2idHasher(),
+		Issuer:        issuer,
+		Limiter:       app.NewMemoryLoginLimiter(loginMaxFails, loginWindow, nil),
+		RefreshTTL:    cfg.RefreshTTL,
+		RotationGrace: cfg.RefreshRotationGrace,
 	})
 	return httpapi.New(svc, cfg.CookieSecure), svc, nil
 }

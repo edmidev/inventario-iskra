@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -126,12 +127,120 @@ func TestRefreshRotatesAndRejectsReuse(t *testing.T) {
 	if s2.RefreshToken == s1.RefreshToken {
 		t.Fatal("refresh token was not rotated")
 	}
-	// Reusing the old token fails and burns the whole family.
+	// Reusing the old token after the grace window fails and burns the family.
+	f.clk.t = f.clk.t.Add(app.DefaultRotationGrace)
 	if _, err := f.svc.Refresh(ctx, s1.RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
 		t.Fatalf("reuse: %v", err)
 	}
 	if _, err := f.svc.Refresh(ctx, s2.RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
 		t.Fatalf("descendant after reuse should be revoked: %v", err)
+	}
+}
+
+func TestRefreshReuseWithinGraceIsIdempotent(t *testing.T) {
+	f := newFixture(t)
+	f.user(t, "ana@example.com", domain.RoleViewer)
+	ctx := context.Background()
+	s1, _ := f.svc.Login(ctx, "ana@example.com", pw, "ip")
+
+	s2, err := f.svc.Refresh(ctx, s1.RefreshToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.clk.t = f.clk.t.Add(app.DefaultRotationGrace - time.Second)
+	s3, err := f.svc.Refresh(ctx, s1.RefreshToken)
+	if err != nil {
+		t.Fatalf("reuse inside grace: %v", err)
+	}
+	if s3.RefreshToken == s1.RefreshToken || s3.RefreshToken == s2.RefreshToken || s3.AccessToken == "" {
+		t.Fatal("grace refresh must issue a fresh session")
+	}
+	// Both successors are usable.
+	if _, err := f.svc.Refresh(ctx, s2.RefreshToken); err != nil {
+		t.Fatalf("first successor: %v", err)
+	}
+	if _, err := f.svc.Refresh(ctx, s3.RefreshToken); err != nil {
+		t.Fatalf("second successor: %v", err)
+	}
+	// After the window the original token is theft evidence again.
+	f.clk.t = f.clk.t.Add(time.Second)
+	if _, err := f.svc.Refresh(ctx, s1.RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("reuse after grace: %v", err)
+	}
+}
+
+func TestRefreshGraceClosedByLogoutAndPasswordChange(t *testing.T) {
+	f := newFixture(t)
+	u := f.user(t, "ana@example.com", domain.RoleViewer)
+	ctx := context.Background()
+
+	s1, _ := f.svc.Login(ctx, "ana@example.com", pw, "ip")
+	s2, _ := f.svc.Refresh(ctx, s1.RefreshToken)
+	if err := f.svc.Logout(ctx, s2.RefreshToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Refresh(ctx, s1.RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("grace after logout: %v", err)
+	}
+
+	s3, _ := f.svc.Login(ctx, "ana@example.com", pw, "ip")
+	if _, err := f.svc.Refresh(ctx, s3.RefreshToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.ResetPassword(ctx, u.ID, "another-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Refresh(ctx, s3.RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("grace after password reset: %v", err)
+	}
+}
+
+func TestRefreshGraceDisabled(t *testing.T) {
+	f := newFixture(t)
+	f.user(t, "ana@example.com", domain.RoleViewer)
+	ctx := context.Background()
+	issuer, err := adapters.NewJWTIssuer("0123456789abcdef0123456789abcdef", 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := app.NewService(app.Deps{
+		Users: f.store, Tokens: f.store.Tokens(), Hasher: memory.PlainHasher{}, Issuer: issuer,
+		RefreshTTL: time.Hour, RotationGrace: -1, Now: f.clk.now,
+	})
+	s1, _ := svc.Login(ctx, "ana@example.com", pw, "ip")
+	if _, err := svc.Refresh(ctx, s1.RefreshToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Refresh(ctx, s1.RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("reuse with grace disabled: %v", err)
+	}
+}
+
+func TestRefreshConcurrentSameTokenSucceeds(t *testing.T) {
+	f := newFixture(t)
+	f.user(t, "ana@example.com", domain.RoleViewer)
+	ctx := context.Background()
+	s1, _ := f.svc.Login(ctx, "ana@example.com", pw, "ip")
+
+	const n = 8
+	var wg sync.WaitGroup
+	sessions := make([]app.Session, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sessions[i], errs[i] = f.svc.Refresh(ctx, s1.RefreshToken)
+		}()
+	}
+	wg.Wait()
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("refresh %d: %v", i, errs[i])
+		}
+		if _, err := f.svc.Refresh(ctx, sessions[i].RefreshToken); err != nil {
+			t.Fatalf("successor %d unusable: %v", i, err)
+		}
 	}
 }
 

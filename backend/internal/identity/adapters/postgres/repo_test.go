@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/edgar/inventario/backend/internal/identity/adapters"
+	"github.com/edgar/inventario/backend/internal/identity/adapters/memory"
 	"github.com/edgar/inventario/backend/internal/identity/adapters/postgres"
 	"github.com/edgar/inventario/backend/internal/identity/app"
 	"github.com/edgar/inventario/backend/internal/identity/domain"
@@ -174,6 +176,157 @@ func TestRefreshTokenLifecycle(t *testing.T) {
 	}
 	if _, err := tokens.GetByHash(ctx, "h1"); !errors.Is(err, domain.ErrInvalidToken) {
 		t.Fatalf("token should cascade-delete: %v", err)
+	}
+}
+
+func TestRotateIsAtomicAndSerialized(t *testing.T) {
+	r, pool := setup(t)
+	ctx := context.Background()
+	u := mkUser(t, r, "ana@example.com", domain.RoleViewer)
+	tokens := r.Tokens()
+	exp := time.Now().Add(time.Hour)
+	if err := tokens.Create(ctx, app.RefreshToken{UserID: u.ID, TokenHash: "parent", ExpiresAt: exp}); err != nil {
+		t.Fatal(err)
+	}
+	parent, _ := tokens.GetByHash(ctx, "parent")
+
+	const n = 8
+	var wg sync.WaitGroup
+	won := make([]bool, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			won[i], errs[i] = tokens.Rotate(ctx, parent.ID,
+				app.RefreshToken{UserID: u.ID, TokenHash: "child-" + string(rune('a'+i)), ExpiresAt: exp}, time.Now())
+		}()
+	}
+	wg.Wait()
+	winners := 0
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("rotate %d: %v", i, errs[i])
+		}
+		if won[i] {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("winners = %d, want 1", winners)
+	}
+	var total int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM refresh_tokens`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 {
+		t.Fatalf("tokens stored = %d, want parent + exactly one child", total)
+	}
+	parent, _ = tokens.GetByHash(ctx, "parent")
+	if parent.RevokedAt == nil || parent.RotatedAt == nil || parent.ReplacedBy == nil {
+		t.Fatalf("parent not marked rotated: %+v", parent)
+	}
+	child, err := tokens.GetByID(ctx, *parent.ReplacedBy)
+	if err != nil || child.RevokedAt != nil || child.UserID != u.ID {
+		t.Fatalf("child: %+v %v", child, err)
+	}
+	if _, err := tokens.GetByID(ctx, "00000000-0000-4000-8000-000000000000"); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("missing id: %v", err)
+	}
+	// A plain Revoke leaves rotated_at unset, so it never qualifies for grace.
+	if ok, _ := tokens.Revoke(ctx, child.ID, time.Now()); !ok {
+		t.Fatal("revoke child")
+	}
+	child, _ = tokens.GetByID(ctx, child.ID)
+	if child.RotatedAt != nil {
+		t.Fatal("revoke must not set rotated_at")
+	}
+}
+
+func TestRefreshServiceGraceOnPostgres(t *testing.T) {
+	r, _ := setup(t)
+	ctx := context.Background()
+	issuer, err := adapters.NewJWTIssuer("0123456789abcdef0123456789abcdef", 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	clk := &now
+	svc := app.NewService(app.Deps{
+		Users: r, Tokens: r.Tokens(), Hasher: memory.PlainHasher{}, Issuer: issuer,
+		RefreshTTL: time.Hour, RotationGrace: 10 * time.Second, Now: func() time.Time { return *clk },
+	})
+	if _, err := svc.CreateUser(ctx, app.CreateUserInput{Name: "N", Email: "ana@example.com", Password: "correct-horse-battery", Role: domain.RoleViewer}); err != nil {
+		t.Fatal(err)
+	}
+	s1, err := svc.Login(ctx, "ana@example.com", "correct-horse-battery", "ip")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Concurrent refreshes of the same cookie all succeed.
+	const n = 6
+	var wg sync.WaitGroup
+	sessions := make([]app.Session, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sessions[i], errs[i] = svc.Refresh(ctx, s1.RefreshToken)
+		}()
+	}
+	wg.Wait()
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("concurrent refresh %d: %v", i, errs[i])
+		}
+	}
+	for i := range n {
+		if _, err := svc.Refresh(ctx, sessions[i].RefreshToken); err != nil {
+			t.Fatalf("successor %d: %v", i, err)
+		}
+	}
+	// Inside the window a later retry still works.
+	*clk = now.Add(9 * time.Second)
+	if _, err := svc.Refresh(ctx, s1.RefreshToken); err != nil {
+		t.Fatalf("retry inside window: %v", err)
+	}
+	// After it, reuse is rejected and revokes everything.
+	*clk = now.Add(11 * time.Second)
+	if _, err := svc.Refresh(ctx, s1.RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("reuse after window: %v", err)
+	}
+	if _, err := svc.Refresh(ctx, sessions[0].RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("family should be revoked: %v", err)
+	}
+}
+
+func TestLogoutClosesGraceOnPostgres(t *testing.T) {
+	r, _ := setup(t)
+	ctx := context.Background()
+	issuer, _ := adapters.NewJWTIssuer("0123456789abcdef0123456789abcdef", 15*time.Minute)
+	svc := app.NewService(app.Deps{Users: r, Tokens: r.Tokens(), Hasher: memory.PlainHasher{}, Issuer: issuer, RefreshTTL: time.Hour})
+	if _, err := svc.CreateUser(ctx, app.CreateUserInput{Name: "N", Email: "ana@example.com", Password: "correct-horse-battery", Role: domain.RoleViewer}); err != nil {
+		t.Fatal(err)
+	}
+	s1, _ := svc.Login(ctx, "ana@example.com", "correct-horse-battery", "ip")
+	s2, err := svc.Refresh(ctx, s1.RefreshToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Logout(ctx, s2.RefreshToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Refresh(ctx, s1.RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("grace after logout: %v", err)
+	}
+	// Expired tokens are rejected.
+	s3, _ := svc.Login(ctx, "ana@example.com", "correct-horse-battery", "ip")
+	later := app.NewService(app.Deps{Users: r, Tokens: r.Tokens(), Hasher: memory.PlainHasher{}, Issuer: issuer,
+		RefreshTTL: time.Hour, Now: func() time.Time { return time.Now().Add(2 * time.Hour) }})
+	if _, err := later.Refresh(ctx, s3.RefreshToken); !errors.Is(err, domain.ErrInvalidToken) {
+		t.Fatalf("expired: %v", err)
 	}
 }
 

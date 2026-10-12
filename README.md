@@ -42,6 +42,7 @@ Backend environment variables (set in `.env` for Docker Compose):
 | `COOKIE_SECURE` | no | `true` (default) marks the refresh cookie `Secure`; Compose defaults it to `false` for plain-HTTP local use. Set `true` behind HTTPS. |
 | `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD` | no | Creates the first admin at startup, only when the users table is empty. Password needs 10+ characters. |
 | `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL` | no | Go durations; defaults `15m` and `720h`. |
+| `REFRESH_ROTATION_GRACE` | no | Go duration; how long a just-rotated refresh token may be reused; default `15s`. |
 
 Generate a secret with `openssl rand -base64 48`. Add the variables above to your `.env` (see `.env.example`).
 
@@ -184,7 +185,7 @@ The app is installable ("Inventario Iskra", standalone, light/dark `theme-color`
 
 `cd frontend && npx playwright install chromium && npm run e2e`. The global setup starts a throwaway `postgres:16` container (`inv-test-pg`, port 55432), builds and runs the Go API on port 18080, seeds it through the API (needs docker, Go and Node; port 8080 is not used), and Playwright serves the production build with `vite preview` on :14173 proxying `/api`. Everything is torn down afterwards. When a default port is taken (for example by the local compose stack on 18080) move them with `E2E_DB_PORT`, `E2E_API_PORT` and `E2E_WEB_PORT`, e.g. `E2E_API_PORT=19090 E2E_WEB_PORT=14174 npm run e2e`. Specs cover login/search/detail, loan and return, stock salida/entrada with the low-stock list, a consumable stocked in several locations (create with two opening rows, salida at one, partial transfer, history, alert breakdown and restock), failure report and close, viewer restrictions, QR manual resolve and printed-label URLs, user/category/location administration and the PWA (manifest, service worker, no API in caches, offline banner). For a visual pass set `E2E_SCREENSHOTS=<dir>` to also save light/dark screenshots plus a layout audit (horizontal overflow, tap targets).
 
-Known limitation: the refresh cookie rotates on every full page load; aborting a load mid-flight (very fast navigations) can lose the rotated cookie and sign the user out.
+The refresh cookie rotates on every full page load. To survive aborted loads and concurrent tabs, a just-rotated token can be presented again for a short grace window (`REFRESH_ROTATION_GRACE`, default `15s`) and still succeeds with a fresh session; after the window, or once the session was logged out, reusing a rotated token is treated as theft and revokes every session of the user.
 
 ## Importing the Excel
 
