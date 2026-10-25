@@ -72,10 +72,11 @@ func main() {
 	maintenanceHandler := wireMaintenance(pool, identityHandler)
 	dashboardHandler := wireDashboard(pool, identityHandler)
 	suppliersHandler := wireSuppliers(pool, identityHandler)
+	purchasingHandler := wirePurchasing(pool, identityHandler)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           newRouter(identityHandler.Register, catalogHandler.Register, stockHandler.Register, custodyHandler.Register, maintenanceHandler.Register, dashboardHandler.Register, suppliersHandler.Register),
+		Handler:           newRouter(identityHandler.Register, catalogHandler.Register, stockHandler.Register, custodyHandler.Register, maintenanceHandler.Register, dashboardHandler.Register, suppliersHandler.Register, purchasingHandler.Register),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

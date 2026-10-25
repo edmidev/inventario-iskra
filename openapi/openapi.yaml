@@ -377,6 +377,172 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /purchase-orders:
+    get:
+      operationId: listPurchaseOrders
+      summary: List purchase orders
+      description: >-
+        Newest first, with lines (no receipts). `q` matches the supplier name (substring, case-insensitive) or the
+        order id (exact, optional leading `#`).
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/PurchaseOrderStatus" } }
+        - { name: supplier_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: q, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: A page of purchase orders
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, limit, offset]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/PurchaseOrder" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createPurchaseOrder
+      summary: Create a draft purchase order (operator, admin)
+      description: >-
+        The supplier must exist (422 on `supplier_id`) and be active (422 `supplier_inactive`). Lines are optional on
+        a draft. Each line gives exactly one of `item_id` (an existing consumable; an asset is rejected with
+        `existing_item_must_be_consumable` on `lines[i].item_id`) or `new_item` (validated now, created on first
+        receipt). Assets must use `new_item` and are capped at 100 units per line. Amounts are integer minor units
+        of the order's currency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PurchaseOrderCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchaseOrder" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /purchase-orders/{id}:
+    get:
+      operationId: getPurchaseOrder
+      summary: Get a purchase order with its lines and receipts
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      responses:
+        "200":
+          description: The order; each receipt lists the items it brought into the catalog
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchaseOrder" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updatePurchaseOrder
+      summary: Edit a draft purchase order (operator, admin)
+      description: >-
+        Draft only (409 `invalid_state` otherwise). Absent fields are kept; `exchange_rate` and `expected_at` can be
+        cleared with null. When `lines` is given it replaces the whole line set (`[]` empties it); the merged order
+        is revalidated.
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PurchaseOrderUpdate" }
+      responses:
+        "200":
+          description: Updated order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchaseOrder" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /purchase-orders/{id}/order:
+    post:
+      operationId: placePurchaseOrder
+      summary: Place a draft (draft to ordered) (operator, admin)
+      description: Needs at least one line (422 on `lines`) and an active supplier (422 `supplier_inactive`).
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      responses:
+        "200":
+          description: The ordered order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchaseOrder" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /purchase-orders/{id}/cancel:
+    post:
+      operationId: cancelPurchaseOrder
+      summary: Cancel a purchase order (operator, admin)
+      description: Allowed from draft or ordered, and only while nothing was received (409 `invalid_state` otherwise).
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      responses:
+        "200":
+          description: The cancelled order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchaseOrder" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /purchase-orders/{id}/receive:
+    post:
+      operationId: receivePurchaseOrder
+      summary: Register a delivery (operator, admin)
+      description: >-
+        Allowed in `ordered` and `partially_received` (409 `invalid_state` otherwise). Each quantity must be greater
+        than 0 and at most what is still pending on the line (422 `over_receipt`, on `lines[i].quantity`); the
+        location must exist (422 on `location_id`). In one transaction the order row is locked, catalog items are
+        created for `new_item` lines (an asset line creates one item per received unit, each with its own generated
+        code, at `location_id`; a consumable is created once, with no opening stock), an `in` stock movement is
+        recorded at `location_id` for every consumable line, and the receipt is stored. Any failure rolls
+        everything back. With a non-empty `client_key` a repeated request returns the original receipt (200) with
+        no side effects; the first success is 201.
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReceiveRequest" }
+      responses:
+        "200":
+          description: Replay of an earlier request with the same `client_key`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReceiveResult" }
+        "201":
+          description: Receipt registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReceiveResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /locations:
     get:
       operationId: listLocations
@@ -978,6 +1144,157 @@ components:
         active: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    PurchaseOrderStatus:
+      type: string
+      enum: [draft, ordered, partially_received, received, cancelled]
+    Currency:
+      type: string
+      enum: [USD, VES]
+    PurchaseOrderNewItem:
+      type: object
+      description: Definition of an item to create on first receipt; validated by the catalog rules when saved.
+      required: [description, category_id, kind]
+      properties:
+        description: { type: string, maxLength: 500 }
+        category_id: { type: integer, format: int64 }
+        kind: { $ref: "#/components/schemas/ItemKind" }
+        unit: { type: string, maxLength: 30, description: Required for consumables, not allowed for assets. }
+        stock_min: { type: integer, minimum: 0 }
+        attributes: { type: object, additionalProperties: true }
+        notes: { type: string, maxLength: 4000 }
+    PurchaseOrderLineInput:
+      type: object
+      description: >-
+        Exactly one of `item_id` and `new_item`. The read-only fields `id`, `description` and `received_qty` of a
+        fetched line are accepted and ignored.
+      required: [quantity, unit_cost_minor]
+      properties:
+        item_id: { type: string, format: uuid, description: An existing consumable. }
+        new_item: { $ref: "#/components/schemas/PurchaseOrderNewItem" }
+        quantity: { type: integer, minimum: 1, maximum: 100000, description: Assets (`new_item.kind=asset`) up to 100. }
+        unit_cost_minor: { type: integer, format: int64, minimum: 0, description: Unit cost in minor units (cents or céntimos). }
+    PurchaseOrderLine:
+      type: object
+      required: [id, item_id, new_item, description, quantity, received_qty, unit_cost_minor]
+      properties:
+        id: { type: integer, format: int64 }
+        item_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The existing item, or for a `new_item` line the first item created once something was received.
+        new_item:
+          allOf: [{ $ref: "#/components/schemas/PurchaseOrderNewItem" }]
+          nullable: true
+        description: { type: string, description: Snapshot taken when the line was saved. }
+        quantity: { type: integer }
+        received_qty: { type: integer }
+        unit_cost_minor: { type: integer, format: int64 }
+    PurchaseOrderCreate:
+      type: object
+      required: [supplier_id, currency]
+      properties:
+        supplier_id: { type: integer, format: int64 }
+        currency: { $ref: "#/components/schemas/Currency" }
+        exchange_rate:
+          type: number
+          nullable: true
+          description: VES per USD, for reference only; never used to convert stored amounts.
+        expected_at: { type: string, format: date, nullable: true }
+        notes: { type: string, maxLength: 1000 }
+        lines:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/PurchaseOrderLineInput" }
+    PurchaseOrderUpdate:
+      type: object
+      properties:
+        supplier_id: { type: integer, format: int64 }
+        currency: { $ref: "#/components/schemas/Currency" }
+        exchange_rate: { type: number, nullable: true }
+        expected_at: { type: string, format: date, nullable: true }
+        notes: { type: string, maxLength: 1000 }
+        lines:
+          type: array
+          maxItems: 200
+          description: Replaces the whole line set.
+          items: { $ref: "#/components/schemas/PurchaseOrderLineInput" }
+    ReceiptItem:
+      type: object
+      required: [item_id, quantity]
+      properties:
+        item_id: { type: string, format: uuid }
+        code: { type: string, description: Catalog code of the item. }
+        quantity: { type: integer, description: 1 for each created asset; the received quantity for a consumable. }
+    ReceiptLine:
+      type: object
+      required: [line_id, quantity, items]
+      properties:
+        line_id: { type: integer, format: int64 }
+        quantity: { type: integer }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ReceiptItem" }
+    PurchaseReceipt:
+      type: object
+      required: [id, order_id, location_id, received_by, received_at, note, lines]
+      properties:
+        id: { type: integer, format: int64 }
+        order_id: { type: integer, format: int64 }
+        location_id: { type: integer, format: int64 }
+        received_by: { type: string, format: uuid, nullable: true }
+        received_at: { type: string, format: date-time }
+        note: { type: string }
+        client_key: { type: string }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/ReceiptLine" }
+    PurchaseOrder:
+      type: object
+      required: [id, supplier_id, supplier_name, status, currency, exchange_rate, expected_at, notes, total_minor, lines, created_at, updated_at, ordered_at, cancelled_at]
+      properties:
+        id: { type: integer, format: int64 }
+        supplier_id: { type: integer, format: int64 }
+        supplier_name: { type: string }
+        status: { $ref: "#/components/schemas/PurchaseOrderStatus" }
+        currency: { $ref: "#/components/schemas/Currency" }
+        exchange_rate: { type: number, nullable: true }
+        expected_at: { type: string, format: date, nullable: true }
+        notes: { type: string }
+        total_minor: { type: integer, format: int64, description: Sum of quantity times unit_cost_minor, in minor units of `currency`. }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/PurchaseOrderLine" }
+        receipts:
+          type: array
+          description: Present on single-order responses, oldest first.
+          items: { $ref: "#/components/schemas/PurchaseReceipt" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        ordered_at: { type: string, format: date-time, nullable: true }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+    ReceiveRequest:
+      type: object
+      required: [location_id, lines]
+      properties:
+        location_id: { type: integer, format: int64 }
+        note: { type: string, maxLength: 400 }
+        client_key: { type: string, maxLength: 100, description: Idempotency key, unique per order. }
+        lines:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [line_id, quantity]
+            properties:
+              line_id: { type: integer, format: int64 }
+              quantity: { type: integer, minimum: 1 }
+    ReceiveResult:
+      type: object
+      required: [receipt, order]
+      properties:
+        receipt: { $ref: "#/components/schemas/PurchaseReceipt" }
+        order: { $ref: "#/components/schemas/PurchaseOrder" }
     LocationKind:
       type: string
       enum: [storage, container, person]
@@ -1102,7 +1419,8 @@ components:
                 category_prefix_taken, category_in_use, location_in_use, location_cycle, code_taken.
                 Stock and custody: insufficient_stock, item_on_loan, already_assigned, not_assigned,
                 item_not_available, not_applicable, location_required (422, with `fields`). Maintenance: open_failure_exists, record_closed,
-                item_under_repair.
+                item_under_repair. Suppliers: supplier_name_taken. Purchasing: invalid_state (409, the message names the
+                current status), over_receipt and supplier_inactive (422, with `fields`).
             message: { type: string }
             fields:
               type: object

@@ -11,7 +11,7 @@ Mobile-first inventory system for assets and consumables, with roles, basic cust
 ## Layout
 
 ```
-backend/    Go API (cmd/api, internal/{identity,catalog,stock,custody,maintenance,suppliers}, migrations)
+backend/    Go API (cmd/api, internal/{identity,catalog,stock,custody,maintenance,suppliers,purchasing}, migrations)
 frontend/   React app (atomic design under src/components)
 openapi/    API contract
 ```
@@ -120,12 +120,25 @@ Preventive maintenance and the failure/repair flow live in the `maintenance` mod
 
 ## Suppliers
 
-Suppliers live in the `suppliers` module (`GET|POST /api/v1/suppliers`, `GET|PATCH|DELETE /suppliers/{id}`; see `openapi/openapi.yaml`). No new environment variables; migration `00009` creates `suppliers`. Purchase orders (planned) will reference them.
+Suppliers live in the `suppliers` module (`GET|POST /api/v1/suppliers`, `GET|PATCH|DELETE /suppliers/{id}`; see `openapi/openapi.yaml`). No new environment variables; migration `00009` creates `suppliers`. Purchase orders reference them (see below).
 
 - Fields: `name` (required, up to 120), `contact_name`, `email` (validated), `phone`, `notes` and `active` (defaults to true). Validation errors return 422 `validation_failed` with `error.fields`.
 - The name is unique among live suppliers, ignoring case (409 `supplier_name_taken`); a partial unique index (`suppliers_name_live_uq`, `WHERE deleted_at IS NULL`) enforces it, so a deleted supplier's name can be reused. Deleting is a soft delete.
 - `GET /suppliers?q=` matches name, contact name and email (case-insensitive, `%` and `_` are literal); filter `active=true|false`; ordered by name; `limit` max 100, default 25, `offset`; the response includes `total`.
 - Operators and admins write (`items:write`); every role reads.
+
+## Purchase orders
+
+Purchase orders live in the `purchasing` module (`GET|POST /api/v1/purchase-orders`, `GET|PATCH /purchase-orders/{id}`, `POST /purchase-orders/{id}/order|cancel|receive`; see `openapi/openapi.yaml`). No new environment variables; migration `00010` creates `purchase_orders`, `purchase_order_lines`, `po_receipts`, `po_receipt_lines` and `po_receipt_items`. Operators and admins write (`items:write`); every role reads (`inventory:read`).
+
+- States: `draft -> ordered -> partially_received -> received`, plus `cancelled`. Cancelling is allowed from `draft` or `ordered` only while nothing was received. Any other transition is 409 `invalid_state` and the message names the current status. Supplier, currency, rate, expected date, notes and lines are editable only in `draft`; `PATCH` with `lines` replaces the whole set (`[]` empties it), and `null` clears `exchange_rate` and `expected_at`. Placing an order needs at least one line.
+- Suppliers: unknown is 422 on `supplier_id`; inactive (or deleted since the draft was saved) is 422 `supplier_inactive`, checked when creating, when changing the supplier and when placing the order. The supplier name is read live, so the orders of a deleted supplier stay readable.
+- Lines: exactly one of `item_id` or `new_item` (`description`, `category_id`, `kind`, `unit`, `stock_min`, `attributes`, `notes`). `item_id` must be an existing **consumable** (422 `existing_item_must_be_consumable` on `lines[i].item_id`). **Assets are always `new_item` lines**, since each unit becomes its own catalog item, and a line is capped at 100 units (`MaxAssetUnitsPerLine`, 422 on `lines[i].quantity`). `new_item` is validated with the catalog rules when the line is saved, so problems appear as `lines[i].new_item.<field>` errors instead of at receipt. `description` is a snapshot taken at save time.
+- Money: `unit_cost_minor` is an integer in minor units (cents or céntimos), never a float; `total_minor` is computed (`quantity * unit_cost_minor`). The order has one `currency` (`USD` or `VES`) shared by all its lines. `exchange_rate` (VES per USD) is optional reference data and is never used to convert stored amounts.
+- Receiving (`POST /{id}/receive`, body `location_id`, optional `note` and `client_key`, `lines[{line_id, quantity}]`): allowed in `ordered` and `partially_received`; each quantity is at most what is pending on the line (422 `over_receipt` on `lines[i].quantity`) and the location must exist (422 on `location_id`). One transaction locks the order row (`FOR UPDATE`), creates the catalog items of `new_item` lines (an asset line of quantity N creates N items, each with its own generated code and the receipt location, status functional; a partial receipt creates only the received count; a new consumable is created once, with no opening stock, and later receipts reuse it through the line's `item_id`), records an `in` stock movement at `location_id` for every consumable line with the note `Purchase order #<id>` (plus the receipt note), stores the receipt, and moves the order to `partially_received` or `received`. If anything fails nothing is kept: no orphan items, no stock change. Two concurrent receipts of the same remaining quantity yield exactly one success.
+- Idempotency: with a non-empty `client_key`, repeating the request on the same order returns the original receipt with 200 and does nothing else; the first success is 201. Keys are unique per order. The response is `{receipt, order}`; `GET /{id}` lists receipts with the items (id and code) each one created. A new-item line keeps `new_item` as history and points `item_id` at the first item created.
+- `GET /purchase-orders` filters `status`, `supplier_id` and `q` (supplier name substring, or the order id with an optional `#`), newest first, `limit` max 100, default 25, `offset`, with `total`. Validation errors return 422 `validation_failed` with `error.fields`.
+- Wiring: the module imports neither catalog, stock nor suppliers. It declares ports (`ItemCatalog`, `StockReceiver`, `Suppliers`) that `cmd/api/wire.go` implements on top of those modules' services. The postgres repository opens the receive transaction and hands it to the use case in the context (`db.WithTx`), so catalog item creation and stock recording join it. The adapter reads `suppliers` (name) and `items` (code) with adapter-level SQL.
 
 ## Dashboard
 
