@@ -28,6 +28,9 @@ import (
 	stockpg "github.com/edgar/inventario/backend/internal/stock/adapters/postgres"
 	stockapp "github.com/edgar/inventario/backend/internal/stock/app"
 	stockdomain "github.com/edgar/inventario/backend/internal/stock/domain"
+	suppliersapi "github.com/edgar/inventario/backend/internal/suppliers/adapters/httpapi"
+	supplierspg "github.com/edgar/inventario/backend/internal/suppliers/adapters/postgres"
+	suppliersapp "github.com/edgar/inventario/backend/internal/suppliers/app"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -113,6 +116,16 @@ func wireMaintenance(pool *pgxpool.Pool, identity *httpapi.Handler) *maintenance
 	return maintenanceapi.New(svc, identity.Authenticate(), maintenanceapi.Permissions{
 		Read:       string(domain.PermRead),
 		WriteItems: string(domain.PermWriteItems),
+	})
+}
+
+// wireSuppliers builds the supplier handler; operators and admins write, every
+// role reads.
+func wireSuppliers(pool *pgxpool.Pool, identity *httpapi.Handler) *suppliersapi.Handler {
+	svc := suppliersapp.NewService(supplierspg.New(pool))
+	return suppliersapi.New(svc, identity.Authenticate(), suppliersapi.Permissions{
+		Read:  string(domain.PermRead),
+		Write: string(domain.PermWriteItems),
 	})
 }
 
