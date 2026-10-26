@@ -265,6 +265,118 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /suppliers:
+    get:
+      operationId: listSuppliers
+      summary: List suppliers
+      description: Ordered by name (case-insensitive). `q` matches name, contact name and email.
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: active, in: query, schema: { type: boolean } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: A page of suppliers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, limit, offset]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Supplier" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createSupplier
+      summary: Create a supplier (operator, admin)
+      description: The name is unique among live suppliers, ignoring case (409 `supplier_name_taken`). `active` defaults to true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 120 }
+                contact_name: { type: string, maxLength: 120 }
+                email: { type: string, format: email }
+                phone: { type: string, maxLength: 40 }
+                notes: { type: string, maxLength: 1000 }
+                active: { type: boolean, default: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Supplier" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /suppliers/{id}:
+    get:
+      operationId: getSupplier
+      summary: Get a supplier
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      responses:
+        "200":
+          description: The supplier
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Supplier" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateSupplier
+      summary: Edit a supplier (operator, admin)
+      description: Partial update; the merged supplier is revalidated. Deactivate with `active=false` to keep it out of new orders without deleting it.
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 120 }
+                contact_name: { type: string, maxLength: 120 }
+                email: { type: string, format: email }
+                phone: { type: string, maxLength: 40 }
+                notes: { type: string, maxLength: 1000 }
+                active: { type: boolean }
+      responses:
+        "200":
+          description: Updated supplier
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Supplier" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteSupplier
+      summary: Delete a supplier (operator, admin)
+      description: Soft delete; the name becomes available again.
+      parameters:
+        - { $ref: "#/components/parameters/NumericId" }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /locations:
     get:
       operationId: listLocations
@@ -853,6 +965,19 @@ components:
         id: { type: integer, format: int64 }
         name: { type: string }
         code_prefix: { type: string, example: HER }
+    Supplier:
+      type: object
+      required: [id, name, contact_name, email, phone, notes, active, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        contact_name: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        notes: { type: string }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     LocationKind:
       type: string
       enum: [storage, container, person]

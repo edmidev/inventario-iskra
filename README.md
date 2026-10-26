@@ -11,7 +11,7 @@ Mobile-first inventory system for assets and consumables, with roles, basic cust
 ## Layout
 
 ```
-backend/    Go API (cmd/api, internal/{identity,catalog,stock,custody,maintenance}, migrations)
+backend/    Go API (cmd/api, internal/{identity,catalog,stock,custody,maintenance,suppliers}, migrations)
 frontend/   React app (atomic design under src/components)
 openapi/    API contract
 ```
@@ -117,6 +117,15 @@ Preventive maintenance and the failure/repair flow live in the `maintenance` mod
 - Due maintenance is derived, never stored: an asset with `maintenance_interval_days` is due at `COALESCE(last_maintenance_at, created_at) + interval` (24-hour days) and overdue once that is in the past. Item responses add `maintenance_due_at` (null without an interval) and `maintenance_overdue`. `GET /maintenance/due` lists overdue assets plus those due within `within_days` (0 to 365, default 0 = overdue only), most overdue first; filters `category_id`, `q`; `limit` max 100.
 - `GET /maintenance` lists records across items, open first then newest, with item code/description and user names; filters `status`, `kind`, `destination` (exact, case-insensitive), `item_id`, `q` (item code/description and record description).
 - Operators and admins write (`items:write`); every role reads. Validation errors return 422 `validation_failed` with `error.fields`.
+
+## Suppliers
+
+Suppliers live in the `suppliers` module (`GET|POST /api/v1/suppliers`, `GET|PATCH|DELETE /suppliers/{id}`; see `openapi/openapi.yaml`). No new environment variables; migration `00009` creates `suppliers`. Purchase orders (planned) will reference them.
+
+- Fields: `name` (required, up to 120), `contact_name`, `email` (validated), `phone`, `notes` and `active` (defaults to true). Validation errors return 422 `validation_failed` with `error.fields`.
+- The name is unique among live suppliers, ignoring case (409 `supplier_name_taken`); a partial unique index (`suppliers_name_live_uq`, `WHERE deleted_at IS NULL`) enforces it, so a deleted supplier's name can be reused. Deleting is a soft delete.
+- `GET /suppliers?q=` matches name, contact name and email (case-insensitive, `%` and `_` are literal); filter `active=true|false`; ordered by name; `limit` max 100, default 25, `offset`; the response includes `total`.
+- Operators and admins write (`items:write`); every role reads.
 
 ## Dashboard
 
