@@ -15,7 +15,7 @@ Objective: suppliers and purchase orders (with receipts) in the inventory system
 - [x] T9 suppliers backend (S1) — route: inline (no writer trigger: one understood module, ~1k lines incl. tests, written sequentially); commits: 38129e0, 82ed154, 5c03956
 - [x] T10a shared tx helper: `db.WithTx`/`db.Begin`; catalog item create and stock Record join an ambient tx (S5) — route: inline; commit: f939fbf
 - [x] T10b purchasing backend: orders, lines, receipts, multi-currency (S2-S6) — route: delegated writer (named reason: parent context backstop, ~150k); commits: 5656ba4, 6e47191, e300eac
-- [x] T11 alerts/dashboard integration (S7) — route: inline (understood, ~300 lines, no writer reason); commit: see Progress
+- [x] T11 alerts/dashboard integration (S7) — route: inline (understood, ~300 lines, no writer reason); commit: 53cd614
 - [ ] T12 frontend: suppliers and orders pages, receive flow, e2e
 
 ## Log
