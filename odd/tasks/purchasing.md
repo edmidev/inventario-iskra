@@ -10,13 +10,16 @@ Objective: suppliers and purchase orders (with receipts) in the inventory system
 - S5 (assumption): receiving never writes stock directly; it records `in` movements through the stock service in the same transaction. Cap on N per line (assumed 100).
 - S6: "multimoneda, dolares y bs" — unit costs support USD and VES (Bs). Assumption: one currency per order (`currency` in `USD|VES`, all lines share it); an optional exchange rate (VES per USD) may be recorded on the order for reference, never used to convert stored amounts. Amounts stored as integer minor units (cents) to avoid float rounding.
 - S7 (assumptions, from the approved plan): the dashboard read model knows what is already on order and proposes what to buy. (a) Low-stock items show `pending_ordered` = sum(quantity - received_qty) over lines of orders in `ordered|partially_received`. (b) `GET /dashboard/reorder-suggestions` lists low-stock consumables grouped by habitual supplier (supplier of the item's most recent non-draft, non-cancelled order line; live and active suppliers only; otherwise the `unassigned` group), with last unit cost and currency to prefill. Suggested quantity = max(0, 2 x stock_min - stock_current - pending_ordered); items at 0 are omitted. No `item_suppliers` table (derived from order history). The 2x target is an assumption.
+- S8 (frontend, from the approved plan; Spanish UI copy, existing frontend conventions): suppliers pages (list with search, create/edit sheet, deactivate/delete; viewer read-only); purchase-order pages (list filtered by status/supplier in the URL, detail, create/edit draft with lines, mark ordered, cancel, receive flow with location and per-line quantities); a line can pick an existing consumable or define a NEW item inline ("Si el articulo no existe, que se pueda crear dentro de la orden de compra"), and a new asset line with quantity N is shown as creating N items ("Que se creen N ítems con códigos distintos"); money shown per order currency (USD/Bs, "multimoneda, dolares y bs") from integer minor units; low-stock rows show `pending_ordered`; a reorder-suggestions view with a button that opens a prefilled draft per supplier group. Playwright e2e covers the main flows.
 
 ## Tasks
 - [x] T9 suppliers backend (S1) — route: inline (no writer trigger: one understood module, ~1k lines incl. tests, written sequentially); commits: 38129e0, 82ed154, 5c03956
 - [x] T10a shared tx helper: `db.WithTx`/`db.Begin`; catalog item create and stock Record join an ambient tx (S5) — route: inline; commit: f939fbf
 - [x] T10b purchasing backend: orders, lines, receipts, multi-currency (S2-S6) — route: delegated writer (named reason: parent context backstop, ~150k); commits: 5656ba4, 6e47191, e300eac
 - [x] T11 alerts/dashboard integration (S7) — route: inline (understood, ~300 lines, no writer reason); commit: 53cd614
-- [ ] T12 frontend: suppliers and orders pages, receive flow, e2e
+- [ ] T12a frontend suppliers + purchase orders (pages, forms, receive flow, inline new item, unit tests) (S8) — route: delegated writer (named reason: parent context backstop; one coherent unit)
+- [ ] T12b frontend reorder suggestions + pending_ordered display + create-draft-from-suggestion (S8) — route: inline
+- [ ] T12c Playwright e2e for suppliers, order create/order/receive, viewer read-only (S8) — route: inline or writer
 
 ## Log
 - L1 (2026-10-25, user): "Necesito que ahora el sistema maneje ordenes de compra en el inventario, manejar proveedores, necesito que me propongas un plan"
