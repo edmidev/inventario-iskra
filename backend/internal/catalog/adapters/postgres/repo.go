@@ -346,11 +346,11 @@ func (r *Items) Create(ctx context.Context, it *domain.Item) error {
 	if err != nil {
 		return fmt.Errorf("encode attributes: %w", err)
 	}
-	tx, err := r.pool.Begin(ctx)
+	tx, commit, rollback, err := db.Begin(ctx, r.pool)
 	if err != nil {
 		return fmt.Errorf("begin create item: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer rollback()
 	created, err := scanItem(tx.QueryRow(ctx, `
 		INSERT INTO items (code, description, category_id, kind, status, unit, stock_current, stock_min,
 			location_id, last_maintenance_at, maintenance_interval_days, attributes, notes)
@@ -371,7 +371,7 @@ func (r *Items) Create(ctx context.Context, it *domain.Item) error {
 			return fmt.Errorf("create item hook: %w", err)
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := commit(); err != nil {
 		return fmt.Errorf("commit create item: %w", err)
 	}
 	*it = created

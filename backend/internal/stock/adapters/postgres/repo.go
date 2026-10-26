@@ -48,11 +48,11 @@ func (r *Repo) Record(ctx context.Context, itemID, userID string, decide func(do
 	if !validUUID(itemID) {
 		return domain.Movement{}, nil, domain.ErrItemNotFound
 	}
-	tx, err := r.pool.Begin(ctx)
+	tx, commit, rollback, err := db.Begin(ctx, r.pool)
 	if err != nil {
 		return domain.Movement{}, nil, fmt.Errorf("begin movement: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer rollback()
 
 	var cur domain.ItemState
 	var kind string
@@ -141,7 +141,7 @@ func (r *Repo) Record(ctx context.Context, itemID, userID string, decide func(do
 			return domain.Movement{}, nil, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := commit(); err != nil {
 		return domain.Movement{}, nil, fmt.Errorf("commit movement: %w", err)
 	}
 	return m, stocks, nil
