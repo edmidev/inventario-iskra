@@ -8,8 +8,11 @@ import type {
   Location,
   MaintenanceRecord,
   Movement,
+  PurchaseOrder,
+  PurchaseOrderLine,
   Role,
   StockAlert,
+  Supplier,
   User,
 } from "../lib/api/schemas";
 
@@ -266,4 +269,59 @@ export const page = <T,>(data: T[], extra: { total?: number; limit?: number; off
   total: extra.total ?? data.length,
   limit: extra.limit ?? 20,
   offset: extra.offset ?? 0,
+});
+
+export const supplier = (overrides: Partial<Supplier> = {}): Supplier => ({
+  id: 1,
+  name: "Ferretería Sur",
+  contact_name: "Marta Ruiz",
+  email: "ventas@sur.example.com",
+  phone: "0414-5550000",
+  notes: "",
+  active: true,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  ...overrides,
+});
+
+export const purchaseOrderLine = (overrides: Partial<PurchaseOrderLine> = {}): PurchaseOrderLine => ({
+  id: 100,
+  item_id: "22222222-2222-2222-2222-222222222222",
+  new_item: null,
+  description: "Cinta aislante",
+  quantity: 10,
+  received_qty: 0,
+  unit_cost_minor: 250,
+  ...overrides,
+});
+
+/** An `ordered` USD order with an existing consumable line (10 x US$ 2.50) and a new asset line (4 x US$ 120.00). */
+export const purchaseOrder = (overrides: Partial<PurchaseOrder> = {}): PurchaseOrder => ({
+  id: 7,
+  supplier_id: 1,
+  supplier_name: "Ferretería Sur",
+  status: "ordered",
+  currency: "USD",
+  exchange_rate: null,
+  expected_at: null,
+  notes: "",
+  total_minor: 50500,
+  lines: [
+    purchaseOrderLine(),
+    purchaseOrderLine({
+      id: 101,
+      item_id: null,
+      new_item: { description: "Taladro percutor", category_id: 1, kind: "asset" },
+      description: "Taladro percutor",
+      quantity: 4,
+      received_qty: 1,
+      unit_cost_minor: 12000,
+    }),
+  ],
+  receipts: [],
+  created_at: "2026-10-01T00:00:00Z",
+  updated_at: "2026-10-01T00:00:00Z",
+  ordered_at: "2026-10-02T00:00:00Z",
+  cancelled_at: null,
+  ...overrides,
 });
