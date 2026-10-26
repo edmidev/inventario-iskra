@@ -133,6 +133,7 @@ export const summary: DashboardSummary = {
         unit: "caja",
         stock_current: 2,
         stock_min: 5,
+        pending_ordered: 0,
         location_name: "Bodega",
         stocks: [stock(10, 2)],
       },

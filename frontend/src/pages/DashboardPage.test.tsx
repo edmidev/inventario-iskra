@@ -55,6 +55,23 @@ describe("dashboard", () => {
     expect(rows[1]).toHaveTextContent("Bodega 1 · Estante A 3");
   });
 
+  it("shows the quantity already on order for a low-stock row", async () => {
+    useAuthenticatedApi("viewer");
+    const base = summary.low_stock.top[0];
+    server.use(
+      http.get(api("/dashboard/summary"), () =>
+        HttpResponse.json({
+          ...summary,
+          low_stock: { count: 2, top: [{ ...base, pending_ordered: 4 }, { ...base, id: "c-2", code: "ISK-CON-002", pending_ordered: 0 }] },
+        }),
+      ),
+    );
+    renderApp("/inicio");
+    const rows = within(await screen.findByRole("region", { name: "Stock bajo" })).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("4 en camino");
+    expect(rows[1]).not.toHaveTextContent("en camino");
+  });
+
   it("opens the item detail when a row is tapped", async () => {
     useAuthenticatedApi("viewer");
     server.use(

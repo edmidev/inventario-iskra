@@ -51,6 +51,9 @@ export function PurchaseOrdersPage() {
             </Button>
           )}
         </div>
+        <Link to="/ordenes-compra/sugerencias" className="inline-flex min-h-11 items-center text-sm font-semibold text-accent">
+          Sugerencias de compra
+        </Link>
       </div>
 
       <div className="flex flex-col gap-2">

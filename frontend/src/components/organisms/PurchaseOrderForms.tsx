@@ -94,16 +94,18 @@ function ItemPicker({ selectedId, selectedLabel, error, onPick, onClear }: {
 interface PurchaseOrderFormProps {
   /** Present when editing a draft. */
   order?: PurchaseOrder;
+  /** Prefill for a new draft (ignored when editing). */
+  initialValues?: OrderValues;
   onSubmit: (values: OrderValues) => Promise<void>;
   onCancel: () => void;
 }
 
-export function PurchaseOrderForm({ order, onSubmit, onCancel }: PurchaseOrderFormProps) {
+export function PurchaseOrderForm({ order, initialValues, onSubmit, onCancel }: PurchaseOrderFormProps) {
   const suppliers = useActiveSuppliers();
   const { categories } = useCatalogLookup();
   const { form, submit, formError } = useApiForm<OrderValues>({
     resolver: zodResolver(orderSchema) as Resolver<OrderValues>,
-    defaultValues: order ? orderToValues(order) : emptyOrder(),
+    defaultValues: order ? orderToValues(order) : (initialValues ?? emptyOrder()),
     fields: [
       "supplier_id",
       "currency",
