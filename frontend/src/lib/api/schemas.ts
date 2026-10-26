@@ -121,6 +121,8 @@ export const dashboardSummarySchema = z.object({
         unit: z.string(),
         stock_current: z.number(),
         stock_min: z.number(),
+        /** Quantity still to arrive on open purchase orders. */
+        pending_ordered: z.number(),
         location_name: z.string().nullable(),
         stocks: z.array(itemStockSchema),
       }),
@@ -360,3 +362,26 @@ export type PurchaseOrder = z.infer<typeof purchaseOrderSchema>;
 
 export const receiveResultSchema = z.object({ receipt: purchaseReceiptSchema, order: purchaseOrderSchema });
 export type ReceiveResult = z.infer<typeof receiveResultSchema>;
+
+export const reorderLineSchema = z.object({
+  item_id: z.string(),
+  code: z.string(),
+  description: z.string(),
+  unit: z.string(),
+  stock_current: z.number(),
+  stock_min: z.number(),
+  pending_ordered: z.number(),
+  suggested_qty: z.number(),
+  last_unit_cost_minor: z.number().nullable(),
+  last_currency: currencySchema.nullable(),
+});
+export type ReorderLine = z.infer<typeof reorderLineSchema>;
+
+export const reorderGroupSchema = z.object({
+  supplier_id: z.number().nullable(),
+  supplier_name: z.string().nullable(),
+  lines: z.array(reorderLineSchema),
+});
+export type ReorderGroup = z.infer<typeof reorderGroupSchema>;
+
+export const reorderSuggestionsSchema = z.object({ groups: z.array(reorderGroupSchema) });

@@ -12,19 +12,20 @@ import {
   useReceivePurchaseOrder,
   useUpdatePurchaseOrder,
 } from "../api/purchaseOrders";
-import { valuesToPayload } from "../orderForm";
+import { valuesToPayload, type OrderValues } from "../orderForm";
 
 interface SheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function CreatePurchaseOrderSheet({ open, onOpenChange }: SheetProps) {
+export function CreatePurchaseOrderSheet({ open, onOpenChange, initialValues }: SheetProps & { initialValues?: OrderValues }) {
   const create = useCreatePurchaseOrder();
   const toast = useToast();
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Nueva orden de compra" description="Se guarda como borrador hasta que la marques como pedida.">
       <PurchaseOrderForm
+        initialValues={initialValues}
         onCancel={() => onOpenChange(false)}
         onSubmit={async (values) => {
           const saved = await create.mutateAsync(valuesToPayload(values));
