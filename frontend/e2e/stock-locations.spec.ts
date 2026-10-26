@@ -76,7 +76,7 @@ test("a consumable stocked in several locations: create, salida, partial transfe
   await move.getByLabel(/Cantidad a trasladar/).fill("2");
   await expect(move.getByText(`Mover 2 ${unit} de ${SEED.warehouse} a ${SEED.borrower}`)).toBeVisible();
   await move.getByRole("button", { name: "Trasladar", exact: true }).click();
-  await expect(page.getByText(`Trasladado: 2 ${unit} de ${SEED.warehouse} a ${SEED.borrower}.`)).toBeVisible();
+  await expect(page.getByText(`Trasladado: 2 ${unit} de ${SEED.warehouse} a ${SEED.borrower}.`).first()).toBeVisible();
   await expectRow(page, SEED.warehouse, 3);
   await expectRow(page, SEED.shelf, 2);
   await expectRow(page, SEED.borrower, 2);
