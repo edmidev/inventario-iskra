@@ -15,6 +15,7 @@ type Repo struct {
 	summary domain.Summary
 	err     error
 	lastNow time.Time
+	cands   []domain.ReorderCandidate
 }
 
 // New builds a Repo that returns the zero summary until Set is called.
@@ -47,4 +48,18 @@ func (r *Repo) Summary(_ context.Context, now time.Time) (domain.Summary, error)
 	defer r.mu.Unlock()
 	r.lastNow = now
 	return r.summary, r.err
+}
+
+// SetCandidates replaces the reorder candidates to return.
+func (r *Repo) SetCandidates(c []domain.ReorderCandidate) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cands = c
+}
+
+// ReorderCandidates implements app.Repository.
+func (r *Repo) ReorderCandidates(context.Context) ([]domain.ReorderCandidate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cands, r.err
 }

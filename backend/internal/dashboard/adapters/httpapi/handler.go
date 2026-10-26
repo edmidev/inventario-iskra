@@ -36,17 +36,20 @@ func (h *Handler) Register(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(h.authenticate)
 		r.With(read).Get("/dashboard/summary", h.summary)
+		r.With(read).Get("/dashboard/reorder-suggestions", h.reorderSuggestions)
 	})
 }
 
 type lowStockItemDTO struct {
-	ID           string  `json:"id"`
-	Code         string  `json:"code"`
-	Description  string  `json:"description"`
-	Unit         string  `json:"unit"`
-	StockCurrent int     `json:"stock_current"`
-	StockMin     int     `json:"stock_min"`
-	LocationName *string `json:"location_name"`
+	ID           string `json:"id"`
+	Code         string `json:"code"`
+	Description  string `json:"description"`
+	Unit         string `json:"unit"`
+	StockCurrent int    `json:"stock_current"`
+	StockMin     int    `json:"stock_min"`
+	// PendingOrdered is the quantity still to arrive on open purchase orders.
+	PendingOrdered int     `json:"pending_ordered"`
+	LocationName   *string `json:"location_name"`
 	// Stocks is the per-location breakdown behind StockCurrent.
 	Stocks []stockLocationDTO `json:"stocks"`
 }
@@ -115,7 +118,7 @@ func toDTO(s domain.Summary) summaryDTO {
 		for j, st := range it.Stocks {
 			stocks[j] = stockLocationDTO{st.LocationID, st.LocationName, st.Quantity}
 		}
-		d.LowStock.Top[i] = lowStockItemDTO{it.ID, it.Code, it.Description, it.Unit, it.StockCurrent, it.StockMin, it.LocationName, stocks}
+		d.LowStock.Top[i] = lowStockItemDTO{it.ID, it.Code, it.Description, it.Unit, it.StockCurrent, it.StockMin, it.PendingOrdered, it.LocationName, stocks}
 	}
 	d.Loans.Active, d.Loans.Overdue = s.Loans.Active, s.Loans.Overdue
 	d.Loans.OverdueTop = make([]overdueLoanDTO, len(s.Loans.OverdueTop))
@@ -138,4 +141,42 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, toDTO(s))
+}
+
+type reorderLineDTO struct {
+	ItemID            string  `json:"item_id"`
+	Code              string  `json:"code"`
+	Description       string  `json:"description"`
+	Unit              string  `json:"unit"`
+	StockCurrent      int     `json:"stock_current"`
+	StockMin          int     `json:"stock_min"`
+	PendingOrdered    int     `json:"pending_ordered"`
+	SuggestedQty      int     `json:"suggested_qty"`
+	LastUnitCostMinor *int64  `json:"last_unit_cost_minor"`
+	LastCurrency      *string `json:"last_currency"`
+}
+
+type reorderGroupDTO struct {
+	SupplierID   *int64           `json:"supplier_id"`
+	SupplierName *string          `json:"supplier_name"`
+	Lines        []reorderLineDTO `json:"lines"`
+}
+
+func (h *Handler) reorderSuggestions(w http.ResponseWriter, r *http.Request) {
+	groups, err := h.svc.ReorderSuggestions(r.Context())
+	if err != nil {
+		slog.Error("dashboard reorder suggestions", "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, httpx.CodeInternal, "internal error")
+		return
+	}
+	out := make([]reorderGroupDTO, len(groups)) // never null in JSON
+	for i, g := range groups {
+		lines := make([]reorderLineDTO, len(g.Lines))
+		for j, l := range g.Lines {
+			lines[j] = reorderLineDTO{l.ItemID, l.Code, l.Description, l.Unit, l.StockCurrent, l.StockMin,
+				l.PendingOrdered, l.SuggestedQty, l.LastUnitCostMinor, l.LastCurrency}
+		}
+		out[i] = reorderGroupDTO{g.SupplierID, g.SupplierName, lines}
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"groups": out})
 }

@@ -40,7 +40,7 @@ func newSeed(t *testing.T) *seed {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE items, code_sequences, locations, categories, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE items, code_sequences, locations, categories, users, suppliers, purchase_orders RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	s := &seed{t: t, pool: pool}
@@ -377,3 +377,97 @@ func TestMaintenanceOverdueTopIsCapped(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// order inserts a purchase order for the supplier with one line for the item.
+func (s *seed) order(supplier int64, status, currency string, orderedAt *time.Time, itemID string, qty, received int, cost int64) {
+	s.t.Helper()
+	var id int64
+	if err := s.pool.QueryRow(context.Background(),
+		`INSERT INTO purchase_orders (supplier_id, status, currency, ordered_at) VALUES ($1, $2, $3, $4) RETURNING id`,
+		supplier, status, currency, orderedAt).Scan(&id); err != nil {
+		s.t.Fatal(err)
+	}
+	s.must(`INSERT INTO purchase_order_lines (order_id, position, item_id, quantity, received_qty, unit_cost_minor)
+		VALUES ($1, 1, $2, $3, $4, $5)`, id, itemID, qty, received, cost)
+}
+
+func (s *seed) supplier(name string, active bool) int64 {
+	s.t.Helper()
+	var id int64
+	if err := s.pool.QueryRow(context.Background(),
+		`INSERT INTO suppliers (name, active) VALUES ($1, $2) RETURNING id`, name, active).Scan(&id); err != nil {
+		s.t.Fatal(err)
+	}
+	return id
+}
+
+func TestPendingOrderedCountsOnlyOpenOrders(t *testing.T) {
+	s := newSeed(t)
+	sup := s.supplier("Alfa", true)
+	item := s.consumable("Tape", 1, 5, nil)
+	at := days(-3)
+	s.order(sup, "ordered", "USD", &at, item, 10, 0, 100)
+	s.order(sup, "partially_received", "USD", &at, item, 8, 3, 100) // 5 left
+	s.order(sup, "draft", "USD", nil, item, 99, 0, 100)
+	s.order(sup, "received", "USD", &at, item, 7, 7, 100)
+	s.order(sup, "cancelled", "USD", &at, item, 50, 0, 100)
+
+	top := s.summary().LowStock.Top
+	if len(top) != 1 || top[0].PendingOrdered != 15 {
+		t.Fatalf("pending_ordered = %+v, want 15 (10 + 5 left)", top)
+	}
+}
+
+func TestReorderCandidatesUseLatestLiveSupplier(t *testing.T) {
+	s := newSeed(t)
+	ctx := context.Background()
+	alfa := s.supplier("Alfa", true)
+	beta := s.supplier("Beta", true)
+	gone := s.supplier("Gone", false) // inactive: ignored as habitual supplier
+
+	both := s.consumable("Tape", 1, 5, nil)
+	never := s.consumable("Glue", 0, 4, nil)
+	onlyInactive := s.consumable("Pins", 2, 6, nil)
+	s.consumable("Plenty", 50, 5, nil) // not low
+
+	old, recent := days(-30), days(-2)
+	s.order(alfa, "received", "VES", &old, both, 5, 5, 1000)
+	s.order(beta, "ordered", "USD", &recent, both, 5, 0, 250)
+	s.order(gone, "received", "USD", &old, onlyInactive, 5, 5, 300)
+
+	repo := postgres.New(s.pool)
+	got, err := repo.ReorderCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("candidates = %d, want the 3 low-stock consumables: %+v", len(got), got)
+	}
+	by := map[string]domain.ReorderCandidate{}
+	for _, c := range got {
+		by[c.ItemID] = c
+	}
+	b := by[both]
+	if b.SupplierName == nil || *b.SupplierName != "Beta" || b.LastUnitCostMinor == nil || *b.LastUnitCostMinor != 250 ||
+		b.LastCurrency == nil || *b.LastCurrency != "USD" || b.PendingOrdered != 5 {
+		t.Errorf("both = %+v, want latest order (Beta, 250 USD, pending 5)", b)
+	}
+	if n := by[never]; n.SupplierID != nil || n.LastUnitCostMinor != nil || n.LastCurrency != nil {
+		t.Errorf("never bought must have no supplier or cost: %+v", n)
+	}
+	if o := by[onlyInactive]; o.SupplierID != nil {
+		t.Errorf("an inactive supplier is not a habitual supplier: %+v", o)
+	}
+	// Most severe first: stock/min 0, then 1/5, then 2/6.
+	if got[0].ItemID != never || got[1].ItemID != both || got[2].ItemID != onlyInactive {
+		t.Errorf("order = %s %s %s", got[0].Code, got[1].Code, got[2].Code)
+	}
+}
+
+func TestReorderCandidatesOnEmptyDatabase(t *testing.T) {
+	s := newSeed(t)
+	got, err := postgres.New(s.pool).ReorderCandidates(context.Background())
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("got %#v, %v; want empty non-nil slice", got, err)
+	}
+}

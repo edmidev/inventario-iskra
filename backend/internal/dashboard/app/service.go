@@ -11,6 +11,9 @@ import (
 // Repository computes the summary as of the given instant.
 type Repository interface {
 	Summary(ctx context.Context, now time.Time) (domain.Summary, error)
+	// ReorderCandidates lists every low-stock consumable with its pending
+	// quantity and latest purchase terms, most severe first.
+	ReorderCandidates(ctx context.Context) ([]domain.ReorderCandidate, error)
 }
 
 // Service serves the dashboard summary.
@@ -36,4 +39,13 @@ func (s *Service) Summary(ctx context.Context) (domain.Summary, error) {
 	}
 	sum.GeneratedAt = now
 	return sum, nil
+}
+
+// ReorderSuggestions groups what to buy by habitual supplier.
+func (s *Service) ReorderSuggestions(ctx context.Context) ([]domain.ReorderGroup, error) {
+	cands, err := s.repo.ReorderCandidates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return domain.BuildReorderGroups(cands), nil
 }
