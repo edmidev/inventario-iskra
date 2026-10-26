@@ -1027,6 +1027,46 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/DashboardSummary" }
         "401": { $ref: "#/components/responses/Error" }
+  /dashboard/reorder-suggestions:
+    get:
+      operationId: getReorderSuggestions
+      summary: What to buy, grouped by habitual supplier (any role)
+      description: |
+        Low-stock consumables (`stock_min > 0` and `stock_current <= stock_min`) with a quantity to order, grouped by habitual supplier: the live, active supplier of the item's most recent order line in `ordered`, `partially_received` or `received`. Items with no such supplier go in the last group, whose `supplier_id` and `supplier_name` are `null`; groups are ordered by supplier name. `suggested_qty` = `2 * stock_min - stock_current - pending_ordered`; items where that is 0 or less are omitted. `last_unit_cost_minor` and `last_currency` come from that same line and are `null` when there is none. Read-only; creating the order is a normal `POST /purchase-orders`.
+      responses:
+        "200":
+          description: The suggestions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups]
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      type: object
+                      required: [supplier_id, supplier_name, lines]
+                      properties:
+                        supplier_id: { type: integer, format: int64, nullable: true }
+                        supplier_name: { type: string, nullable: true }
+                        lines:
+                          type: array
+                          items:
+                            type: object
+                            required: [item_id, code, description, unit, stock_current, stock_min, pending_ordered, suggested_qty, last_unit_cost_minor, last_currency]
+                            properties:
+                              item_id: { type: string, format: uuid }
+                              code: { type: string }
+                              description: { type: string }
+                              unit: { type: string }
+                              stock_current: { type: integer }
+                              stock_min: { type: integer }
+                              pending_ordered: { type: integer }
+                              suggested_qty: { type: integer, minimum: 1 }
+                              last_unit_cost_minor: { type: integer, format: int64, nullable: true }
+                              last_currency: { type: string, enum: [USD, VES], nullable: true }
+        "401": { $ref: "#/components/responses/Error" }
   /maintenance/{id}:
     patch:
       operationId: updateMaintenance
@@ -1655,7 +1695,7 @@ components:
               maxItems: 5
               items:
                 type: object
-                required: [id, code, description, unit, stock_current, stock_min, location_name, stocks]
+                required: [id, code, description, unit, stock_current, stock_min, pending_ordered, location_name, stocks]
                 properties:
                   id: { type: string, format: uuid }
                   code: { type: string }
@@ -1663,6 +1703,7 @@ components:
                   unit: { type: string }
                   stock_current: { type: integer }
                   stock_min: { type: integer }
+                  pending_ordered: { type: integer, description: Quantity still to arrive on purchase orders in `ordered` or `partially_received`. }
                   location_name: { type: string, nullable: true, description: Set only when all the stock sits in one location. }
                   stocks:
                     type: array
