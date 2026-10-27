@@ -30,7 +30,8 @@ import {
   type OrderValues,
 } from "../../features/purchasing/orderForm";
 import { useActiveSuppliers } from "../../features/suppliers/api/suppliers";
-import type { Currency, Item, PurchaseOrder } from "../../lib/api/schemas";
+import { CreateSupplierSheet } from "../../features/suppliers/components/SupplierSheets";
+import type { Currency, Item, PurchaseOrder, Supplier } from "../../lib/api/schemas";
 import { useApiForm } from "../../lib/useApiForm";
 
 const kindOptions = [
@@ -102,6 +103,8 @@ interface PurchaseOrderFormProps {
 
 export function PurchaseOrderForm({ order, initialValues, onSubmit, onCancel }: PurchaseOrderFormProps) {
   const suppliers = useActiveSuppliers();
+  const [creatingSupplier, setCreatingSupplier] = useState(false);
+  const [createdSupplier, setCreatedSupplier] = useState<Supplier | null>(null);
   const { categories } = useCatalogLookup();
   const { form, submit, formError } = useApiForm<OrderValues>({
     resolver: zodResolver(orderSchema) as Resolver<OrderValues>,
@@ -142,11 +145,20 @@ export function PurchaseOrderForm({ order, initialValues, onSubmit, onCancel }: 
     if (order && !options.some((o) => o.value === String(order.supplier_id))) {
       options.unshift({ value: String(order.supplier_id), label: `${order.supplier_name} (inactivo)` });
     }
+    if (createdSupplier && !options.some((o) => o.value === String(createdSupplier.id))) {
+      options.push({ value: String(createdSupplier.id), label: createdSupplier.name });
+    }
     return options;
-  }, [suppliers.data, order]);
+  }, [suppliers.data, order, createdSupplier]);
+  // Radix Select clears a value whose option is not mounted yet, so the new supplier
+  // becomes an option first and is selected from an effect, one render later.
+  useEffect(() => {
+    if (createdSupplier) setValue("supplier_id", String(createdSupplier.id), { shouldValidate: true });
+  }, [createdSupplier, setValue]);
   const categoryOptions = categories.map((c) => ({ value: String(c.id), label: c.name }));
 
   return (
+    <>
     <form onSubmit={submit} noValidate className="flex flex-col gap-4">
       <ControlledSelect
         control={control}
@@ -157,6 +169,11 @@ export function PurchaseOrderForm({ order, initialValues, onSubmit, onCancel }: 
         required
         error={errors.supplier_id?.message}
       />
+      {!order && (
+        <Button onClick={() => setCreatingSupplier(true)}>
+          <Icon name="plus" className="size-4" /> Nuevo proveedor
+        </Button>
+      )}
       <RadioCards legend="Moneda" registration={register("currency")} options={currencyOptions} error={errors.currency?.message} />
       <FormField label="Tasa de cambio" hint="Opcional. Bolívares por dólar, solo como referencia." error={errors.exchange_rate?.message}>
         <Input inputMode="decimal" placeholder="36.50" {...register("exchange_rate")} />
@@ -259,6 +276,12 @@ export function PurchaseOrderForm({ order, initialValues, onSubmit, onCancel }: 
         isSubmitting={isSubmitting}
       />
     </form>
+      <CreateSupplierSheet
+        open={creatingSupplier}
+        onOpenChange={setCreatingSupplier}
+        onCreated={setCreatedSupplier}
+      />
+    </>
   );
 }
 

@@ -52,3 +52,20 @@ test("a viewer reads suppliers and orders but sees no write actions", async ({ p
   await expect(page.getByRole("heading", { name: "Órdenes de compra" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Nueva" })).toHaveCount(0);
 });
+
+test("the mobile bar offers purchase orders, and a supplier can be added from the order form", async ({ page }) => {
+  await login(page, "operator");
+  const bar = page.getByRole("navigation", { name: "Navegación principal" });
+  await expect(bar.getByRole("link", { name: "Órdenes de compra" })).toBeVisible();
+  await expect(bar.getByRole("link", { name: "Proveedores" })).toHaveCount(0);
+
+  await bar.getByRole("link", { name: "Órdenes de compra" }).click();
+  await page.getByRole("button", { name: "Nueva" }).click();
+  const order = page.getByRole("dialog", { name: "Nueva orden de compra" });
+  await order.getByRole("button", { name: "Nuevo proveedor" }).click();
+  const supplier = page.getByRole("dialog", { name: "Nuevo proveedor" });
+  await supplier.getByLabel("Nombre").fill("Proveedor Inline E2E");
+  await supplier.getByRole("button", { name: "Crear proveedor" }).click();
+  await expect(page.getByText("Proveedor Proveedor Inline E2E creado.").first()).toBeVisible();
+  await expect(order.getByRole("combobox", { name: /Proveedor/ })).toContainText("Proveedor Inline E2E");
+});

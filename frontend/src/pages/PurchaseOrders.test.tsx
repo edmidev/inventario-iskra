@@ -307,3 +307,45 @@ describe("receive purchase order", () => {
     expect(within(dialog).getByLabelText("Cantidad de Cinta aislante")).not.toHaveAttribute("aria-invalid");
   });
 });
+
+describe("adding a supplier from the order form", () => {
+  it("creates the supplier in a nested sheet and selects it in the order", async () => {
+    useAuthenticatedApi("operator");
+    const suppliers = [supplier()];
+    let created: unknown;
+    server.use(
+      http.get(api("/suppliers"), () => HttpResponse.json(page(suppliers))),
+      http.get(api("/purchase-orders"), () => HttpResponse.json(page([]))),
+      http.get(api("/items"), () => HttpResponse.json(page([cinta]))),
+      http.post(api("/suppliers"), async ({ request }) => {
+        created = await request.json();
+        const saved = supplier({ id: 9, name: "Eléctrica Centro" });
+        suppliers.push(saved);
+        return HttpResponse.json(saved, { status: 201 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/ordenes-compra");
+    const order = await openCreate(user);
+    await user.click(within(order).getByRole("button", { name: "Nuevo proveedor" }));
+    const sheet = await screen.findByRole("dialog", { name: "Nuevo proveedor" });
+    await user.type(within(sheet).getByLabelText(/Nombre/), "Eléctrica Centro");
+    await user.click(within(sheet).getByRole("button", { name: "Crear proveedor" }));
+    expect(await screen.findByText("Proveedor Eléctrica Centro creado.")).toBeInTheDocument();
+    expect(created).toMatchObject({ name: "Eléctrica Centro" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Nuevo proveedor" })).not.toBeInTheDocument());
+    await waitFor(() => expect(within(order).getByRole("combobox", { name: /Proveedor/ })).toHaveTextContent("Eléctrica Centro"));
+  });
+
+  it("does not offer it while editing an existing draft", async () => {
+    useAuthenticatedApi("operator");
+    const draft = purchaseOrder({ status: "draft" });
+    serveCommon([draft]);
+    server.use(http.get(api("/purchase-orders/:id"), () => HttpResponse.json(draft)));
+    const user = userEvent.setup();
+    renderApp("/ordenes-compra/1");
+    await user.click(await screen.findByRole("button", { name: /Editar/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Editar orden" });
+    expect(within(dialog).queryByRole("button", { name: "Nuevo proveedor" })).not.toBeInTheDocument();
+  });
+});
