@@ -10,7 +10,7 @@ interface SheetProps {
   onOpenChange: (open: boolean) => void;
 }
 
-export function CreateSupplierSheet({ open, onOpenChange }: SheetProps) {
+export function CreateSupplierSheet({ open, onOpenChange, onCreated }: SheetProps & { onCreated?: (supplier: Supplier) => void }) {
   const create = useCreateSupplier();
   const toast = useToast();
   return (
@@ -25,6 +25,7 @@ export function CreateSupplierSheet({ open, onOpenChange }: SheetProps) {
           if (values.notes) payload.notes = values.notes;
           const saved = await create.mutateAsync(payload);
           toast.success(`Proveedor ${saved.name} creado.`);
+          onCreated?.(saved);
           onOpenChange(false);
         }}
       />

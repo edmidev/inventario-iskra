@@ -10,7 +10,6 @@ const operations = [
   { to: "/prestamos", label: "Préstamos", hint: "Material prestado y vencido" },
   { to: "/mantenimiento", label: "Mantenimiento", hint: "Fallas abiertas y mantenimientos por vencer" },
   { to: "/proveedores", label: "Proveedores", hint: "Contactos y proveedores activos" },
-  { to: "/ordenes-compra", label: "Órdenes de compra", hint: "Pedidos, recepciones y costos" },
 ];
 
 const administration = [
