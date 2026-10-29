@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	catalogapi "github.com/edgar/inventario/backend/internal/catalog/adapters/httpapi"
@@ -24,10 +25,18 @@ import (
 	maintenanceapp "github.com/edgar/inventario/backend/internal/maintenance/app"
 	"github.com/edgar/inventario/backend/internal/platform/config"
 	"github.com/edgar/inventario/backend/internal/platform/httpx"
+	purchasingapi "github.com/edgar/inventario/backend/internal/purchasing/adapters/httpapi"
+	purchasingpg "github.com/edgar/inventario/backend/internal/purchasing/adapters/postgres"
+	purchasingapp "github.com/edgar/inventario/backend/internal/purchasing/app"
+	purchasingdomain "github.com/edgar/inventario/backend/internal/purchasing/domain"
 	stockapi "github.com/edgar/inventario/backend/internal/stock/adapters/httpapi"
 	stockpg "github.com/edgar/inventario/backend/internal/stock/adapters/postgres"
 	stockapp "github.com/edgar/inventario/backend/internal/stock/app"
 	stockdomain "github.com/edgar/inventario/backend/internal/stock/domain"
+	suppliersapi "github.com/edgar/inventario/backend/internal/suppliers/adapters/httpapi"
+	supplierspg "github.com/edgar/inventario/backend/internal/suppliers/adapters/postgres"
+	suppliersapp "github.com/edgar/inventario/backend/internal/suppliers/app"
+	suppliersdomain "github.com/edgar/inventario/backend/internal/suppliers/domain"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -74,11 +83,16 @@ func openingBalanceHook(ctx context.Context, tx pgx.Tx, it catalogdomain.Item) e
 	return stockpg.RecordOpenings(ctx, tx, it.ID, stocks, userID)
 }
 
+// newCatalogService builds the catalog use cases with the opening-balance hook.
+func newCatalogService(pool *pgxpool.Pool) *catalogapp.Service {
+	repo := catalogpg.New(pool, catalogpg.WithCreateHook(openingBalanceHook))
+	return catalogapp.NewService(repo.Categories(), repo.Locations(), repo.Items())
+}
+
 // wireCatalog builds the catalog handler, reusing identity's bearer-token
 // middleware and permission names.
 func wireCatalog(pool *pgxpool.Pool, identity *httpapi.Handler) *catalogapi.Handler {
-	repo := catalogpg.New(pool, catalogpg.WithCreateHook(openingBalanceHook))
-	svc := catalogapp.NewService(repo.Categories(), repo.Locations(), repo.Items())
+	svc := newCatalogService(pool)
 	return catalogapi.New(svc, identity.Authenticate(), catalogapi.Permissions{
 		Read:           string(domain.PermRead),
 		WriteItems:     string(domain.PermWriteItems),
@@ -116,10 +130,157 @@ func wireMaintenance(pool *pgxpool.Pool, identity *httpapi.Handler) *maintenance
 	})
 }
 
+// wireSuppliers builds the supplier handler; operators and admins write, every
+// role reads.
+func wireSuppliers(pool *pgxpool.Pool, identity *httpapi.Handler) *suppliersapi.Handler {
+	svc := suppliersapp.NewService(supplierspg.New(pool))
+	return suppliersapi.New(svc, identity.Authenticate(), suppliersapi.Permissions{
+		Read:  string(domain.PermRead),
+		Write: string(domain.PermWriteItems),
+	})
+}
+
 // wireDashboard builds the read-only dashboard handler; every role may read it.
 func wireDashboard(pool *pgxpool.Pool, identity *httpapi.Handler) *dashboardapi.Handler {
 	svc := dashboardapp.NewService(dashboardpg.New(pool), nil)
 	return dashboardapi.New(svc, identity.Authenticate(), dashboardapi.Permissions{
 		Read: string(domain.PermRead),
 	})
+}
+
+// wirePurchasing builds the purchase order handler; operators and admins write,
+// every role reads.
+func wirePurchasing(pool *pgxpool.Pool, identity *httpapi.Handler) *purchasingapi.Handler {
+	return purchasingapi.New(newPurchasingService(pool), identity.Authenticate(), purchasingapi.Permissions{
+		Read:  string(domain.PermRead),
+		Write: string(domain.PermWriteItems),
+	})
+}
+
+// newPurchasingService is the only place purchasing meets the catalog, stock
+// and suppliers modules: it implements purchasing's ports on top of their
+// services. Receiving runs in one transaction because the postgres repository
+// hands its transaction to these ports through the context (see
+// internal/platform/db), and catalog item creation and stock recording join it.
+func newPurchasingService(pool *pgxpool.Pool) *purchasingapp.Service {
+	return purchasingapp.NewService(
+		purchasingpg.New(pool),
+		purchasingCatalog{svc: newCatalogService(pool)},
+		purchasingStock{svc: stockapp.NewService(stockpg.New(pool))},
+		purchasingSuppliers{svc: suppliersapp.NewService(supplierspg.New(pool))},
+		nil,
+	)
+}
+
+// purchasingCatalog adapts the catalog service to purchasing's ItemCatalog.
+type purchasingCatalog struct{ svc *catalogapp.Service }
+
+func newItemInput(spec purchasingapp.NewItemSpec) catalogdomain.NewItemInput {
+	in := catalogdomain.NewItemInput{
+		Description: spec.Description, CategoryID: spec.CategoryID, Kind: catalogdomain.Kind(spec.Kind),
+		StockMin: spec.StockMin, Attributes: spec.Attributes, Notes: spec.Notes,
+	}
+	if spec.Unit != "" {
+		u := spec.Unit
+		in.Unit = &u
+	}
+	return in
+}
+
+// asPurchasingValidation turns a catalog validation error into purchasing's,
+// prefixing each field; any other error is returned unchanged.
+func asPurchasingValidation(err error, prefix string) error {
+	var ve *catalogdomain.ValidationError
+	if !errors.As(err, &ve) {
+		return err
+	}
+	fields := make(map[string]string, len(ve.Fields))
+	for k, v := range ve.Fields {
+		fields[prefix+k] = v
+	}
+	return &purchasingdomain.ValidationError{Fields: fields}
+}
+
+func (c purchasingCatalog) ValidateNewItem(ctx context.Context, spec purchasingapp.NewItemSpec) error {
+	if _, err := catalogdomain.NewItem(newItemInput(spec)); err != nil {
+		return asPurchasingValidation(err, "")
+	}
+	cats, err := c.svc.ListCategories(ctx)
+	if err != nil {
+		return err
+	}
+	for _, cat := range cats {
+		if cat.ID == spec.CategoryID {
+			return nil
+		}
+	}
+	return purchasingdomain.FieldError("category_id", "category does not exist")
+}
+
+func (c purchasingCatalog) CreateItem(ctx context.Context, spec purchasingapp.NewItemSpec, locationID int64) (purchasingapp.CreatedItem, error) {
+	in := newItemInput(spec)
+	if spec.Kind == purchasingdomain.KindAsset {
+		in.LocationID = &locationID
+	}
+	it, err := c.svc.CreateItem(ctx, catalogapp.CreateItemInput{NewItemInput: in})
+	if err != nil {
+		return purchasingapp.CreatedItem{}, asPurchasingValidation(err, "new_item.")
+	}
+	return purchasingapp.CreatedItem{ID: it.ID, Code: it.Code}, nil
+}
+
+func (c purchasingCatalog) ItemInfo(ctx context.Context, itemID string) (purchasingapp.ItemInfo, error) {
+	it, err := c.svc.GetItem(ctx, itemID)
+	if errors.Is(err, catalogdomain.ErrItemNotFound) {
+		return purchasingapp.ItemInfo{}, purchasingapp.ErrItemNotFound
+	}
+	if err != nil {
+		return purchasingapp.ItemInfo{}, err
+	}
+	return purchasingapp.ItemInfo{Kind: string(it.Kind), Description: it.Description}, nil
+}
+
+func (c purchasingCatalog) LocationExists(ctx context.Context, id int64) (bool, error) {
+	locs, err := c.svc.ListLocations(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, l := range locs {
+		if l.ID == id {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// purchasingStock adapts the stock service to purchasing's StockReceiver.
+type purchasingStock struct{ svc *stockapp.Service }
+
+func (s purchasingStock) ReceiveIn(ctx context.Context, itemID, userID string, locationID int64, qty int, note string) error {
+	_, err := s.svc.Record(ctx, itemID, userID, stockdomain.Request{
+		Type: stockdomain.TypeIn, Qty: qty, LocationID: &locationID, Note: note,
+	})
+	var ve *stockdomain.ValidationError
+	if errors.As(err, &ve) {
+		fields := make(map[string]string, len(ve.Fields))
+		for k, v := range ve.Fields {
+			fields["stock."+k] = v
+		}
+		return &purchasingdomain.ValidationError{Fields: fields}
+	}
+	return err
+}
+
+// purchasingSuppliers adapts the suppliers service to purchasing's Suppliers.
+type purchasingSuppliers struct{ svc *suppliersapp.Service }
+
+func (s purchasingSuppliers) Get(ctx context.Context, id int64) (string, bool, error) {
+	sup, err := s.svc.Get(ctx, id)
+	if errors.Is(err, suppliersdomain.ErrNotFound) {
+		return "", false, purchasingapp.ErrSupplierNotFound
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return sup.Name, sup.Active, nil
 }

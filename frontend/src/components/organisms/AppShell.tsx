@@ -11,7 +11,7 @@ function Sidebar() {
     <aside className="fixed inset-y-0 left-0 hidden w-60 flex-col gap-4 border-r border-line bg-surface p-4 md:flex">
       <p className="px-3 pt-2 text-xl font-bold">Inventario</p>
       <nav aria-label="Navegación principal" className="flex flex-col gap-1">
-        {navItems.map((item) => (
+        {navItems.map(({ mobile: _mobile, ...item }) => (
           <NavItem key={item.to} {...item} variant="side" />
         ))}
       </nav>

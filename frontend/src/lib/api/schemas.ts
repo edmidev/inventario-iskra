@@ -121,6 +121,8 @@ export const dashboardSummarySchema = z.object({
         unit: z.string(),
         stock_current: z.number(),
         stock_min: z.number(),
+        /** Quantity still to arrive on open purchase orders. */
+        pending_ordered: z.number(),
         location_name: z.string().nullable(),
         stocks: z.array(itemStockSchema),
       }),
@@ -280,3 +282,106 @@ export const dueMaintenanceSchema = z.object({
   maintenance_overdue: z.boolean(),
 });
 export type DueMaintenance = z.infer<typeof dueMaintenanceSchema>;
+
+export const supplierSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  contact_name: z.string(),
+  email: z.string(),
+  phone: z.string(),
+  notes: z.string(),
+  active: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type Supplier = z.infer<typeof supplierSchema>;
+
+export const purchaseOrderStatusSchema = z.enum(["draft", "ordered", "partially_received", "received", "cancelled"]);
+export type PurchaseOrderStatus = z.infer<typeof purchaseOrderStatusSchema>;
+export const currencySchema = z.enum(["USD", "VES"]);
+export type Currency = z.infer<typeof currencySchema>;
+
+export const purchaseOrderNewItemSchema = z.object({
+  description: z.string(),
+  category_id: z.number(),
+  kind: itemKindSchema,
+  unit: z.string().nullish(),
+  stock_min: z.number().nullish(),
+  attributes: z.record(z.string(), z.unknown()).nullish(),
+  notes: z.string().nullish(),
+});
+export type PurchaseOrderNewItem = z.infer<typeof purchaseOrderNewItemSchema>;
+
+export const purchaseOrderLineSchema = z.object({
+  id: z.number(),
+  item_id: z.string().nullable(),
+  new_item: purchaseOrderNewItemSchema.nullable(),
+  description: z.string(),
+  quantity: z.number(),
+  received_qty: z.number(),
+  unit_cost_minor: z.number(),
+});
+export type PurchaseOrderLine = z.infer<typeof purchaseOrderLineSchema>;
+
+export const purchaseReceiptSchema = z.object({
+  id: z.number(),
+  order_id: z.number(),
+  location_id: z.number(),
+  received_by: z.string().nullable(),
+  received_at: z.string(),
+  note: z.string(),
+  client_key: z.string().optional(),
+  lines: z.array(
+    z.object({
+      line_id: z.number(),
+      quantity: z.number(),
+      items: z.array(z.object({ item_id: z.string(), code: z.string().optional(), quantity: z.number() })),
+    }),
+  ),
+});
+export type PurchaseReceipt = z.infer<typeof purchaseReceiptSchema>;
+
+export const purchaseOrderSchema = z.object({
+  id: z.number(),
+  supplier_id: z.number(),
+  supplier_name: z.string(),
+  status: purchaseOrderStatusSchema,
+  currency: currencySchema,
+  exchange_rate: z.number().nullable(),
+  expected_at: z.string().nullable(),
+  notes: z.string(),
+  total_minor: z.number(),
+  lines: z.array(purchaseOrderLineSchema),
+  receipts: z.array(purchaseReceiptSchema).optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  ordered_at: z.string().nullable(),
+  cancelled_at: z.string().nullable(),
+});
+export type PurchaseOrder = z.infer<typeof purchaseOrderSchema>;
+
+export const receiveResultSchema = z.object({ receipt: purchaseReceiptSchema, order: purchaseOrderSchema });
+export type ReceiveResult = z.infer<typeof receiveResultSchema>;
+
+export const reorderLineSchema = z.object({
+  item_id: z.string(),
+  code: z.string(),
+  description: z.string(),
+  unit: z.string(),
+  stock_current: z.number(),
+  stock_min: z.number(),
+  pending_ordered: z.number(),
+  suggested_qty: z.number(),
+  last_unit_cost_minor: z.number().nullable(),
+  last_currency: currencySchema.nullable(),
+});
+export type ReorderLine = z.infer<typeof reorderLineSchema>;
+
+export const reorderGroupSchema = z.object({
+  supplier_id: z.number().nullable(),
+  supplier_name: z.string().nullable(),
+  lines: z.array(reorderLineSchema),
+});
+export type ReorderGroup = z.infer<typeof reorderGroupSchema>;
+
+export const reorderSuggestionsSchema = z.object({ groups: z.array(reorderGroupSchema) });

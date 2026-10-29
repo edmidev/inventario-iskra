@@ -73,9 +73,12 @@ export function DashboardView({ summary }: { summary: DashboardSummary }) {
               description={row.description}
               detail={row.stocks.length > 1 ? stockBreakdownText(row.stocks) : (row.location_name ?? undefined)}
               aside={
-                <span className="font-semibold text-low tabular-nums">
-                  {row.stock_current} / {row.stock_min} {row.unit}
-                </span>
+                <>
+                  <span className="block font-semibold text-low tabular-nums">
+                    {row.stock_current} / {row.stock_min} {row.unit}
+                  </span>
+                  {row.pending_ordered > 0 && <span className="block text-xs">{row.pending_ordered} en camino</span>}
+                </>
               }
             />
           ))}

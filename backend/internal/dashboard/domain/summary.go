@@ -51,8 +51,10 @@ type LowStockItem struct {
 	Unit         string
 	StockCurrent int
 	StockMin     int
-	LocationName *string
-	Stocks       []StockLocation
+	// PendingOrdered is the quantity still to arrive on open purchase orders.
+	PendingOrdered int
+	LocationName   *string
+	Stocks         []StockLocation
 }
 
 // LowStock counts low-stock consumables and lists the most severe.

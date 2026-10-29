@@ -31,6 +31,11 @@ const (
 	maintenanceDue = `(COALESCE(i.last_maintenance_at, i.created_at) + i.maintenance_interval_days * interval '24 hours')`
 	// lowStock mirrors the catalog low_stock filter.
 	lowStock = `i.kind = 'consumable' AND i.stock_min > 0 AND i.stock_current <= i.stock_min`
+	// pendingOrdered is what is still to arrive for the item on open purchase
+	// orders (owned by purchasing). A new-item line counts once it has an item.
+	pendingOrdered = `COALESCE((SELECT sum(l.quantity - l.received_qty)::int
+		FROM purchase_order_lines l JOIN purchase_orders o ON o.id = l.order_id
+		WHERE l.item_id = i.id AND o.status IN ('ordered', 'partially_received')), 0)`
 )
 
 // Summary implements app.Repository: one counters query, one open-failures
@@ -99,14 +104,14 @@ func collect[T any](ctx context.Context, pool *pgxpool.Pool, op, sql string, sca
 // and stocks carries the per-location breakdown (table owned by stock).
 func (r *Repo) lowStockTop(ctx context.Context) ([]domain.LowStockItem, error) {
 	items, err := collect(ctx, r.pool, "dashboard low stock", `
-		SELECT i.id::text, i.code, i.description, COALESCE(i.unit, ''), i.stock_current, i.stock_min
+		SELECT i.id::text, i.code, i.description, COALESCE(i.unit, ''), i.stock_current, i.stock_min, `+pendingOrdered+`
 		FROM items i
 		WHERE i.deleted_at IS NULL AND `+lowStock+`
 		ORDER BY i.stock_current::float8 / i.stock_min ASC, i.code ASC
 		LIMIT $1`,
 		func(row pgx.Rows) (domain.LowStockItem, error) {
 			var it domain.LowStockItem
-			err := row.Scan(&it.ID, &it.Code, &it.Description, &it.Unit, &it.StockCurrent, &it.StockMin)
+			err := row.Scan(&it.ID, &it.Code, &it.Description, &it.Unit, &it.StockCurrent, &it.StockMin, &it.PendingOrdered)
 			return it, err
 		}, domain.TopLimit)
 	if err != nil || len(items) == 0 {
@@ -177,4 +182,30 @@ func (r *Repo) overdueMaintenanceTop(ctx context.Context, now time.Time) ([]doma
 			err := row.Scan(&o.ItemID, &o.Code, &o.Description, &o.MaintenanceDueAt)
 			return o, err
 		}, now, domain.TopLimit)
+}
+
+// ReorderCandidates lists the low-stock consumables, most severe first, with
+// the supplier and terms of the item's latest non-draft, non-cancelled order
+// line. A deleted or inactive supplier counts as no habitual supplier.
+func (r *Repo) ReorderCandidates(ctx context.Context) ([]domain.ReorderCandidate, error) {
+	return collect(ctx, r.pool, "dashboard reorder candidates", `
+		SELECT i.id::text, i.code, i.description, COALESCE(i.unit, ''), i.stock_current, i.stock_min,
+		       `+pendingOrdered+`, h.supplier_id, h.supplier_name, h.unit_cost_minor, h.currency
+		FROM items i
+		LEFT JOIN LATERAL (
+			SELECT o.supplier_id, s.name AS supplier_name, l.unit_cost_minor, o.currency
+			FROM purchase_order_lines l
+			JOIN purchase_orders o ON o.id = l.order_id
+			JOIN suppliers s ON s.id = o.supplier_id AND s.deleted_at IS NULL AND s.active
+			WHERE l.item_id = i.id AND o.status IN ('ordered', 'partially_received', 'received')
+			ORDER BY o.ordered_at DESC NULLS LAST, o.id DESC
+			LIMIT 1) h ON true
+		WHERE i.deleted_at IS NULL AND `+lowStock+`
+		ORDER BY i.stock_current::float8 / i.stock_min ASC, i.code ASC`,
+		func(row pgx.Rows) (domain.ReorderCandidate, error) {
+			var c domain.ReorderCandidate
+			err := row.Scan(&c.ItemID, &c.Code, &c.Description, &c.Unit, &c.StockCurrent, &c.StockMin,
+				&c.PendingOrdered, &c.SupplierID, &c.SupplierName, &c.LastUnitCostMinor, &c.LastCurrency)
+			return c, err
+		})
 }

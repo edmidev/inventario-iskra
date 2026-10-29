@@ -44,7 +44,12 @@ func newServer(t *testing.T) (*httptest.Server, *memory.Repo) {
 
 func get(t *testing.T, srv *httptest.Server, token string) (int, map[string]any) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/dashboard/summary", nil)
+	return getPath(t, srv, "/api/v1/dashboard/summary", token)
+}
+
+func getPath(t *testing.T, srv *httptest.Server, path, token string) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -145,5 +150,78 @@ func TestSummaryRepositoryFailureIs500(t *testing.T) {
 	repo.FailWith(errors.New("db down"))
 	if status, _ := get(t, srv, "viewer"); status != http.StatusInternalServerError {
 		t.Errorf("got %d, want 500", status)
+	}
+}
+
+const reorderPath = "/api/v1/dashboard/reorder-suggestions"
+
+func TestReorderSuggestionsAuth(t *testing.T) {
+	srv, _ := newServer(t)
+	for _, token := range []string{"", "garbage"} {
+		if status, _ := getPath(t, srv, reorderPath, token); status != http.StatusUnauthorized {
+			t.Errorf("token %q: got %d, want 401", token, status)
+		}
+	}
+	for _, role := range []string{"viewer", "operator", "admin"} {
+		if status, body := getPath(t, srv, reorderPath, role); status != http.StatusOK {
+			t.Errorf("%s: got %d %v, want 200", role, status, body)
+		}
+	}
+}
+
+func TestReorderSuggestionsEmptyIsAnEmptyArray(t *testing.T) {
+	srv, _ := newServer(t)
+	_, body := getPath(t, srv, reorderPath, "viewer")
+	if g, ok := body["groups"].([]any); !ok || len(g) != 0 {
+		t.Fatalf("groups = %#v, want []", body["groups"])
+	}
+}
+
+func TestReorderSuggestionsShape(t *testing.T) {
+	srv, repo := newServer(t)
+	sid, name, cost, cur := int64(7), "Alfa", int64(250), "USD"
+	repo.SetCandidates([]domain.ReorderCandidate{
+		{ItemID: "i1", Code: "ISK-CON-001", Description: "Tape", Unit: "roll", StockCurrent: 1, StockMin: 5, PendingOrdered: 2,
+			SupplierID: &sid, SupplierName: &name, LastUnitCostMinor: &cost, LastCurrency: &cur},
+		{ItemID: "i2", Code: "ISK-CON-002", Description: "Glue", StockCurrent: 0, StockMin: 3},
+		{ItemID: "i3", Code: "ISK-CON-003", StockCurrent: 1, StockMin: 5, PendingOrdered: 9}, // covered
+	})
+	status, body := getPath(t, srv, reorderPath, "viewer")
+	if status != 200 {
+		t.Fatalf("status %d", status)
+	}
+	groups := body["groups"].([]any)
+	if len(groups) != 2 {
+		t.Fatalf("groups = %v", groups)
+	}
+	g0 := groups[0].(map[string]any)
+	l0 := g0["lines"].([]any)[0].(map[string]any)
+	if g0["supplier_id"] != float64(7) || g0["supplier_name"] != "Alfa" || l0["suggested_qty"] != float64(7) ||
+		l0["pending_ordered"] != float64(2) || l0["last_unit_cost_minor"] != float64(250) || l0["last_currency"] != "USD" {
+		t.Errorf("first group = %v", g0)
+	}
+	g1 := groups[1].(map[string]any)
+	l1 := g1["lines"].([]any)[0].(map[string]any)
+	if g1["supplier_id"] != nil || g1["supplier_name"] != nil || l1["suggested_qty"] != float64(6) ||
+		l1["last_unit_cost_minor"] != nil || l1["last_currency"] != nil {
+		t.Errorf("unassigned group = %v", g1)
+	}
+}
+
+func TestReorderSuggestionsRepositoryFailureIs500(t *testing.T) {
+	srv, repo := newServer(t)
+	repo.FailWith(errors.New("db down"))
+	if status, _ := getPath(t, srv, reorderPath, "viewer"); status != http.StatusInternalServerError {
+		t.Errorf("got %d, want 500", status)
+	}
+}
+
+func TestSummaryLowStockCarriesPendingOrdered(t *testing.T) {
+	srv, repo := newServer(t)
+	repo.Set(domain.Summary{LowStock: domain.LowStock{Count: 1, Top: []domain.LowStockItem{{ID: "i1", PendingOrdered: 4}}}})
+	_, body := get(t, srv, "viewer")
+	first := body["low_stock"].(map[string]any)["top"].([]any)[0].(map[string]any)
+	if first["pending_ordered"] != float64(4) {
+		t.Errorf("pending_ordered = %v", first["pending_ordered"])
 	}
 }
