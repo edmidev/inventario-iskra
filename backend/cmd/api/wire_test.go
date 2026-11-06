@@ -47,7 +47,7 @@ func setupReal(t *testing.T) (realEnv, context.Context) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE suppliers, items, code_sequences, locations, categories, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE project_templates, customers, suppliers, items, code_sequences, locations, categories, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	e := realEnv{pool: pool, catalog: newCatalogService(pool)}

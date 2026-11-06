@@ -45,7 +45,7 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer:        {PermRead},
 	RoleOperator:      {PermRead, PermWrite, PermWriteItems},
-	RoleAdmin:         {PermRead, PermWrite, PermWriteItems, PermManageCatalogs, PermManageUsers, PermManageRoles},
+	RoleAdmin:         {PermRead, PermWrite, PermWriteItems, PermManageCatalogs, PermManageUsers, PermManageRoles, PermReadCustomers, PermWriteCustomers, PermReadProjects, PermWriteProjects},
 	RoleWorkshopChief: {}, RoleSupervisor: {}, RoleInventoryChief: {}, RoleWorker: {},
 }
 

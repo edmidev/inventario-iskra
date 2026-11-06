@@ -41,6 +41,10 @@ function LinkList({ label, entries }: { label: string; entries: { to: string; la
 
 export function MorePage() {
   const permissions = usePermissions();
+  const manufacturingLinks = [
+    ...(permissions.canReadProjects ? [{ to: "/proyectos", label: "Proyectos", hint: "Plantillas de fabricación" }] : []),
+    ...(permissions.canReadCustomers ? [{ to: "/clientes", label: "Clientes", hint: "Datos y contactos" }] : []),
+  ];
   const administrationLinks = administration.filter((entry) => permissions[entry.permission]);
   const { state, signOut } = useSession();
   const user = state.user;
@@ -48,6 +52,7 @@ export function MorePage() {
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold">Más</h1>
       {permissions.canRead && <LinkList label="Operaciones" entries={operations} />}
+      {manufacturingLinks.length > 0 && <LinkList label="Fabricación" entries={manufacturingLinks} />}
       {administrationLinks.length > 0 && (
         <>
           <h2 className="-mb-2 text-sm font-semibold text-ink-soft uppercase">Administración</h2>

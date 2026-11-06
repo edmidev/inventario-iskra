@@ -29,6 +29,10 @@ export function useSavePermissions(role: Role) {
   });
 }
 export const permissionLabels: Record<string, string> = {
+  "customers:read": "Consultar clientes",
+  "customers:write": "Administrar clientes",
+  "projects:read": "Consultar proyectos",
+  "projects:write": "Administrar proyectos",
   "inventory:read": "Consultar inventario",
   "operations:write": "Registrar movimientos, préstamos y mantenimiento",
   "items:write": "Crear y modificar artículos",

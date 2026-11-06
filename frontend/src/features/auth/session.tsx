@@ -77,6 +77,8 @@ export function useSession(): SessionContextValue {
 export interface Permissions {
   role: Role | null;
   canRead: boolean;
+  canReadProjects: boolean;
+  canReadCustomers: boolean;
   canWriteItems: boolean;
   canOperate: boolean;
   canManageUsers: boolean;
@@ -91,6 +93,8 @@ export function permissionsFor(user: Pick<User, "role" | "permissions"> | null):
   return {
     role: user?.role ?? null,
     canRead: has("inventory:read"),
+    canReadProjects: has("projects:read"),
+    canReadCustomers: has("customers:read"),
     canWriteItems: has("items:write"),
     canOperate: has("operations:write"),
     canManageUsers: has("users:manage"),
