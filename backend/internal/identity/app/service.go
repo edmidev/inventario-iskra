@@ -227,7 +227,7 @@ func (s *Service) activeUser(ctx context.Context, id string) (domain.User, error
 	if !user.Active {
 		return domain.User{}, domain.ErrInvalidToken
 	}
-	return user, nil
+	return s.withPermissions(ctx, user)
 }
 
 // Logout revokes the presented refresh token. Unknown tokens are ignored so
@@ -252,7 +252,11 @@ func (s *Service) Me(ctx context.Context, id string) (domain.User, error) {
 	if !domain.ValidID(id) {
 		return domain.User{}, domain.ErrUserNotFound
 	}
-	return s.users.GetByID(ctx, id)
+	u, err := s.users.GetByID(ctx, id)
+	if err != nil {
+		return domain.User{}, err
+	}
+	return s.withPermissions(ctx, u)
 }
 
 // CreateUserInput holds the fields needed to create a user.
@@ -414,10 +418,15 @@ func (s *Service) Bootstrap(ctx context.Context, email, password string) (bool, 
 
 // VerifyAccess validates an access token (used by HTTP middleware).
 func (s *Service) VerifyAccess(token string) (AccessClaims, error) {
-	return s.issuer.ParseAccess(token, s.now())
+	return s.VerifyAccessContext(context.Background(), token)
 }
 
 func (s *Service) newSession(ctx context.Context, u domain.User) (Session, error) {
+	var err error
+	u, err = s.withPermissions(ctx, u)
+	if err != nil {
+		return Session{}, err
+	}
 	sess, rt, err := s.prepareSession(u, s.now())
 	if err != nil {
 		return Session{}, err

@@ -58,6 +58,14 @@ Auth is a short-lived access JWT (sent as `Authorization: Bearer`) plus a rotati
 
 The last active admin cannot be deactivated or demoted. Endpoints are documented in `openapi/openapi.yaml`. Other modules reuse `httpx.Authenticate` and `httpx.RequirePermission`.
 
+## Dynamic role permissions
+
+Administrators configure grants at `/admin/roles` (More → Roles and permissions). The API exposes `GET /roles`, `GET /permissions` and `PUT /roles/{role}/permissions`; all require `roles:manage`. The last endpoint replaces the full permission list, and an empty list clears a non-admin role.
+
+The migration preserves existing admin/operator/viewer access and seeds `workshop_chief`, `supervisor`, `inventory_chief` and `worker` without grants. Login, refresh and `/auth/me` return effective permissions. Every authenticated request reloads active identity and persisted grants, so old access tokens cannot retain revoked privileges. Administrator `users:manage` and `roles:manage` grants cannot be removed. The legacy importer also checks persisted write grants.
+
+Deploy the permission-aware API and frontend together; older binaries still authorize through static role defaults. Reverting to them is not a safe authorization rollback after permissions have changed. No historical user is automatically reassigned. The remaining manufacturing flows and decimal inventory activation are tracked in `odd/tasks/manufacturing-projects.md` and are not yet implemented.
+
 ## Catalog
 
 Categories, locations and items live in the `catalog` module (`/api/v1/categories`, `/locations`, `/items`; see `openapi/openapi.yaml`).

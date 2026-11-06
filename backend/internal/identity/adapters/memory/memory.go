@@ -16,15 +16,20 @@ import (
 
 // Store implements app.UserRepository and app.RefreshTokenRepository.
 type Store struct {
-	mu     sync.Mutex
-	seq    int
-	users  map[string]domain.User
-	tokens map[string]app.RefreshToken // by id
+	mu          sync.Mutex
+	seq         int
+	users       map[string]domain.User
+	tokens      map[string]app.RefreshToken // by id
+	permissions map[domain.Role][]domain.Permission
 }
 
 // NewStore returns an empty store.
 func NewStore() *Store {
-	return &Store{users: map[string]domain.User{}, tokens: map[string]app.RefreshToken{}}
+	ps := map[domain.Role][]domain.Permission{}
+	for _, role := range domain.Roles() {
+		ps[role] = append([]domain.Permission{}, role.Permissions()...)
+	}
+	return &Store{users: map[string]domain.User{}, tokens: map[string]app.RefreshToken{}, permissions: ps}
 }
 
 func (s *Store) nextID() string {

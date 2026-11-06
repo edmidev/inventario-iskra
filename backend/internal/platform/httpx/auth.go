@@ -43,6 +43,11 @@ func PrincipalFrom(ctx context.Context) (Principal, bool) {
 // Authenticate rejects requests lacking a valid "Authorization: Bearer" token
 // with 401 and stores the Principal in the request context otherwise.
 func Authenticate(verify TokenVerifier) func(http.Handler) http.Handler {
+	return AuthenticateContext(func(_ context.Context, token string) (Principal, error) { return verify(token) })
+}
+
+// AuthenticateContext passes request cancellation to identity and permission lookups.
+func AuthenticateContext(verify func(context.Context, string) (Principal, error)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token, ok := bearerToken(r)
@@ -50,7 +55,7 @@ func Authenticate(verify TokenVerifier) func(http.Handler) http.Handler {
 				WriteError(w, http.StatusUnauthorized, CodeUnauthorized, "authentication required")
 				return
 			}
-			p, err := verify(token)
+			p, err := verify(r.Context(), token)
 			if err != nil {
 				WriteError(w, http.StatusUnauthorized, CodeUnauthorized, "invalid or expired token")
 				return

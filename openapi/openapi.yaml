@@ -6,6 +6,75 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /roles:
+    get:
+      operationId: listRolePermissions
+      summary: List persisted role grants
+      description: Requires roles:manage. New manufacturing roles initially have no grants.
+      responses:
+        "200":
+          description: Role configurations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/RoleConfiguration" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /permissions:
+    get:
+      operationId: listSupportedPermissions
+      summary: List supported permission keys
+      description: Requires roles:manage.
+      responses:
+        "200":
+          description: Capability catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /roles/{role}/permissions:
+    put:
+      operationId: replaceRolePermissions
+      summary: Replace a role's grants
+      description: Requires roles:manage. Empty arrays clear grants; null, duplicates, unknown keys and removal of admin users:manage or roles:manage are rejected.
+      parameters:
+        - name: role
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Role" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permissions]
+              properties:
+                permissions:
+                  type: array
+                  uniqueItems: true
+                  items: { type: string }
+      responses:
+        "200":
+          description: Updated configuration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoleConfiguration" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /health:
     get:
       operationId: getHealth
@@ -1150,17 +1219,29 @@ components:
       in: query
       schema: { type: integer, minimum: 0, default: 0 }
   schemas:
+    RoleConfiguration:
+      type: object
+      required: [role, permissions]
+      properties:
+        role: { $ref: "#/components/schemas/Role" }
+        permissions:
+          type: array
+          items: { type: string }
     Role:
       type: string
-      enum: [admin, operator, viewer]
+      enum: [admin, operator, viewer, workshop_chief, supervisor, inventory_chief, worker]
     User:
       type: object
-      required: [id, name, email, role, active, created_at, updated_at]
+      required: [id, name, email, role, active, permissions, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         email: { type: string, format: email }
         role: { $ref: "#/components/schemas/Role" }
+        permissions:
+          type: array
+          items: { type: string }
+          description: Effective persisted grants; authorization resolves the current grants on every request.
         active: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

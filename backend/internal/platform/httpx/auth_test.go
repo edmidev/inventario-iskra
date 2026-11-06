@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -69,5 +70,25 @@ func TestWriteErrorShape(t *testing.T) {
 	WriteError(rec, 400, CodeInvalidRequest, "bad")
 	if got := strings.TrimSpace(rec.Body.String()); got != `{"error":{"code":"invalid_request","message":"bad"}}` {
 		t.Fatalf("body = %s", got)
+	}
+}
+
+func TestAuthenticateContextPropagatesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
+	h := AuthenticateContext(func(ctx context.Context, token string) (Principal, error) {
+		called = true
+		if token != "valid" || ctx.Err() != context.Canceled {
+			t.Fatal("request context not preserved")
+		}
+		return Principal{}, ctx.Err()
+	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("cancelled identity accepted") }))
+	req := httptest.NewRequest("GET", "/", nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer valid")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !called || rec.Code != 401 {
+		t.Fatalf("cancelled request result: %v %d", called, rec.Code)
 	}
 }

@@ -13,10 +13,11 @@ const operations = [
 ];
 
 const administration = [
-  { to: "/admin/usuarios", label: "Usuarios", hint: "Altas, roles y contraseñas" },
-  { to: "/admin/categorias", label: "Categorías", hint: "Nombres y prefijos de código" },
-  { to: "/admin/ubicaciones", label: "Ubicaciones", hint: "Bodegas, contenedores y personas" },
-];
+  { permission: "canManageUsers", to: "/admin/usuarios", label: "Usuarios", hint: "Altas, roles y contraseñas" },
+  { permission: "canManageCatalogs", to: "/admin/categorias", label: "Categorías", hint: "Nombres y prefijos de código" },
+  { permission: "canManageCatalogs", to: "/admin/ubicaciones", label: "Ubicaciones", hint: "Bodegas, contenedores y personas" },
+  { permission: "canManageRoles", to: "/admin/roles", label: "Roles y permisos", hint: "Accesos por función del taller" },
+] as const;
 
 function LinkList({ label, entries }: { label: string; entries: { to: string; label: string; hint: string }[] }) {
   return (
@@ -39,17 +40,18 @@ function LinkList({ label, entries }: { label: string; entries: { to: string; la
 }
 
 export function MorePage() {
-  const { isAdmin } = usePermissions();
+  const permissions = usePermissions();
+  const administrationLinks = administration.filter((entry) => permissions[entry.permission]);
   const { state, signOut } = useSession();
   const user = state.user;
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold">Más</h1>
       <LinkList label="Operaciones" entries={operations} />
-      {isAdmin && (
+      {administrationLinks.length > 0 && (
         <>
           <h2 className="-mb-2 text-sm font-semibold text-ink-soft uppercase">Administración</h2>
-          <LinkList label="Administración" entries={administration} />
+          <LinkList label="Administración" entries={administrationLinks} />
         </>
       )}
       {user && (

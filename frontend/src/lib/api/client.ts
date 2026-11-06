@@ -8,7 +8,7 @@ export const API_BASE = "/api/v1";
 type QueryValue = string | number | boolean | null | undefined;
 
 export interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   query?: Record<string, QueryValue>;
   /** Attach the bearer token and refresh once on 401. Defaults to true. */

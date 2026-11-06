@@ -27,6 +27,8 @@ const LocationsAdminPage = lazy(() => import("./pages/LocationsAdminPage").then(
 const ScanPage = lazy(() => import("./pages/ScanPage").then((m) => ({ default: m.ScanPage })));
 const ResolveCodePage = lazy(() => import("./pages/ResolveCodePage").then((m) => ({ default: m.ResolveCodePage })));
 
+const RolesPage = lazy(() => import("./pages/RolesPage").then((m) => ({ default: m.RolesPage })));
+
 export function App() {
   return (
     <>
@@ -54,8 +56,9 @@ export function App() {
               <Route path="escanear" element={<ScanPage />} />
               <Route path="mas" element={<MorePage />} />
               <Route path="cuenta" element={<AccountPage />} />
-              <Route path="admin" element={<RequireRole check={(p) => p.isAdmin} />}>
-                <Route path="usuarios" element={<UsersPage />} />
+              <Route path="admin/usuarios" element={<RequireRole check={(p) => p.canManageUsers} />}><Route index element={<UsersPage />} /></Route>
+              <Route path="admin/roles" element={<RequireRole check={(p) => p.canManageRoles} />}><Route index element={<RolesPage />} /></Route>
+              <Route path="admin" element={<RequireRole check={(p) => p.canManageCatalogs} />}>
                 <Route path="categorias" element={<CategoriesAdminPage />} />
                 <Route path="ubicaciones" element={<LocationsAdminPage />} />
               </Route>

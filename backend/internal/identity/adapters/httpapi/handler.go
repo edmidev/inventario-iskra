@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -34,14 +35,14 @@ func New(svc *app.Service, cookieSecure bool) *Handler {
 }
 
 // Verifier adapts the access-token check to httpx.TokenVerifier, mapping the
-// role to its permissions.
+// identity to its current persisted permissions.
 func (h *Handler) Verifier() httpx.TokenVerifier {
 	return func(token string) (httpx.Principal, error) {
 		c, err := h.svc.VerifyAccess(token)
 		if err != nil {
 			return httpx.Principal{}, err
 		}
-		perms := c.Role.Permissions()
+		perms := c.Permissions
 		names := make([]string, len(perms))
 		for i, p := range perms {
 			names[i] = string(p)
@@ -52,7 +53,17 @@ func (h *Handler) Verifier() httpx.TokenVerifier {
 
 // Authenticate returns the bearer-token middleware for other modules to reuse.
 func (h *Handler) Authenticate() func(http.Handler) http.Handler {
-	return httpx.Authenticate(h.Verifier())
+	return httpx.AuthenticateContext(func(ctx context.Context, token string) (httpx.Principal, error) {
+		c, err := h.svc.VerifyAccessContext(ctx, token)
+		if err != nil {
+			return httpx.Principal{}, err
+		}
+		names := make([]string, len(c.Permissions))
+		for i, p := range c.Permissions {
+			names[i] = string(p)
+		}
+		return httpx.Principal{UserID: c.UserID, Role: string(c.Role), Permissions: names}, nil
+	})
 }
 
 // Register mounts the routes on r (expected to be the /api/v1 router).
@@ -67,6 +78,12 @@ func (h *Handler) Register(r chi.Router) {
 			r.Post("/password", h.changeOwnPassword)
 		})
 	})
+	r.Route("/roles", func(r chi.Router) {
+		r.Use(h.Authenticate(), httpx.RequirePermission(string(domain.PermManageRoles)))
+		r.Get("/", h.listRoles)
+		r.Put("/{role}/permissions", h.setRolePermissions)
+	})
+	r.With(h.Authenticate(), httpx.RequirePermission(string(domain.PermManageRoles))).Get("/permissions", h.permissionCatalog)
 	r.Route("/users", func(r chi.Router) {
 		r.Use(h.Authenticate(), httpx.RequirePermission(string(domain.PermManageUsers)))
 		r.Get("/", h.listUsers)
@@ -77,17 +94,18 @@ func (h *Handler) Register(r chi.Router) {
 }
 
 type userDTO struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Email     string    `json:"email"`
-	Role      string    `json:"role"`
-	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	Email       string              `json:"email"`
+	Role        string              `json:"role"`
+	Permissions []domain.Permission `json:"permissions"`
+	Active      bool                `json:"active"`
+	CreatedAt   time.Time           `json:"created_at"`
+	UpdatedAt   time.Time           `json:"updated_at"`
 }
 
 func toDTO(u domain.User) userDTO {
-	return userDTO{ID: u.ID, Name: u.Name, Email: u.Email, Role: string(u.Role), Active: u.Active,
+	return userDTO{ID: u.ID, Name: u.Name, Email: u.Email, Role: string(u.Role), Permissions: append([]domain.Permission{}, u.Permissions...), Active: u.Active,
 		CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}
 }
 
@@ -183,6 +201,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "account unavailable")
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	httpx.WriteJSON(w, http.StatusOK, toDTO(u))
 }
 
