@@ -39,6 +39,7 @@ export function App() {
           <Route element={<RequireAuth />}>
             <Route element={<AppShell />}>
               <Route index element={<Navigate to="/inicio" replace />} />
+              <Route element={<RequireRole check={(p) => p.canRead} />}>
               <Route path="inicio" element={<DashboardPage />} />
               <Route path="materiales" element={<ItemsPage />} />
               <Route path="materiales/codigo/:code" element={<ResolveCodePage />} />
@@ -54,6 +55,7 @@ export function App() {
               <Route path="ordenes-compra/sugerencias" element={<ReorderSuggestionsPage />} />
               <Route path="ordenes-compra/:id" element={<PurchaseOrderDetailPage />} />
               <Route path="escanear" element={<ScanPage />} />
+              </Route>
               <Route path="mas" element={<MorePage />} />
               <Route path="cuenta" element={<AccountPage />} />
               <Route path="admin/usuarios" element={<RequireRole check={(p) => p.canManageUsers} />}><Route index element={<UsersPage />} /></Route>

@@ -21,6 +21,14 @@ function serveRoles(fail = false) {
 }
 
 describe("role permission configuration",()=>{
+  it("blocks inventory routes and hides inventory navigation without read grants", async () => {
+    useAuthenticatedApi("worker");
+    renderApp("/materiales");
+    expect(await screen.findByText("Sin acceso")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Materiales" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Más" }).length).toBeGreaterThan(0);
+  });
+
   it("saves explicit server grants and protects administrator recovery",async()=>{
     useAuthenticatedApi("admin");const getGrants=serveRoles();const user=userEvent.setup();renderApp("/admin/roles");
     const form=await screen.findByRole("form",{name:"Permisos de Trabajador"});
