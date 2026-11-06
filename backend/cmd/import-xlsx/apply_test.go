@@ -267,7 +267,7 @@ func TestPartiallyImportedItemGetsOnlyItsMissingStockRow(t *testing.T) {
 	unit := "unidad"
 	if _, err := deps.Catalog.CreateItem(ctx, catalogapp.CreateItemInput{Code: "ISK-MD1-PT", NewItemInput: catalogdomain.NewItemInput{
 		Description: "PASTA TERMICA", CategoryID: cat.ID, Kind: catalogdomain.KindConsumable, Unit: &unit,
-		Stocks:     []catalogdomain.StockInput{{LocationID: maleta.ID, Quantity: 2}},
+		Stocks:     []catalogdomain.StockInput{{LocationID: maleta.ID, Quantity: 2 * 1000}},
 		Attributes: map[string]any{"import_source": "xlsx:Maleta y caja de alejandro:r7"},
 	}}); err != nil {
 		t.Fatal(err)
@@ -296,7 +296,7 @@ func TestPartiallyImportedItemGetsOnlyItsMissingStockRow(t *testing.T) {
 	_ = e.pool.QueryRow(context.Background(), `SELECT id::text FROM users WHERE email='admin@example.test'`).Scan(&adminID)
 	var tallerID int64
 	_ = e.pool.QueryRow(context.Background(), `SELECT id FROM locations WHERE name='Taller'`).Scan(&tallerID)
-	if _, err := stockapp.NewService(stockpg.New(e.pool)).Record(context.Background(), itemID, adminID, stockdomain.Request{Type: stockdomain.TypeOut, Qty: 2, LocationID: &tallerID}); err != nil {
+	if _, err := stockapp.NewService(stockpg.New(e.pool)).Record(context.Background(), itemID, adminID, stockdomain.Request{Type: stockdomain.TypeOut, Qty: 2 * 1000, LocationID: &tallerID}); err != nil {
 		t.Fatal(err)
 	}
 	if code, _, errs := e.cli("--file", synthetic(t), "--apply", "--user-email", "admin@example.test"); code != 0 {

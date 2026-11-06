@@ -15,7 +15,7 @@ func TestAssetsSheetHeaderOffsetAndCategoryNoise(t *testing.T) {
 		t.Fatalf("sheets=%+v items=%d", p.Sheets, len(p.Items))
 	}
 	a := byRow(p, sheetAssets, 3)
-	if a.Code != "ISK-AAA-001" || a.Description != "taladro verde" || a.Category != CatMachinery || a.Kind != "asset" || a.Stock != 1 {
+	if a.Code != "ISK-AAA-001" || a.Description != "taladro verde" || a.Category != CatMachinery || a.Kind != "asset" || a.Stock != 1*1000 {
 		t.Fatalf("row 3 = %+v", a)
 	}
 	if a.Location != "Almacén principal" || !hasFlag(a, FlagCategoryNormalized) {
@@ -127,28 +127,28 @@ func TestCaseSheetToolsFusedCodeAndShiftedConsumables(t *testing.T) {
 		t.Fatalf("summary = %+v", p.Sheets[0])
 	}
 	tool := byRow(p, sheetCase, 3)
-	if tool.Kind != "asset" || tool.Category != CatTools || tool.Stock != 1 || tool.Location != LocationCase || tool.Description != "llave de tubo" {
+	if tool.Kind != "asset" || tool.Category != CatTools || tool.Stock != 1*1000 || tool.Location != LocationCase || tool.Description != "llave de tubo" {
 		t.Fatalf("tool = %+v", tool)
 	}
 	spare := byRow(p, sheetCase, 4)
-	if spare.Kind != "consumable" || spare.Stock != 3 || spare.Code != "" || spare.Unit != "unidad" || !hasFlag(spare, FlagNoCode) {
+	if spare.Kind != "consumable" || spare.Stock != 3*1000 || spare.Code != "" || spare.Unit != "unidad" || !hasFlag(spare, FlagNoCode) {
 		t.Fatalf("spare = %+v", spare)
 	}
 	fused := byRow(p, sheetCase, 5)
 	if fused.Code != "ISK-M16-PAR" || fused.Description != "pinza para anillos de retencion" || !hasFlag(fused, FlagFused) || fused.Kind != "asset" {
 		t.Fatalf("fused = %+v", fused)
 	}
-	if nostock := byRow(p, sheetCase, 6); nostock.Kind != "asset" || nostock.Stock != 1 || len(nostock.Flags) != 0 {
+	if nostock := byRow(p, sheetCase, 6); nostock.Kind != "asset" || nostock.Stock != 1*1000 || len(nostock.Flags) != 0 {
 		t.Fatalf("no stock tool = %+v", nostock)
 	}
-	if c := byRow(p, sheetCase, 9); c.Kind != "consumable" || c.Code != "ISK-MD1-PT" || c.Stock != 2 || c.Category != CatConsumables {
+	if c := byRow(p, sheetCase, 9); c.Kind != "consumable" || c.Code != "ISK-MD1-PT" || c.Stock != 2*1000 || c.Category != CatConsumables {
 		t.Fatalf("coded consumable = %+v", c)
 	}
 	cap := byRow(p, sheetCase, 10)
-	if cap.Kind != "consumable" || cap.Category != CatElectrical || cap.Stock != 6 || cap.Code != "" || cap.Location != LocationCase {
+	if cap.Kind != "consumable" || cap.Category != CatElectrical || cap.Stock != 6*1000 || cap.Code != "" || cap.Location != LocationCase {
 		t.Fatalf("shifted = %+v", cap)
 	}
-	if t11 := byRow(p, sheetCase, 11); t11.Category != CatConsumables || t11.Stock != 74 {
+	if t11 := byRow(p, sheetCase, 11); t11.Category != CatConsumables || t11.Stock != 74*1000 {
 		t.Fatalf("shifted no category = %+v", t11)
 	}
 }
@@ -176,7 +176,7 @@ func consumableRows(first, repeat [][]any) [][]any {
 
 func stockOf(it PlannedItem, loc string) int {
 	q, _ := it.stockAt(loc)
-	return q
+	return int(q) / 1000
 }
 
 func TestRepeatedBlockBecomesASecondStockRowAtTheRepeatLocation(t *testing.T) {
@@ -195,7 +195,7 @@ func TestRepeatedBlockBecomesASecondStockRowAtTheRepeatLocation(t *testing.T) {
 	p := parseSynthetic(t, Options{}, caseSheet(consumableRows(first, repeat)...))
 
 	amarras := byRow(p, sheetCase, 5)
-	if amarras.Action != ActionCreate || len(amarras.Stocks) != 2 || stockOf(amarras, LocationCase) != 100 || stockOf(amarras, "Taller") != 100 || amarras.Stock != 200 {
+	if amarras.Action != ActionCreate || len(amarras.Stocks) != 2 || stockOf(amarras, LocationCase) != 100 || stockOf(amarras, "Taller") != 100 || amarras.Stock != 200*1000 {
 		t.Fatalf("amarras = %+v", amarras)
 	}
 	if amarras.Attributes["import_source"] != "xlsx:"+sheetCase+":r5" || amarras.Attributes["import_source_repeat"] != "xlsx:"+sheetCase+":r10" {
@@ -211,7 +211,7 @@ func TestRepeatedBlockBecomesASecondStockRowAtTheRepeatLocation(t *testing.T) {
 			terminales = it
 		}
 	}
-	if stockOf(terminales, LocationCase) != 74 || stockOf(terminales, "Taller") != 70 || terminales.Stock != 144 || terminales.Code != "" {
+	if stockOf(terminales, LocationCase) != 74 || stockOf(terminales, "Taller") != 70 || terminales.Stock != 144*1000 || terminales.Code != "" {
 		t.Fatalf("terminales (different quantities) = %+v", terminales)
 	}
 	// Only the first block item has one row; nothing is skipped as duplicate.
@@ -236,7 +236,7 @@ func TestItemOnlyInTheRepeatedBlockGetsASingleRowAtTheRepeatLocation(t *testing.
 	repeat := [][]any{{"ISK-MD1-A", "uno", nil, nil, nil, 5}, {"solo taller", nil, nil, nil, 9}}
 	p := parseSynthetic(t, Options{}, caseSheet(consumableRows(first, repeat)...))
 	only := byRow(p, sheetCase, 7)
-	if only.Action != ActionCreate || len(only.Stocks) != 1 || only.Stocks[0].Location != "Taller" || only.Stock != 9 || !hasFlag(only, FlagStockSplit) {
+	if only.Action != ActionCreate || len(only.Stocks) != 1 || only.Stocks[0].Location != "Taller" || only.Stock != 9*1000 || !hasFlag(only, FlagStockSplit) {
 		t.Fatalf("second-only = %+v", only)
 	}
 	if two := byRow(p, sheetCase, 4); stockOf(two, LocationCase) != 1 || stockOf(two, "Taller") != 5 {
@@ -257,7 +257,7 @@ func TestThirdOccurrenceIsAnIssueAndNeverMergedSilently(t *testing.T) {
 	if third.Action != ActionSkipConflict || !hasFlag(third, FlagExtraOccurrence) {
 		t.Fatalf("third = %+v", third)
 	}
-	if o := byRow(p, sheetCase, 4); o.Stock != 2 || len(o.Stocks) != 2 {
+	if o := byRow(p, sheetCase, 4); o.Stock != 2*1000 || len(o.Stocks) != 2 {
 		t.Fatalf("owner must keep only two stock rows: %+v", o)
 	}
 	if st := p.splitStats(); st.extra != 1 {
@@ -289,7 +289,7 @@ func TestUncodedItemsMatchByNormalizedDescriptionAndGenerateOneCode(t *testing.T
 	repeat := [][]any{{"terminales azúl ", nil, nil, nil, 8}}
 	p := parseSynthetic(t, Options{}, caseSheet(consumableRows(first, repeat)...))
 	o := byRow(p, sheetCase, 4)
-	if o.Code != "" || len(o.Stocks) != 2 || o.Stock != 15 || p.Count(ActionStockRow) != 1 {
+	if o.Code != "" || len(o.Stocks) != 2 || o.Stock != 15*1000 || p.Count(ActionStockRow) != 1 {
 		t.Fatalf("owner = %+v", o)
 	}
 	if got := p.Count(ActionCreate); got != 1 {

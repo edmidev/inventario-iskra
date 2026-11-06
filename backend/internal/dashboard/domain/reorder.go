@@ -1,6 +1,7 @@
 package domain
 
 import (
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"sort"
 	"strings"
 )
@@ -16,9 +17,9 @@ type ReorderCandidate struct {
 	Code              string
 	Description       string
 	Unit              string
-	StockCurrent      int
-	StockMin          int
-	PendingOrdered    int
+	StockCurrent      qtyval.Quantity
+	StockMin          qtyval.Quantity
+	PendingOrdered    qtyval.Quantity
 	SupplierID        *int64
 	SupplierName      *string
 	LastUnitCostMinor *int64
@@ -28,7 +29,7 @@ type ReorderCandidate struct {
 // ReorderLine is a candidate with the quantity to order.
 type ReorderLine struct {
 	ReorderCandidate
-	SuggestedQty int
+	SuggestedQty qtyval.Quantity
 }
 
 // ReorderGroup holds the lines to order from one supplier. SupplierID is nil
@@ -41,7 +42,7 @@ type ReorderGroup struct {
 
 // SuggestedQty is the quantity that brings stock plus what is already on order
 // up to TargetStockFactor times the minimum; never negative.
-func SuggestedQty(current, min, pending int) int {
+func SuggestedQty(current, min, pending qtyval.Quantity) qtyval.Quantity {
 	if q := TargetStockFactor*min - current - pending; q > 0 {
 		return q
 	}

@@ -187,7 +187,7 @@ describe("create item", () => {
     await user.type(qty, "0");
     await user.click(within(dialog).getByRole("button", { name: "Crear material" }));
     expect(await within(dialog).findByText("Elige la ubicación.")).toBeInTheDocument();
-    expect(within(dialog).getByText("Indica un entero mayor a 0.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Indica una cantidad mayor a 0, hasta 3 decimales.")).toBeInTheDocument();
     expect(seen.body).toEqual({});
   });
 
@@ -256,6 +256,28 @@ describe("create item", () => {
     expect(within(dialog).getByText("ubicación inválida")).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/Descripción/)).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("dialog", { name: "Nuevo material" })).toBeInTheDocument();
+  });
+
+  it("creates consumables with exact fractional opening quantities", async () => {
+    useAuthenticatedApi("operator");
+    serveList({ count: 0 });
+    let body: Record<string, unknown> = {};
+    const created = consumable();
+    server.use(
+      http.post(api("/items"), async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(created, { status: 201 });
+      }),
+      http.get(api(`/items/${created.id}`), () => HttpResponse.json(created)),
+    );
+    const user = userEvent.setup(); renderApp("/materiales");
+    const dialog = await openCreate(user);
+    await fillConsumable(dialog, user);
+    await addRow(dialog, user, 1, "Bodega", "0.125");
+    await user.type(within(dialog).getByLabelText(/Stock mínimo/), "0.25");
+    await user.click(within(dialog).getByRole("button", {name:"Crear material"}));
+    await waitFor(() => expect(body.stocks).toEqual([{location_id:10, quantity:0.125}]));
+    expect(body.stock_min).toBe(0.25);
   });
 
   it("lets only admins type a custom code", async () => {

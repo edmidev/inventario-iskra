@@ -123,7 +123,7 @@ export function ItemForm({ mode, initialValues, categories, locations, isAdmin, 
             <Input placeholder="pza, caja, litro…" {...register("unit")} />
           </FormField>
           <FormField label="Stock mínimo" hint="Se compara con el total de todas las ubicaciones." error={errors.stock_min?.message}>
-            <Input type="number" inputMode="numeric" min={0} {...register("stock_min")} />
+            <Input type="number" inputMode="decimal" step="0.001" min={0} {...register("stock_min")} />
           </FormField>
           {mode === "create" ? (
             <OpeningStockEditor control={control} register={register} errors={errors} locations={locations} />

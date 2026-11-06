@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"strings"
 	"time"
 
@@ -208,10 +209,10 @@ func (s *Service) Receive(ctx context.Context, id int64, userID string, req doma
 }
 
 // bringIn creates the items and the stock movement for qty units of line.
-func (s *Service) bringIn(ctx context.Context, line *domain.Line, qty int, loc int64, userID, note string) ([]domain.ReceiptItem, error) {
+func (s *Service) bringIn(ctx context.Context, line *domain.Line, qty qtyval.Quantity, loc int64, userID, note string) ([]domain.ReceiptItem, error) {
 	if line.IsAsset() {
-		out := make([]domain.ReceiptItem, 0, qty)
-		for n := 0; n < qty; n++ {
+		out := make([]domain.ReceiptItem, 0, int(qty)/1000)
+		for n := 0; n < int(qty)/1000; n++ {
 			it, err := s.items.CreateItem(ctx, *line.NewItem, loc)
 			if err != nil {
 				return nil, fmt.Errorf("create asset %d of %d: %w", n+1, qty, err)
@@ -219,7 +220,7 @@ func (s *Service) bringIn(ctx context.Context, line *domain.Line, qty int, loc i
 			if line.ItemID == "" {
 				line.ItemID = it.ID
 			}
-			out = append(out, domain.ReceiptItem{ItemID: it.ID, Code: it.Code, Quantity: 1})
+			out = append(out, domain.ReceiptItem{ItemID: it.ID, Code: it.Code, Quantity: 1000})
 		}
 		return out, nil
 	}

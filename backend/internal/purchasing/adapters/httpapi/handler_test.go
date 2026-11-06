@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -53,7 +54,7 @@ func (c *catalog) LocationExists(_ context.Context, id int64) (bool, error) { re
 
 type stock struct{ ins int }
 
-func (s *stock) ReceiveIn(context.Context, string, string, int64, int, string) error {
+func (s *stock) ReceiveIn(context.Context, string, string, int64, qtyval.Quantity, string) error {
 	s.ins++
 	return nil
 }

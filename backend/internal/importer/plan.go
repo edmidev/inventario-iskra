@@ -2,6 +2,7 @@ package importer
 
 import (
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"sort"
 	"time"
 
@@ -55,25 +56,25 @@ type Failure struct {
 
 // PlannedItem is one workbook row and what will happen to it.
 type PlannedItem struct {
-	Sheet             string         `json:"sheet"`
-	Row               int            `json:"row"`
-	Code              string         `json:"code,omitempty"` // legacy code; empty means one is generated
-	Description       string         `json:"description"`
-	Kind              string         `json:"kind"`
-	Category          string         `json:"category"`
-	Status            string         `json:"status"`
-	Stock             int            `json:"stock"` // consumables: total over Stocks
-	Stocks            []StockRow     `json:"stocks,omitempty"`
-	MergedInto        string         `json:"merged_into,omitempty"`
-	NeedsStock        []StockRow     `json:"needs_stock,omitempty"`
-	Unit              string         `json:"unit,omitempty"`
-	Location          string         `json:"location,omitempty"`
-	LastMaintenanceAt *time.Time     `json:"last_maintenance_at,omitempty"`
-	Attributes        map[string]any `json:"attributes"`
-	Notes             string         `json:"notes,omitempty"`
-	Failure           *Failure       `json:"failure,omitempty"`
-	Action            Action         `json:"action"`
-	Flags             []Flag         `json:"flags,omitempty"`
+	Sheet             string          `json:"sheet"`
+	Row               int             `json:"row"`
+	Code              string          `json:"code,omitempty"` // legacy code; empty means one is generated
+	Description       string          `json:"description"`
+	Kind              string          `json:"kind"`
+	Category          string          `json:"category"`
+	Status            string          `json:"status"`
+	Stock             qtyval.Quantity `json:"stock"` // consumables: total over Stocks
+	Stocks            []StockRow      `json:"stocks,omitempty"`
+	MergedInto        string          `json:"merged_into,omitempty"`
+	NeedsStock        []StockRow      `json:"needs_stock,omitempty"`
+	Unit              string          `json:"unit,omitempty"`
+	Location          string          `json:"location,omitempty"`
+	LastMaintenanceAt *time.Time      `json:"last_maintenance_at,omitempty"`
+	Attributes        map[string]any  `json:"attributes"`
+	Notes             string          `json:"notes,omitempty"`
+	Failure           *Failure        `json:"failure,omitempty"`
+	Action            Action          `json:"action"`
+	Flags             []Flag          `json:"flags,omitempty"`
 
 	existingID string // set when the row was matched with an item in the database
 	sheetRole  sheetRole
@@ -84,10 +85,10 @@ type PlannedItem struct {
 // StockRow is the quantity of a consumable at one location and the workbook
 // row it was read from.
 type StockRow struct {
-	Location string `json:"location"`
-	Quantity int    `json:"quantity"`
-	Sheet    string `json:"sheet"`
-	Row      int    `json:"row"`
+	Location string          `json:"location"`
+	Quantity qtyval.Quantity `json:"quantity"`
+	Sheet    string          `json:"sheet"`
+	Row      int             `json:"row"`
 }
 
 // Ref is a short "sheet row N" reference used in messages.

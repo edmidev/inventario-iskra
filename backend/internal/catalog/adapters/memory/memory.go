@@ -5,6 +5,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"sort"
 	"strings"
 	"sync"
@@ -414,7 +415,7 @@ const defaultLocationName = "Sin ubicación"
 // a location go to the default location (created on demand), rows at the same
 // location merge, and the result carries location names ordered by name.
 func (s *Store) resolveStocks(in []domain.ItemStock) ([]domain.ItemStock, error) {
-	merged := map[int64]int{}
+	merged := map[int64]qtyval.Quantity{}
 	for _, st := range in {
 		id := st.LocationID
 		if id == 0 {

@@ -1,3 +1,4 @@
+import { parseQuantity, quantityAfter } from "../../lib/quantity";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
@@ -46,10 +47,10 @@ export function StockTransferForm({ unit, stocks, locations, onSubmit, onCancel 
   const to = useWatch({ control, name: "to_location_id" });
   const qty = useWatch({ control, name: "qty" });
   const available = stockAt(stocks, from);
-  const amount = /^\d+$/.test(qty.trim()) ? Number(qty) : null;
+  const amount = parseQuantity(qty);
   const fromName = from ? locationDisplayName(locations, stocks, from) : "";
   const toName = to ? locationDisplayName(locations, stocks, to) : "";
-  const ready = amount !== null && amount >= 1 && amount <= available && Boolean(from) && Boolean(to) && from !== to;
+  const ready = amount !== null && amount > 0 && amount <= available && Boolean(from) && Boolean(to) && from !== to;
 
   const submit = handleSubmit(async (values) => {
     setFormError(null);
@@ -115,7 +116,7 @@ export function StockTransferForm({ unit, stocks, locations, onSubmit, onCancel 
             control={control}
             name="qty"
             render={({ field }) => (
-              <QuantityStepper {...aria} value={field.value} onChange={field.onChange} min={1} max={from ? available : undefined} unit={unit} />
+              <QuantityStepper decimal {...aria} value={field.value} onChange={field.onChange} min={0.001} max={from ? available : undefined} unit={unit} />
             )}
           />
         )}
@@ -128,7 +129,7 @@ export function StockTransferForm({ unit, stocks, locations, onSubmit, onCancel 
             {suffix} de {fromName} a {toName}
           </p>
           <p className="text-ink-soft">
-            Quedarán {available - amount}
+            Quedarán {quantityAfter(available, -amount)}
             {suffix} en {fromName} y {stockAt(stocks, to) + amount}
             {suffix} en {toName}.
           </p>

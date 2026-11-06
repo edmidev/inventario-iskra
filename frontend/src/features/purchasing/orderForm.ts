@@ -1,3 +1,4 @@
+import { parseQuantity as parseDecimalQuantity, lineCostMinor } from "../../lib/quantity";
 import { z } from "zod";
 import { ApiError } from "../../lib/api/errors";
 import type { PurchaseOrder } from "../../lib/api/schemas";
@@ -33,13 +34,14 @@ export const lineSchema = z
       if (line.kind === "consumable") {
         if (!line.unit.trim()) issue("unit", "Indica la unidad (caja, litro…).");
         else if (line.unit.trim().length > 30) issue("unit", "Máximo 30 caracteres.");
-        if (line.stock_min.trim() !== "" && !/^\d+$/.test(line.stock_min.trim())) issue("stock_min", "Usa un número entero, 0 o más.");
+        if (line.stock_min.trim() !== "" && parseDecimalQuantity(line.stock_min) === null) issue("stock_min", "Usa una cantidad de 0 o más, hasta 3 decimales.");
       }
     }
     const quantity = parseQuantity(line.quantity);
     const isNewAsset = line.source === "new" && line.kind === "asset";
-    if (quantity === null) issue("quantity", "Indica una cantidad entera de 1 o más.");
+    if (quantity === null) issue("quantity", "Indica una cantidad mayor a 0, hasta 3 decimales.");
     else if (quantity > MAX_LINE_QUANTITY) issue("quantity", `Máximo ${MAX_LINE_QUANTITY} por línea.`);
+    else if (isNewAsset && !Number.isInteger(quantity)) issue("quantity", "Los activos requieren unidades enteras.");
     else if (isNewAsset && quantity > MAX_ASSET_UNITS) issue("quantity", `Máximo ${MAX_ASSET_UNITS} ítems por línea de activos.`);
     if (parseMinorUnits(line.unit_cost) === null) issue("unit_cost", "Usa un monto válido, por ejemplo 150 o 150.50.");
   });
@@ -58,7 +60,7 @@ export const orderSchema = z.object({
 });
 export type OrderValues = z.infer<typeof orderSchema>;
 
-export const parseQuantity = (text: string): number | null => (/^\d+$/.test(text.trim()) && Number(text) >= 1 ? Number(text) : null);
+export const parseQuantity = (text: string): number | null => { const n = parseDecimalQuantity(text); return n !== null && n > 0 ? n : null; };
 
 export const emptyLine = (): LineValues => ({
   source: "existing",
@@ -99,7 +101,7 @@ export function orderToValues(order: PurchaseOrder): OrderValues {
 }
 
 function lineToPayload(line: LineValues): LinePayload {
-  const base = { quantity: Number(line.quantity), unit_cost_minor: parseMinorUnits(line.unit_cost) ?? 0 };
+  const base = { quantity: parseQuantity(line.quantity) ?? 0, unit_cost_minor: parseMinorUnits(line.unit_cost) ?? 0 };
   if (line.source === "existing") return { item_id: line.item_id, ...base };
   const stockMin = line.stock_min.trim();
   return {
@@ -107,7 +109,7 @@ function lineToPayload(line: LineValues): LinePayload {
       description: line.description.trim(),
       category_id: Number(line.category_id),
       kind: line.kind,
-      ...(line.kind === "consumable" ? { unit: line.unit.trim(), ...(stockMin ? { stock_min: Number(stockMin) } : {}) } : {}),
+      ...(line.kind === "consumable" ? { unit: line.unit.trim(), ...(stockMin ? { stock_min: parseDecimalQuantity(stockMin) ?? 0 } : {}) } : {}),
     },
     ...base,
   };
@@ -130,7 +132,7 @@ export function linesTotalMinor(lines: LineValues[]): number {
   return lines.reduce((sum, line) => {
     const quantity = parseQuantity(line.quantity);
     const cost = parseMinorUnits(line.unit_cost);
-    return quantity === null || cost === null ? sum : sum + quantity * cost;
+    return quantity === null || cost === null ? sum : sum + (lineCostMinor(line.quantity, cost) ?? 0);
   }, 0);
 }
 

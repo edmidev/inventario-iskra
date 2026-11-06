@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"sync"
 	"testing"
 
@@ -269,18 +270,18 @@ func TestUpdateItem(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
 	cons, err := f.svc.CreateItem(ctx, app.CreateItemInput{NewItemInput: domain.NewItemInput{
-		Description: "Cinta", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(8)}})
+		Description: "Cinta", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(qtyval.Quantity(8) * 1000)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := f.svc.UpdateItem(ctx, cons.ID, domain.ItemPatch{StockMin: ptr(3), Status: ptr(domain.StatusInoperative)})
-	if err != nil || got.StockMin != 3 || got.StockCurrent != 8 || got.Status != domain.StatusInoperative {
+	got, err := f.svc.UpdateItem(ctx, cons.ID, domain.ItemPatch{StockMin: ptr(qtyval.Quantity(3) * 1000), Status: ptr(domain.StatusInoperative)})
+	if err != nil || got.StockMin != 3*1000 || got.StockCurrent != 8*1000 || got.Status != domain.StatusInoperative {
 		t.Fatalf("update: %+v %v", got, err)
 	}
 	if _, err := f.svc.UpdateItem(ctx, cons.ID, domain.ItemPatch{Kind: ptr(domain.KindAsset)}); fieldsMsg(err, "kind") == "" {
 		t.Errorf("kind change: %v", err)
 	}
-	if _, err := f.svc.UpdateItem(ctx, cons.ID, domain.ItemPatch{StockCurrent: ptr(100)}); fieldsMsg(err, "stock_current") == "" {
+	if _, err := f.svc.UpdateItem(ctx, cons.ID, domain.ItemPatch{StockCurrent: ptr(qtyval.Quantity(100) * 1000)}); fieldsMsg(err, "stock_current") == "" {
 		t.Errorf("stock edit: %v", err)
 	}
 	if _, err := f.svc.UpdateItem(ctx, cons.ID, domain.ItemPatch{Code: ptr("ISK-X-1")}); fieldsMsg(err, "code") == "" {
@@ -293,7 +294,7 @@ func TestUpdateItem(t *testing.T) {
 		t.Errorf("missing: %v", err)
 	}
 	reread, _ := f.svc.GetItem(ctx, cons.ID)
-	if reread.Kind != domain.KindConsumable || reread.StockCurrent != 8 || reread.Code != cons.Code {
+	if reread.Kind != domain.KindConsumable || reread.StockCurrent != 8*1000 || reread.Code != cons.Code {
 		t.Fatalf("immutable fields changed: %+v", reread)
 	}
 }
@@ -317,8 +318,8 @@ func TestListItemsFiltersSortAndPaging(t *testing.T) {
 	}
 	mk("Taladro", f.cat.ID, domain.KindAsset, func(i *domain.NewItemInput) { i.LocationID = &bodega.ID })
 	mk("Martillo", f.cat.ID, domain.KindAsset, func(i *domain.NewItemInput) { i.Status = domain.StatusInRepair })
-	mk("Cable HDMI", cab.ID, domain.KindConsumable, func(i *domain.NewItemInput) { i.StockCurrent = ptr(1); i.StockMin = 2 })
-	mk("Cinta", cab.ID, domain.KindConsumable, func(i *domain.NewItemInput) { i.StockCurrent = ptr(50); i.StockMin = 2 })
+	mk("Cable HDMI", cab.ID, domain.KindConsumable, func(i *domain.NewItemInput) { i.StockCurrent = ptr(qtyval.Quantity(1) * 1000); i.StockMin = 2 * 1000 })
+	mk("Cinta", cab.ID, domain.KindConsumable, func(i *domain.NewItemInput) { i.StockCurrent = ptr(qtyval.Quantity(50) * 1000); i.StockMin = 2 * 1000 })
 
 	list := func(fl domain.ItemFilter) ([]domain.Item, int) {
 		items, total, _, err := f.svc.ListItems(ctx, fl)
@@ -464,11 +465,11 @@ func TestCreateConsumableWithOpeningStockInSeveralLocations(t *testing.T) {
 	a, b := f.location(t, "Taller"), f.location(t, "Maleta y caja de Alejandro")
 	it, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
 		Description: "Tornillos", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"),
-		Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}, {LocationID: b.ID, Quantity: 5}}}})
+		Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5 * 1000}, {LocationID: b.ID, Quantity: 5 * 1000}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if it.StockCurrent != 10 || len(it.Stocks) != 2 || it.Stocks[0].LocationName != "Maleta y caja de Alejandro" || it.Stocks[1].LocationName != "Taller" {
+	if it.StockCurrent != 10*1000 || len(it.Stocks) != 2 || it.Stocks[0].LocationName != "Maleta y caja de Alejandro" || it.Stocks[1].LocationName != "Taller" {
 		t.Fatalf("created: %+v", it)
 	}
 	got, _ := f.svc.GetItem(t.Context(), it.ID)
@@ -482,14 +483,14 @@ func TestCreateConsumableUnknownStockLocationIsAFieldError(t *testing.T) {
 	a := f.location(t, "Taller")
 	_, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
 		Description: "Tornillos", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"),
-		Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}, {LocationID: 999, Quantity: 1}}}})
+		Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5 * 1000}, {LocationID: 999, Quantity: 1 * 1000}}}})
 	var ve *domain.ValidationError
 	if !errors.As(err, &ve) || ve.Fields["stocks[1].location_id"] == "" {
 		t.Fatalf("err = %v", err)
 	}
 	_, err = f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
 		Description: "Tornillos", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"),
-		StockCurrent: ptr(0), LocationID: ptr(int64(999))}})
+		StockCurrent: ptr(qtyval.Quantity(0) * 1000), LocationID: ptr(int64(999))}})
 	if !errors.As(err, &ve) || ve.Fields["location_id"] == "" {
 		t.Errorf("legacy dangling location: %v", err)
 	}
@@ -499,7 +500,7 @@ func TestLegacyCreateWithoutLocationUsesTheDefaultLocationOnce(t *testing.T) {
 	f := newFixture(t)
 	for range 2 {
 		it, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
-			Description: "Cinta", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"), StockCurrent: ptr(3)}})
+			Description: "Cinta", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"), StockCurrent: ptr(qtyval.Quantity(3) * 1000)}})
 		if err != nil || len(it.Stocks) != 1 || it.Stocks[0].LocationName != "Sin ubicación" {
 			t.Fatalf("created: %+v %v", it, err)
 		}
@@ -515,7 +516,7 @@ func TestListFiltersConsumablesByAnyStockLocationAndAssetsByLocation(t *testing.
 	ctx := t.Context()
 	a, b, c := f.location(t, "A"), f.location(t, "B"), f.location(t, "C")
 	multi, _ := f.svc.CreateItem(ctx, app.CreateItemInput{NewItemInput: domain.NewItemInput{Description: "Tornillos", CategoryID: f.cat.ID,
-		Kind: domain.KindConsumable, Unit: ptr("u"), Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}, {LocationID: b.ID, Quantity: 5}}}})
+		Kind: domain.KindConsumable, Unit: ptr("u"), Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5 * 1000}, {LocationID: b.ID, Quantity: 5 * 1000}}}})
 	asset, _ := f.svc.CreateItem(ctx, app.CreateItemInput{NewItemInput: domain.NewItemInput{Description: "Taladro", CategoryID: f.cat.ID,
 		Kind: domain.KindAsset, LocationID: &b.ID}})
 	for loc, want := range map[int64][]string{a.ID: {multi.ID}, b.ID: {asset.ID, multi.ID}, c.ID: nil} {
@@ -536,12 +537,12 @@ func TestUpdateConsumableLocationIsNotApplicable(t *testing.T) {
 	f := newFixture(t)
 	a := f.location(t, "A")
 	it, _ := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{Description: "Tornillos", CategoryID: f.cat.ID,
-		Kind: domain.KindConsumable, Unit: ptr("u"), Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}}}})
+		Kind: domain.KindConsumable, Unit: ptr("u"), Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5 * 1000}}}})
 	if _, err := f.svc.UpdateItem(t.Context(), it.ID, domain.ItemPatch{LocationID: domain.Nullable[int64]{Set: true, Value: a.ID}}); !errors.Is(err, domain.ErrNotApplicable) {
 		t.Fatalf("err = %v", err)
 	}
-	upd, err := f.svc.UpdateItem(t.Context(), it.ID, domain.ItemPatch{StockMin: ptr(2)})
-	if err != nil || upd.StockMin != 2 || len(upd.Stocks) != 1 || upd.Stocks[0].Quantity != 5 {
+	upd, err := f.svc.UpdateItem(t.Context(), it.ID, domain.ItemPatch{StockMin: ptr(qtyval.Quantity(2) * 1000)})
+	if err != nil || upd.StockMin != 2*1000 || len(upd.Stocks) != 1 || upd.Stocks[0].Quantity != 5*1000 {
 		t.Errorf("unrelated edit must keep the stock rows: %+v %v", upd, err)
 	}
 }
@@ -550,7 +551,7 @@ func TestLocationWithStockCannotBeDeleted(t *testing.T) {
 	f := newFixture(t)
 	a, free := f.location(t, "A"), f.location(t, "Libre")
 	if _, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{Description: "Tornillos", CategoryID: f.cat.ID,
-		Kind: domain.KindConsumable, Unit: ptr("u"), Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5}}}}); err != nil {
+		Kind: domain.KindConsumable, Unit: ptr("u"), Stocks: []domain.StockInput{{LocationID: a.ID, Quantity: 5 * 1000}}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.svc.DeleteLocation(t.Context(), a.ID); !errors.Is(err, domain.ErrLocationInUse) {

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"strings"
 	"time"
 )
@@ -9,7 +10,7 @@ import (
 // ReceiveLine asks to receive part of one order line.
 type ReceiveLine struct {
 	LineID   int64
-	Quantity int
+	Quantity qtyval.Quantity
 }
 
 // ReceiveRequest registers a delivery.
@@ -67,6 +68,8 @@ func (o Order) PlanReceipt(req ReceiveRequest) (ReceiveRequest, []int, error) {
 		}
 		seen[rl.LineID] = true
 		switch rem := o.Lines[at].Remaining(); {
+		case o.Lines[at].IsAsset() && !rl.Quantity.Whole():
+			fe[p+"quantity"] = "assets require whole units"
 		case rl.Quantity <= 0:
 			fe[p+"quantity"] = "must be greater than 0"
 		case rl.Quantity > rem:

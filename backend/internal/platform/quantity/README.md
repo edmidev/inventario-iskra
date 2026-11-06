@@ -12,28 +12,12 @@ converted with `Units(5)` (internal `5000`), never with `Quantity(5)`.
   quantity times integer minor-unit price half up, separately per line.
 - `Whole` allows asset-only domain paths to reject fractional units.
 
-## Activation boundary
+## Integration
 
-This foundation is intentionally not wired into existing modules yet. It does
-not change any current integer quantity, database column, endpoint or trigger.
-Do not deploy decimal-writing endpoints until the following transition is
-complete and verified together:
-
-1. Convert quantity-bearing domain fields, requests, responses and ports in
-   catalog, stock, purchasing, dashboard and importer. Preserve integer counts,
-   IDs, pagination, dates and asset counts as integers.
-2. Explicitly convert existing whole-unit inputs and fixtures with `Units` or
-   `Parse`. Change maximum-stock limits to the corresponding scaled value.
-   Preserve asset integrality and asset line limits before conversion to loops.
-3. Update order line totals to use checked `Cost` and checked order summation.
-4. Migrate items, item_stocks, stock_movements, purchase_order_lines,
-   po_receipt_lines and po_receipt_items to decimal numeric quantities without
-   scaling the SQL values. Update item_stock_total_check's INTEGER/BIGINT local
-   variables to NUMERIC. Preserve ledger constraints and immutability.
-5. Audit query casts/aggregate scans, JSON new_item.stock_min, importer parsing,
-   report formatting and cmd/api bridge ports. Preserve whole-unit API inputs.
-6. Adapt forms and OpenAPI, then verify real PostgreSQL integer-history
-   preservation, fractional movements/receipts, balance trigger behavior and
-   failed down-migration when any fractional value would be lost.
-
-The current backend remains integer-only until those integration steps land.
+Catalog, stock, purchasing, dashboard and importer now use this value type.
+Migration `00013_decimal_quantities.sql` preserves human-unit database values,
+changes quantity columns to NUMERIC(16,3), and rebuilds the deferred total-check
+trigger with numeric local variables. Its down migration refuses fractional
+history, including embedded purchase-line item minimums, rather than rounding.
+Assets remain whole units. Purchase line totals round half up before summing;
+validated maximum lines, quantity and unit cost keep the order sum within int64.

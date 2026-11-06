@@ -33,7 +33,7 @@ const (
 	lowStock = `i.kind = 'consumable' AND i.stock_min > 0 AND i.stock_current <= i.stock_min`
 	// pendingOrdered is what is still to arrive for the item on open purchase
 	// orders (owned by purchasing). A new-item line counts once it has an item.
-	pendingOrdered = `COALESCE((SELECT sum(l.quantity - l.received_qty)::int
+	pendingOrdered = `COALESCE((SELECT sum(l.quantity - l.received_qty)
 		FROM purchase_order_lines l JOIN purchase_orders o ON o.id = l.order_id
 		WHERE l.item_id = i.id AND o.status IN ('ordered', 'partially_received')), 0)`
 )

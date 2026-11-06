@@ -69,7 +69,7 @@ func (p *parseCtx) resolveDate(it *PlannedItem, raw, what string) (ok bool) {
 
 func (p *parseCtx) assetRow(v rowView, c columns) PlannedItem {
 	it := p.base(v.get(c.desc), "asset", CatTools)
-	it.Stock = 1
+	it.Stock = 1000
 	p.defaultLocation(&it)
 	if raw := v.get(c.code); raw != "" {
 		code, rest, ok := SplitCode(raw)
@@ -95,7 +95,7 @@ func (p *parseCtx) assetRow(v rowView, c columns) PlannedItem {
 	p.resolveCategory(&it, v.get(c.category), CatTools)
 	if q, present, err := parseQuantity(v.get(c.stock)); err != nil {
 		it.flag(FlagSuspicious, "stock cell: %v; assets always have stock 1", err)
-	} else if present && q != 1 {
+	} else if present && q != 1000 {
 		it.flag(FlagSuspicious, "stock cell says %d but assets always have stock 1", q)
 	}
 
@@ -215,13 +215,13 @@ func (p *parseCtx) caseRow(v rowView, c columns, inConsumables bool) PlannedItem
 		return it
 	}
 	q, present, err := parseQuantity(qtyRaw)
-	if err != nil {
+	if err != nil || (it.Kind == "asset" && present && !q.Whole()) {
 		return p.invalid(it, "%v; skipped", err)
 	}
 	switch it.Kind {
 	case "asset":
-		it.Stock = 1
-		if present && q != 1 {
+		it.Stock = 1000
+		if present && q != 1000 {
 			it.flag(FlagSuspicious, "quantity %d on a tool; assets always have stock 1", q)
 		}
 	default:
@@ -238,7 +238,7 @@ func (p *parseCtx) caseRow(v rowView, c columns, inConsumables bool) PlannedItem
 
 func (p *parseCtx) inactiveRow(v rowView, c columns) PlannedItem {
 	it := p.base(v.get(c.desc), "asset", CatTools)
-	it.Stock = 1
+	it.Stock = 1000
 	p.defaultLocation(&it)
 	raw := v.get(c.code)
 	if raw != "" {

@@ -8,6 +8,7 @@ package app
 import (
 	"context"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 
 	"github.com/edgar/inventario/backend/internal/purchasing/domain"
 )
@@ -74,7 +75,7 @@ type ItemCatalog interface {
 type StockReceiver interface {
 	// ReceiveIn records an `in` movement of qty at the location for a
 	// consumable, attributed to userID. It joins the transaction carried by ctx.
-	ReceiveIn(ctx context.Context, itemID, userID string, locationID int64, qty int, note string) error
+	ReceiveIn(ctx context.Context, itemID, userID string, locationID int64, qty qtyval.Quantity, note string) error
 }
 
 // Suppliers looks suppliers up.

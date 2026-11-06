@@ -5,6 +5,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"sort"
 	"strings"
 	"time"
@@ -44,7 +45,7 @@ const (
 
 // Limits.
 const (
-	MaxStock   = 1_000_000_000
+	MaxStock   = 1_000_000_000_000
 	MaxNoteLen = 500
 )
 
@@ -64,7 +65,7 @@ var (
 // InsufficientStockError carries the numbers behind ErrInsufficientStock.
 // LocationID and LocationName are set when the shortfall is at one location.
 type InsufficientStockError struct {
-	Available, Requested int
+	Available, Requested qtyval.Quantity
 	LocationID           *int64
 	LocationName         string
 }
@@ -125,13 +126,13 @@ type Movement struct {
 	ID             int64
 	ItemID         string
 	Type           MovementType
-	Qty            int
-	StockBefore    int
-	StockAfter     int
+	Qty            qtyval.Quantity
+	StockBefore    qtyval.Quantity
+	StockAfter     qtyval.Quantity
 	LocationID     *int64
 	FromLocationID *int64
 	ToLocationID   *int64
-	MovedQty       int
+	MovedQty       qtyval.Quantity
 	UserID         *string // nil for system rows (migration backfill, imports)
 	UserName       *string
 	Note           string
@@ -142,13 +143,13 @@ type Movement struct {
 type LocationStock struct {
 	LocationID   int64
 	LocationName string
-	Quantity     int
+	Quantity     qtyval.Quantity
 }
 
 // ItemState is what the rules need to know about the locked item.
 type ItemState struct {
 	Kind         Kind
-	StockCurrent int
+	StockCurrent qtyval.Quantity
 	// LocationID is an asset's location; consumables have none (see Stocks).
 	LocationID *int64
 	// OnLoan is true while custody has an active assignment for the item.
@@ -164,7 +165,7 @@ type ItemState struct {
 	LastLocationID *int64
 }
 
-func (s ItemState) quantityAt(id int64) int {
+func (s ItemState) quantityAt(id int64) qtyval.Quantity {
 	for _, st := range s.Stocks {
 		if st.LocationID == id {
 			return st.Quantity
@@ -179,7 +180,7 @@ func (s ItemState) quantityAt(id int64) int {
 // it must be zero.
 type Request struct {
 	Type MovementType
-	Qty  int
+	Qty  qtyval.Quantity
 	// LocationID is where a consumable in/out/adjust applies. When omitted it
 	// is inferred from the item's stock (see Decide).
 	LocationID *int64
@@ -196,14 +197,14 @@ type Request struct {
 // default location, which the repository resolves (see Outcome.DefaultLocation).
 type StockChange struct {
 	LocationID int64
-	Quantity   int
+	Quantity   qtyval.Quantity
 }
 
 // Outcome is the decision for one request: the movement to record and the
 // resulting item state to persist.
 type Outcome struct {
 	Movement     Movement // ID, ItemID, user and timestamp are filled by the repository
-	StockCurrent int
+	StockCurrent qtyval.Quantity
 	// LocationID is an asset's new location.
 	LocationID *int64
 	// Changes are the per-location quantities to write for a consumable.
@@ -296,7 +297,7 @@ func decideConsumableTransfer(cur ItemState, req Request, m Movement) (Outcome, 
 		fe["location_id"] = "not allowed for transfer; use from_location_id and to_location_id"
 	}
 	if req.Qty <= 0 || req.Qty > MaxStock {
-		fe["qty"] = "quantity to move must be between 1 and 1000000000"
+		fe["qty"] = "quantity to move must be greater than 0 and at most 1000000000, up to three decimals"
 	}
 	if req.ToLocationID == nil {
 		fe["to_location_id"] = "required"
@@ -344,7 +345,7 @@ func decideConsumable(cur ItemState, req Request, m Movement, note string) (Outc
 	switch req.Type {
 	case TypeIn, TypeOut:
 		if req.Qty <= 0 || req.Qty > MaxStock {
-			return Outcome{}, FieldError("qty", "must be between 1 and 1000000000")
+			return Outcome{}, FieldError("qty", "must be greater than 0 and at most 1000000000, up to three decimals")
 		}
 	case TypeAdjust:
 		fe := map[string]string{}
@@ -364,14 +365,14 @@ func decideConsumable(cur ItemState, req Request, m Movement, note string) (Outc
 		return Outcome{}, err
 	}
 	var at int64
-	have := 0
+	var have qtyval.Quantity
 	if loc != nil {
 		at = *loc
 		have = cur.quantityAt(at)
 		m.LocationID = &at
 	}
 
-	var newQty int
+	var newQty qtyval.Quantity
 	switch req.Type {
 	case TypeIn:
 		if cur.StockCurrent+req.Qty > MaxStock {
@@ -432,8 +433,8 @@ type Alert struct {
 	Code         string
 	Description  string
 	Unit         string
-	StockCurrent int
-	StockMin     int
+	StockCurrent qtyval.Quantity
+	StockMin     qtyval.Quantity
 	// LocationID/LocationName are set only when all the stock sits in one
 	// location; Stocks is the full per-location breakdown.
 	LocationID   *int64
@@ -442,7 +443,7 @@ type Alert struct {
 }
 
 // Shortage is stock_current - stock_min: the lower (more negative), the more severe.
-func (a Alert) Shortage() int { return a.StockCurrent - a.StockMin }
+func (a Alert) Shortage() qtyval.Quantity { return a.StockCurrent - a.StockMin }
 
 // Paging limits shared by listings.
 const (

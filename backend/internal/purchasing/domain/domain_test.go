@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"testing"
 	"time"
 
@@ -11,13 +12,13 @@ import (
 var now = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
 func consumableLine(qty int) domain.LineInput {
-	return domain.LineInput{ItemID: "11111111-1111-1111-1111-111111111111", Quantity: qty, UnitCostMinor: 250}
+	return domain.LineInput{ItemID: "11111111-1111-1111-1111-111111111111", Quantity: qtyval.Quantity(qty) * 1000, UnitCostMinor: 250}
 }
 
 func assetLine(qty int) domain.LineInput {
 	return domain.LineInput{
 		NewItem:  &domain.NewItem{Description: "Laptop", CategoryID: 1, Kind: domain.KindAsset},
-		Quantity: qty, UnitCostMinor: 90000,
+		Quantity: qtyval.Quantity(qty) * 1000, UnitCostMinor: 90000,
 	}
 }
 
@@ -57,20 +58,20 @@ func TestInputNormalize(t *testing.T) {
 		{"bad currency", domain.Input{SupplierID: 1, Currency: "EUR"}, "currency"},
 		{"missing currency", domain.Input{SupplierID: 1}, "currency"},
 		{"bad rate", domain.Input{SupplierID: 1, Currency: domain.USD, ExchangeRate: &neg}, "exchange_rate"},
-		{"neither item nor new_item", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{{Quantity: 1}}}, "lines[0].item_id"},
+		{"neither item nor new_item", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{{Quantity: 1 * 1000}}}, "lines[0].item_id"},
 		{"both item and new_item", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{
-			{ItemID: "x", NewItem: &domain.NewItem{Description: "d", Kind: "asset"}, Quantity: 1}}}, "lines[0].item_id"},
+			{ItemID: "x", NewItem: &domain.NewItem{Description: "d", Kind: "asset"}, Quantity: 1 * 1000}}}, "lines[0].item_id"},
 		{"zero quantity", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{consumableLine(0)}}, "lines[0].quantity"},
 		{"negative cost", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{
-			{ItemID: "x", Quantity: 1, UnitCostMinor: -1}}}, "lines[0].unit_cost_minor"},
+			{ItemID: "x", Quantity: 1 * 1000, UnitCostMinor: -1}}}, "lines[0].unit_cost_minor"},
 		{"asset at the cap", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{assetLine(domain.MaxAssetUnitsPerLine)}}, ""},
 		{"asset over the cap", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{assetLine(domain.MaxAssetUnitsPerLine + 1)}}, "lines[0].quantity"},
 		{"new consumable may exceed the asset cap", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{
-			{NewItem: &domain.NewItem{Description: "Tinta", Kind: domain.KindConsumable, Unit: "u"}, Quantity: 500}}}, ""},
+			{NewItem: &domain.NewItem{Description: "Tinta", Kind: domain.KindConsumable, Unit: "u"}, Quantity: 500 * 1000}}}, ""},
 		{"new_item bad kind", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{
-			{NewItem: &domain.NewItem{Description: "d", Kind: "thing"}, Quantity: 1}}}, "lines[0].new_item.kind"},
+			{NewItem: &domain.NewItem{Description: "d", Kind: "thing"}, Quantity: 1 * 1000}}}, "lines[0].new_item.kind"},
 		{"new_item blank description", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{
-			{NewItem: &domain.NewItem{Description: "  ", Kind: "asset"}, Quantity: 1}}}, "lines[0].new_item.description"},
+			{NewItem: &domain.NewItem{Description: "  ", Kind: "asset"}, Quantity: 1 * 1000}}}, "lines[0].new_item.description"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,7 +94,7 @@ func TestInputNormalize(t *testing.T) {
 
 func TestNormalizeSnapshotsNewItemDescription(t *testing.T) {
 	in, err := domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{
-		{NewItem: &domain.NewItem{Description: "  Laptop  ", Kind: "asset"}, Quantity: 2}}}.Normalize()
+		{NewItem: &domain.NewItem{Description: "  Laptop  ", Kind: "asset"}, Quantity: 2 * 1000}}}.Normalize()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,11 +111,11 @@ func TestTotalIsInMinorUnits(t *testing.T) {
 }
 
 func receive(o *domain.Order, qty int) error {
-	req := domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: qty}}}
+	req := domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: qtyval.Quantity(qty) * 1000}}}
 	if _, _, err := o.PlanReceipt(req); err != nil {
 		return err
 	}
-	o.ApplyReceipt(domain.Receipt{LocationID: 1, Lines: []domain.ReceiptLine{{LineID: 100, Quantity: qty}}}, now)
+	o.ApplyReceipt(domain.Receipt{LocationID: 1, Lines: []domain.ReceiptLine{{LineID: 100, Quantity: qtyval.Quantity(qty) * 1000}}}, now)
 	return nil
 }
 
@@ -129,7 +130,7 @@ func TestStateMachine(t *testing.T) {
 		return o.Edit(domain.Input{SupplierID: 2, Currency: domain.VES, Notes: "x"}, now)
 	}}
 	recv1 := action{"receive 1", func(o *domain.Order) error { return receive(o, 1) }}
-	recvAll := action{"receive rest", func(o *domain.Order) error { return receive(o, o.Lines[0].Remaining()) }}
+	recvAll := action{"receive rest", func(o *domain.Order) error { return receive(o, int(o.Lines[0].Remaining())/1000) }}
 
 	tests := []struct {
 		name    string
@@ -236,16 +237,16 @@ func TestPlanReceiptRules(t *testing.T) {
 		code  string
 		field string
 	}{
-		{"ok partial", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 2}}}, "", ""},
-		{"ok both lines", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 5}, {LineID: 101, Quantity: 2}}}, "", ""},
-		{"location required", domain.ReceiveRequest{Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 1}}}, domain.CodeValidation, "location_id"},
+		{"ok partial", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 2 * 1000}}}, "", ""},
+		{"ok both lines", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 5 * 1000}, {LineID: 101, Quantity: 2 * 1000}}}, "", ""},
+		{"location required", domain.ReceiveRequest{Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 1 * 1000}}}, domain.CodeValidation, "location_id"},
 		{"no lines", domain.ReceiveRequest{LocationID: 1}, domain.CodeValidation, "lines"},
-		{"unknown line", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 999, Quantity: 1}}}, domain.CodeValidation, "lines[0].line_id"},
-		{"repeated line", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 1}, {LineID: 100, Quantity: 1}}}, domain.CodeValidation, "lines[1].line_id"},
-		{"zero quantity", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 0}}}, domain.CodeValidation, "lines[0].quantity"},
-		{"over receipt", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 6}}}, domain.CodeOverReceipt, "lines[0].quantity"},
-		{"over receipt on second line", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 1}, {LineID: 101, Quantity: 3}}}, domain.CodeOverReceipt, "lines[1].quantity"},
-		{"note too long", domain.ReceiveRequest{LocationID: 1, Note: string(make([]byte, 401)), Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 1}}}, domain.CodeValidation, "note"},
+		{"unknown line", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 999, Quantity: 1 * 1000}}}, domain.CodeValidation, "lines[0].line_id"},
+		{"repeated line", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 1 * 1000}, {LineID: 100, Quantity: 1 * 1000}}}, domain.CodeValidation, "lines[1].line_id"},
+		{"zero quantity", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 0 * 1000}}}, domain.CodeValidation, "lines[0].quantity"},
+		{"over receipt", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 6 * 1000}}}, domain.CodeOverReceipt, "lines[0].quantity"},
+		{"over receipt on second line", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 1 * 1000}, {LineID: 101, Quantity: 3 * 1000}}}, domain.CodeOverReceipt, "lines[1].quantity"},
+		{"note too long", domain.ReceiveRequest{LocationID: 1, Note: string(make([]byte, 401)), Lines: []domain.ReceiveLine{{LineID: 100, Quantity: 1 * 1000}}}, domain.CodeValidation, "note"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -289,7 +290,7 @@ func TestPlanReceiptTracksRemainingAcrossReceipts(t *testing.T) {
 	if !errors.As(err, &ve) || ve.Code != domain.CodeOverReceipt {
 		t.Fatalf("second receipt of 3 with 2 remaining: %v", err)
 	}
-	if o.Lines[0].ReceivedQty != 3 {
+	if o.Lines[0].ReceivedQty != 3*1000 {
 		t.Fatalf("failed receipt changed received_qty to %d", o.Lines[0].ReceivedQty)
 	}
 }

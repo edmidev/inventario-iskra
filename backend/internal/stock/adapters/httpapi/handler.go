@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -81,20 +82,20 @@ func writeError(w http.ResponseWriter, err error) {
 }
 
 type movementDTO struct {
-	ID             int64     `json:"id"`
-	ItemID         string    `json:"item_id"`
-	Type           string    `json:"type"`
-	Qty            int       `json:"qty"`
-	StockBefore    int       `json:"stock_before"`
-	StockAfter     int       `json:"stock_after"`
-	LocationID     *int64    `json:"location_id"`
-	FromLocationID *int64    `json:"from_location_id"`
-	ToLocationID   *int64    `json:"to_location_id"`
-	MovedQty       int       `json:"moved_qty"`
-	UserID         *string   `json:"user_id"`
-	UserName       *string   `json:"user_name"`
-	Note           string    `json:"note"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             int64           `json:"id"`
+	ItemID         string          `json:"item_id"`
+	Type           string          `json:"type"`
+	Qty            qtyval.Quantity `json:"qty"`
+	StockBefore    qtyval.Quantity `json:"stock_before"`
+	StockAfter     qtyval.Quantity `json:"stock_after"`
+	LocationID     *int64          `json:"location_id"`
+	FromLocationID *int64          `json:"from_location_id"`
+	ToLocationID   *int64          `json:"to_location_id"`
+	MovedQty       qtyval.Quantity `json:"moved_qty"`
+	UserID         *string         `json:"user_id"`
+	UserName       *string         `json:"user_name"`
+	Note           string          `json:"note"`
+	CreatedAt      time.Time       `json:"created_at"`
 }
 
 func toMovementDTO(m domain.Movement) movementDTO {
@@ -111,12 +112,12 @@ func (h *Handler) record(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Type           string `json:"type"`
-		Qty            int    `json:"qty"`
-		LocationID     *int64 `json:"location_id"`
-		FromLocationID *int64 `json:"from_location_id"`
-		ToLocationID   *int64 `json:"to_location_id"`
-		Note           string `json:"note"`
+		Type           string          `json:"type"`
+		Qty            qtyval.Quantity `json:"qty"`
+		LocationID     *int64          `json:"location_id"`
+		FromLocationID *int64          `json:"from_location_id"`
+		ToLocationID   *int64          `json:"to_location_id"`
+		Note           string          `json:"note"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
@@ -178,9 +179,9 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
 
 // stockDTO is one location's quantity of a consumable.
 type stockDTO struct {
-	LocationID   int64  `json:"location_id"`
-	LocationName string `json:"location_name"`
-	Quantity     int    `json:"quantity"`
+	LocationID   int64           `json:"location_id"`
+	LocationName string          `json:"location_name"`
+	Quantity     qtyval.Quantity `json:"quantity"`
 }
 
 func toStockDTOs(in []domain.LocationStock) []stockDTO {
@@ -192,15 +193,15 @@ func toStockDTOs(in []domain.LocationStock) []stockDTO {
 }
 
 type alertDTO struct {
-	ItemID       string  `json:"item_id"`
-	Code         string  `json:"code"`
-	Description  string  `json:"description"`
-	Unit         string  `json:"unit"`
-	StockCurrent int     `json:"stock_current"`
-	StockMin     int     `json:"stock_min"`
-	Shortage     int     `json:"shortage"`
-	LocationID   *int64  `json:"location_id"`
-	LocationName *string `json:"location_name"`
+	ItemID       string          `json:"item_id"`
+	Code         string          `json:"code"`
+	Description  string          `json:"description"`
+	Unit         string          `json:"unit"`
+	StockCurrent qtyval.Quantity `json:"stock_current"`
+	StockMin     qtyval.Quantity `json:"stock_min"`
+	Shortage     qtyval.Quantity `json:"shortage"`
+	LocationID   *int64          `json:"location_id"`
+	LocationName *string         `json:"location_name"`
 	// Stocks is the per-location breakdown behind StockCurrent.
 	Stocks []stockDTO `json:"stocks"`
 }

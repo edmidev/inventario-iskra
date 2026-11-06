@@ -1,3 +1,4 @@
+import { quantityAfter } from "../../lib/quantity";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
@@ -69,7 +70,7 @@ export function MovementForm({ mode, subject, locations, lastLocation, onSubmit,
   const locationLabel = locationId ? locationDisplayName(locations, subject.stocks, locationId) : "";
   const here = stockAt(subject.stocks, locationId);
   const result = locationId ? resultingStock(mode, here, qty) : null;
-  const totalAfter = result === null ? null : subject.stock_current - here + Math.max(result, 0);
+  const totalAfter = result === null ? null : quantityAfter(quantityAfter(subject.stock_current, -here), Math.max(result, 0));
   const tooMuch = result !== null && result < 0;
   const belowMinimum = totalAfter !== null && !tooMuch && subject.stock_min > 0 && totalAfter <= subject.stock_min;
   const nothingToTake = mode === "out" && subject.stocks.length === 0;
@@ -134,10 +135,11 @@ export function MovementForm({ mode, subject, locations, lastLocation, onSubmit,
             name="qty"
             render={({ field }) => (
               <QuantityStepper
+                decimal
                 {...aria}
                 value={field.value}
                 onChange={field.onChange}
-                min={mode === "adjust" ? 0 : 1}
+                min={mode === "adjust" ? 0 : 0.001}
                 unit={unit}
                 quick={mode === "adjust" ? [] : QUICK}
               />

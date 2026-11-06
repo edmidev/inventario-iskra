@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"strings"
 	"testing"
 	"time"
@@ -58,14 +59,14 @@ func TestNewItemAsset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if it.StockCurrent != 1 || it.StockMin != 0 || it.Unit != nil || it.Status != StatusFunctional || it.Description != "Taladro" {
+	if it.StockCurrent != 1*1000 || it.StockMin != 0*1000 || it.Unit != nil || it.Status != StatusFunctional || it.Description != "Taladro" {
 		t.Fatalf("asset = %+v", it)
 	}
 	if it.Attributes == nil {
 		t.Error("attributes should default to an empty object")
 	}
 	_, err = NewItem(NewItemInput{Description: "x", CategoryID: 1, Kind: KindAsset,
-		Unit: ptr("caja"), StockCurrent: ptr(5), StockMin: 2})
+		Unit: ptr("caja"), StockCurrent: ptr(qtyval.Quantity(5) * 1000), StockMin: 2 * 1000})
 	f := fieldsOf(t, err)
 	if f["unit"] == "" || f["stock_current"] == "" || f["stock_min"] == "" {
 		t.Fatalf("fields = %v", f)
@@ -74,20 +75,20 @@ func TestNewItemAsset(t *testing.T) {
 
 func TestNewItemConsumable(t *testing.T) {
 	it, err := NewItem(NewItemInput{Description: "Cinta", CategoryID: 1, Kind: KindConsumable,
-		Unit: ptr(" rollo "), StockCurrent: ptr(10), StockMin: 3})
-	if err != nil || *it.Unit != "rollo" || it.StockCurrent != 10 || it.StockMin != 3 {
+		Unit: ptr(" rollo "), StockCurrent: ptr(qtyval.Quantity(10) * 1000), StockMin: 3 * 1000})
+	if err != nil || *it.Unit != "rollo" || it.StockCurrent != 10*1000 || it.StockMin != 3*1000 {
 		t.Fatalf("got %+v %v", it, err)
 	}
 	if _, err := NewItem(NewItemInput{Description: "Cinta", CategoryID: 1, Kind: KindConsumable}); fieldsOf(t, err)["unit"] == "" {
 		t.Error("unit should be required")
 	}
 	_, err = NewItem(NewItemInput{Description: "Cinta", CategoryID: 1, Kind: KindConsumable, Unit: ptr("u"),
-		StockCurrent: ptr(-1), StockMin: -2})
+		StockCurrent: ptr(qtyval.Quantity(-1) * 1000), StockMin: -2 * 1000})
 	if f := fieldsOf(t, err); f["stock_current"] == "" || f["stock_min"] == "" {
 		t.Errorf("fields = %v", f)
 	}
 	zero, err := NewItem(NewItemInput{Description: "Cinta", CategoryID: 1, Kind: KindConsumable, Unit: ptr("u")})
-	if err != nil || zero.StockCurrent != 0 {
+	if err != nil || zero.StockCurrent != 0*1000 {
 		t.Fatalf("default opening balance: %+v %v", zero, err)
 	}
 }
@@ -158,20 +159,22 @@ func TestApplyWhileOnLoan(t *testing.T) {
 }
 
 func TestLowStock(t *testing.T) {
-	c := func(cur, min int) Item { return Item{Kind: KindConsumable, StockCurrent: cur, StockMin: min} }
+	c := func(cur, min int) Item {
+		return Item{Kind: KindConsumable, StockCurrent: qtyval.Quantity(cur) * 1000, StockMin: qtyval.Quantity(min) * 1000}
+	}
 	if !c(2, 2).LowStock() || !c(0, 1).LowStock() {
 		t.Error("at or below minimum is low")
 	}
 	if c(3, 2).LowStock() || c(0, 0).LowStock() {
 		t.Error("above minimum, or no minimum, is not low")
 	}
-	if (Item{Kind: KindAsset, StockCurrent: 1}).LowStock() {
+	if (Item{Kind: KindAsset, StockCurrent: 1 * 1000}).LowStock() {
 		t.Error("assets are never low stock")
 	}
 }
 
 func TestApplyPatch(t *testing.T) {
-	asset := Item{Code: "ISK-A-001", Kind: KindAsset, Description: "Taladro", CategoryID: 1, Status: StatusFunctional, StockCurrent: 1,
+	asset := Item{Code: "ISK-A-001", Kind: KindAsset, Description: "Taladro", CategoryID: 1, Status: StatusFunctional, StockCurrent: 1 * 1000,
 		LocationID: ptr(int64(4)), MaintenanceIntervalDays: ptr(90), Attributes: map[string]any{"color": "rojo"}}
 
 	var loc Nullable[int64]
@@ -198,8 +201,8 @@ func TestApplyPatch(t *testing.T) {
 }
 
 func TestApplyRejectsImmutableFields(t *testing.T) {
-	it := Item{Code: "ISK-A-001", Kind: KindAsset, Description: "x", CategoryID: 1, Status: StatusFunctional, StockCurrent: 1}
-	_, err := it.Apply(ItemPatch{Code: ptr("ISK-A-002"), Kind: ptr(KindConsumable), StockCurrent: ptr(9)})
+	it := Item{Code: "ISK-A-001", Kind: KindAsset, Description: "x", CategoryID: 1, Status: StatusFunctional, StockCurrent: 1 * 1000}
+	_, err := it.Apply(ItemPatch{Code: ptr("ISK-A-002"), Kind: ptr(KindConsumable), StockCurrent: ptr(qtyval.Quantity(9) * 1000)})
 	f := fieldsOf(t, err)
 	if f["code"] == "" || f["kind"] == "" || f["stock_current"] == "" {
 		t.Fatalf("fields = %v", f)
@@ -211,15 +214,15 @@ func TestApplyRejectsImmutableFields(t *testing.T) {
 }
 
 func TestApplyKindRules(t *testing.T) {
-	asset := Item{Code: "ISK-A-001", Kind: KindAsset, Description: "x", CategoryID: 1, Status: StatusFunctional, StockCurrent: 1}
-	_, err := asset.Apply(ItemPatch{Unit: ptr("caja"), StockMin: ptr(3)})
+	asset := Item{Code: "ISK-A-001", Kind: KindAsset, Description: "x", CategoryID: 1, Status: StatusFunctional, StockCurrent: 1 * 1000}
+	_, err := asset.Apply(ItemPatch{Unit: ptr("caja"), StockMin: ptr(qtyval.Quantity(3) * 1000)})
 	if f := fieldsOf(t, err); f["unit"] == "" || f["stock_min"] == "" {
 		t.Fatalf("fields = %v", f)
 	}
 
-	cons := Item{Code: "ISK-C-001", Kind: KindConsumable, Description: "x", CategoryID: 1, Status: StatusFunctional, Unit: ptr("rollo"), StockCurrent: 5}
-	got, err := cons.Apply(ItemPatch{Unit: ptr("caja"), StockMin: ptr(2)})
-	if err != nil || *got.Unit != "caja" || got.StockMin != 2 || got.StockCurrent != 5 {
+	cons := Item{Code: "ISK-C-001", Kind: KindConsumable, Description: "x", CategoryID: 1, Status: StatusFunctional, Unit: ptr("rollo"), StockCurrent: 5 * 1000}
+	got, err := cons.Apply(ItemPatch{Unit: ptr("caja"), StockMin: ptr(qtyval.Quantity(2) * 1000)})
+	if err != nil || *got.Unit != "caja" || got.StockMin != 2*1000 || got.StockCurrent != 5*1000 {
 		t.Fatalf("got %+v %v", got, err)
 	}
 	if _, err := cons.Apply(ItemPatch{Unit: ptr("  ")}); fieldsOf(t, err)["unit"] == "" {
@@ -325,23 +328,23 @@ func TestNewItemConsumableStockForms(t *testing.T) {
 
 	t.Run("multi-location opening balance", func(t *testing.T) {
 		in := base
-		in.Stocks = []StockInput{{LocationID: 1, Quantity: 5}, {LocationID: 2, Quantity: 5}}
+		in.Stocks = []StockInput{{LocationID: 1, Quantity: 5 * 1000}, {LocationID: 2, Quantity: 5 * 1000}}
 		it, err := NewItem(in)
-		if err != nil || it.StockCurrent != 10 || len(it.Stocks) != 2 || it.LocationID != nil {
+		if err != nil || it.StockCurrent != 10*1000 || len(it.Stocks) != 2 || it.LocationID != nil {
 			t.Fatalf("got %+v %v", it, err)
 		}
 	})
 	t.Run("legacy form with a location", func(t *testing.T) {
 		in := base
-		in.StockCurrent, in.LocationID = ptr(7), ptr(int64(3))
+		in.StockCurrent, in.LocationID = ptr(qtyval.Quantity(7)*1000), ptr(int64(3))
 		it, err := NewItem(in)
-		if err != nil || it.StockCurrent != 7 || len(it.Stocks) != 1 || it.Stocks[0].LocationID != 3 || it.Stocks[0].Quantity != 7 || it.LocationID != nil {
+		if err != nil || it.StockCurrent != 7*1000 || len(it.Stocks) != 1 || it.Stocks[0].LocationID != 3 || it.Stocks[0].Quantity != 7*1000 || it.LocationID != nil {
 			t.Fatalf("got %+v %v", it, err)
 		}
 	})
 	t.Run("legacy form without a location targets the default location", func(t *testing.T) {
 		in := base
-		in.StockCurrent = ptr(4)
+		in.StockCurrent = ptr(qtyval.Quantity(4) * 1000)
 		it, err := NewItem(in)
 		if err != nil || len(it.Stocks) != 1 || it.Stocks[0].LocationID != 0 {
 			t.Fatalf("got %+v %v", it, err)
@@ -349,7 +352,7 @@ func TestNewItemConsumableStockForms(t *testing.T) {
 	})
 	t.Run("no stock means no rows", func(t *testing.T) {
 		in := base
-		in.StockCurrent, in.LocationID = ptr(0), ptr(int64(3))
+		in.StockCurrent, in.LocationID = ptr(qtyval.Quantity(0)*1000), ptr(int64(3))
 		it, err := NewItem(in)
 		if err != nil || len(it.Stocks) != 0 || it.LocationID != nil {
 			t.Fatalf("got %+v %v", it, err)
@@ -357,9 +360,9 @@ func TestNewItemConsumableStockForms(t *testing.T) {
 	})
 	t.Run("both forms at once are rejected", func(t *testing.T) {
 		for _, in := range []NewItemInput{
-			{Stocks: []StockInput{{LocationID: 1, Quantity: 1}}, StockCurrent: ptr(1)},
-			{Stocks: []StockInput{{LocationID: 1, Quantity: 1}}, LocationID: ptr(int64(1))},
-			{Stocks: []StockInput{}, StockCurrent: ptr(0)},
+			{Stocks: []StockInput{{LocationID: 1, Quantity: 1 * 1000}}, StockCurrent: ptr(qtyval.Quantity(1) * 1000)},
+			{Stocks: []StockInput{{LocationID: 1, Quantity: 1 * 1000}}, LocationID: ptr(int64(1))},
+			{Stocks: []StockInput{}, StockCurrent: ptr(qtyval.Quantity(0) * 1000)},
 		} {
 			in.Description, in.CategoryID, in.Kind, in.Unit = base.Description, base.CategoryID, base.Kind, base.Unit
 			if _, err := NewItem(in); fieldsOf(t, err)["stocks"] == "" {
@@ -369,7 +372,7 @@ func TestNewItemConsumableStockForms(t *testing.T) {
 	})
 	t.Run("invalid rows", func(t *testing.T) {
 		in := base
-		in.Stocks = []StockInput{{LocationID: 0, Quantity: 1}, {LocationID: 2, Quantity: 0}, {LocationID: 2, Quantity: 3}, {LocationID: 4, Quantity: MaxStock}}
+		in.Stocks = []StockInput{{LocationID: 0, Quantity: 1 * 1000}, {LocationID: 2, Quantity: 0 * 1000}, {LocationID: 2, Quantity: 3 * 1000}, {LocationID: 4, Quantity: MaxStock}}
 		f := fieldsOf(t, mustErr(NewItem(in)))
 		for _, k := range []string{"stocks[0].location_id", "stocks[1].quantity", "stocks[2].location_id", "stocks"} {
 			if f[k] == "" {
@@ -378,7 +381,7 @@ func TestNewItemConsumableStockForms(t *testing.T) {
 		}
 	})
 	t.Run("assets have no per-location stock", func(t *testing.T) {
-		_, err := NewItem(NewItemInput{Description: "Taladro", CategoryID: 1, Kind: KindAsset, Stocks: []StockInput{{LocationID: 1, Quantity: 1}}})
+		_, err := NewItem(NewItemInput{Description: "Taladro", CategoryID: 1, Kind: KindAsset, Stocks: []StockInput{{LocationID: 1, Quantity: 1 * 1000}}})
 		if fieldsOf(t, err)["stocks"] == "" {
 			t.Error("asset with stocks accepted")
 		}
@@ -389,7 +392,7 @@ func mustErr(_ Item, err error) error { return err }
 
 func TestApplyRejectsLocationChangesOnConsumables(t *testing.T) {
 	cons := Item{Code: "ISK-CON-001", Kind: KindConsumable, Description: "Tornillos", CategoryID: 1, Status: StatusFunctional,
-		Unit: ptr("u"), StockCurrent: 4, Stocks: []ItemStock{{LocationID: 1, Quantity: 4}}}
+		Unit: ptr("u"), StockCurrent: 4 * 1000, Stocks: []ItemStock{{LocationID: 1, Quantity: 4 * 1000}}}
 	if _, err := cons.Apply(ItemPatch{LocationID: Nullable[int64]{Set: true, Value: 2}}); !errors.Is(err, ErrNotApplicable) {
 		t.Errorf("setting a location: %v", err)
 	}
@@ -397,15 +400,15 @@ func TestApplyRejectsLocationChangesOnConsumables(t *testing.T) {
 	if got, err := cons.Apply(ItemPatch{LocationID: Nullable[int64]{Set: true, Null: true}, Notes: ptr("x")}); err != nil || got.Notes != "x" || got.LocationID != nil {
 		t.Errorf("null location: %+v %v", got, err)
 	}
-	asset := Item{Code: "ISK-HER-001", Kind: KindAsset, Description: "Taladro", CategoryID: 1, Status: StatusFunctional, StockCurrent: 1}
+	asset := Item{Code: "ISK-HER-001", Kind: KindAsset, Description: "Taladro", CategoryID: 1, Status: StatusFunctional, StockCurrent: 1 * 1000}
 	if got, err := asset.Apply(ItemPatch{LocationID: Nullable[int64]{Set: true, Value: 2}}); err != nil || got.LocationID == nil || *got.LocationID != 2 {
 		t.Errorf("assets can still be edited: %+v %v", got, err)
 	}
 }
 
 func TestFilterMatchesConsumablesByStockLocation(t *testing.T) {
-	it := Item{Kind: KindConsumable, Description: "Tornillos", StockCurrent: 10,
-		Stocks: []ItemStock{{LocationID: 1, Quantity: 5}, {LocationID: 2, Quantity: 5}}}
+	it := Item{Kind: KindConsumable, Description: "Tornillos", StockCurrent: 10 * 1000,
+		Stocks: []ItemStock{{LocationID: 1, Quantity: 5 * 1000}, {LocationID: 2, Quantity: 5 * 1000}}}
 	for _, loc := range []int64{1, 2} {
 		if !(ItemFilter{LocationID: ptr(loc)}).Matches(it) {
 			t.Errorf("location %d should match", loc)

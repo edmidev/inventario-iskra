@@ -1,3 +1,4 @@
+import { parseQuantity as parseDecimalQuantity, lineCostMinor, quantityAfter } from "../../lib/quantity";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFieldArray, useWatch, type Resolver } from "react-hook-form";
@@ -237,14 +238,14 @@ export function PurchaseOrderForm({ order, initialValues, onSubmit, onCancel }: 
                         <Input autoComplete="off" placeholder="caja, litro, pieza…" {...register(`lines.${index}.unit`)} />
                       </FormField>
                       <FormField label="Stock mínimo" hint="Opcional." error={lineErrors?.stock_min?.message}>
-                        <Input inputMode="numeric" {...register(`lines.${index}.stock_min`)} />
+                        <Input inputMode="decimal" {...register(`lines.${index}.stock_min`)} />
                       </FormField>
                     </>
                   )}
                 </>
               )}
               <FormField label="Cantidad" required error={lineErrors?.quantity?.message}>
-                <Input inputMode="numeric" {...register(`lines.${index}.quantity`)} />
+                <Input inputMode="decimal" {...register(`lines.${index}.quantity`)} />
               </FormField>
               {isNewAsset && quantity !== null && quantity <= MAX_ASSET_UNITS && (
                 <p className="rounded-xl bg-sunken px-3 py-2 text-sm text-ink-soft">
@@ -255,7 +256,7 @@ export function PurchaseOrderForm({ order, initialValues, onSubmit, onCancel }: 
                 <Input inputMode="decimal" placeholder="0.00" {...register(`lines.${index}.unit_cost`)} />
               </FormField>
               {quantity !== null && cost !== null && (
-                <p className="text-right text-sm text-ink-soft">Subtotal {formatMinor(quantity * cost, currency)}</p>
+                <p className="text-right text-sm text-ink-soft">Subtotal {formatMinor(lineCostMinor(line.quantity, cost) ?? 0, currency)}</p>
               )}
             </section>
           );
@@ -291,7 +292,7 @@ interface ReceiveValues {
   lines: { line_id: number; quantity: string }[];
 }
 
-function receiveSchema(pending: number[]) {
+function receiveSchema(pending: number[], assets: boolean[]) {
   return z
     .object({
       location_id: z.string().min(1, "Elige la ubicación de destino."),
@@ -303,11 +304,11 @@ function receiveSchema(pending: number[]) {
       let invalid = false;
       values.lines.forEach((line, index) => {
         const text = line.quantity.trim();
-        if (text === "" || text === "0") return;
-        if (!/^\d+$/.test(text)) {
+        if (text === "" || parseDecimalQuantity(text) === 0) return;
+        if (parseDecimalQuantity(text) === null || (assets[index] && !Number.isInteger(parseDecimalQuantity(text)))) {
           invalid = true;
-          ctx.addIssue({ code: "custom", path: ["lines", index, "quantity"], message: "Usa un número entero." });
-        } else if (Number(text) > pending[index]) {
+          ctx.addIssue({ code: "custom", path: ["lines", index, "quantity"], message: "Usa una cantidad válida (activos enteros; consumibles hasta 3 decimales)." });
+        } else if ((parseDecimalQuantity(text) ?? 0) > pending[index]) {
           invalid = true;
           ctx.addIssue({ code: "custom", path: ["lines", index, "quantity"], message: `Máximo ${pending[index]}: es lo que falta por recibir.` });
         } else {
@@ -327,9 +328,9 @@ interface ReceiveFormProps {
 }
 
 export function ReceiveForm({ order, onSubmit, onCancel }: ReceiveFormProps) {
-  const open = useMemo(() => order.lines.filter((line) => line.quantity - line.received_qty > 0), [order.lines]);
-  const pending = open.map((line) => line.quantity - line.received_qty);
-  const schema = useMemo(() => receiveSchema(open.map((line) => line.quantity - line.received_qty)), [open]);
+  const open = useMemo(() => order.lines.filter((line) => quantityAfter(line.quantity, -line.received_qty) > 0), [order.lines]);
+  const pending = open.map((line) => quantityAfter(line.quantity, -line.received_qty));
+  const schema = useMemo(() => receiveSchema(open.map((line) => quantityAfter(line.quantity, -line.received_qty)), open.map((line) => line.new_item?.kind === "asset")), [open]);
   const { locations } = useCatalogLookup();
   // One idempotency key per attempt: a retry of the same data reuses it, edited data gets a new one.
   const keyRef = useRef(crypto.randomUUID());
@@ -338,18 +339,18 @@ export function ReceiveForm({ order, onSubmit, onCancel }: ReceiveFormProps) {
     defaultValues: {
       location_id: "",
       note: "",
-      lines: open.map((line) => ({ line_id: line.id, quantity: String(line.quantity - line.received_qty) })),
+      lines: open.map((line) => ({ line_id: line.id, quantity: String(quantityAfter(line.quantity, -line.received_qty)) })),
     },
     fields: ["location_id", "note", "lines.*.quantity"],
     onSubmit: async (values) => {
-      const submitted = values.lines.flatMap((line, index) => (Number(line.quantity) > 0 ? [index] : []));
+      const submitted = values.lines.flatMap((line, index) => ((parseDecimalQuantity(line.quantity) ?? 0) > 0 ? [index] : []));
       const note = values.note.trim();
       try {
         await onSubmit({
           location_id: Number(values.location_id),
           ...(note ? { note } : {}),
           client_key: keyRef.current,
-          lines: submitted.map((index) => ({ line_id: values.lines[index].line_id, quantity: Number(values.lines[index].quantity) })),
+          lines: submitted.map((index) => ({ line_id: values.lines[index].line_id, quantity: parseDecimalQuantity(values.lines[index].quantity) ?? 0 })),
         });
       } catch (error) {
         throw remapFields(error, (field) => field.replace(/^lines\[(\d+)\]/, (_, k: string) => `lines[${submitted[Number(k)] ?? k}]`));
@@ -383,7 +384,7 @@ export function ReceiveForm({ order, onSubmit, onCancel }: ReceiveFormProps) {
       <div className="flex flex-col gap-3">
         {open.map((line, index) => (
           <FormField key={line.id} label={`Cantidad de ${line.description}`} hint={`Faltan ${pending[index]} de ${line.quantity}.`} error={errors.lines?.[index]?.quantity?.message}>
-            <Input inputMode="numeric" {...register(`lines.${index}.quantity`)} />
+            <Input inputMode="decimal" {...register(`lines.${index}.quantity`)} />
           </FormField>
         ))}
       </div>

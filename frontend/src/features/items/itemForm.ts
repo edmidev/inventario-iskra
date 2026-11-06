@@ -1,3 +1,4 @@
+import { parseQuantity } from "../../lib/quantity";
 import { z } from "zod";
 import type { Item } from "../../lib/api/schemas";
 import type { ItemCreatePayload, ItemUpdatePayload } from "./api/items";
@@ -63,7 +64,7 @@ export const itemFormSchema = z
     status: z.enum(["functional", "inoperative", "in_repair"]),
     unit: z.string().trim().max(30, "Máximo 30 caracteres."),
     stocks: z.array(z.object({ location_id: z.string(), quantity: z.string() })),
-    stock_min: z.string().refine(wholeNumber(0), "Usa un número entero mayor o igual a 0."),
+    stock_min: z.string().refine((v) => v.trim() === "" || parseQuantity(v) !== null, "Usa una cantidad de 0 o más, hasta 3 decimales."),
     maintenance_interval_days: z.string().refine(wholeNumber(1, 3650), "Usa un número de días entre 1 y 3650."),
     notes: z.string().max(4000, "Máximo 4000 caracteres."),
     attributes: z.array(z.object({ key: z.string(), value: z.string() })),
@@ -81,8 +82,8 @@ export const itemFormSchema = z
           ctx.addIssue({ code: "custom", path: ["stocks", index, "location_id"], message: "Esa ubicación ya está en la lista." });
         }
         seen.add(row.location_id);
-        if (!/^\d+$/.test(row.quantity.trim()) || Number(row.quantity) < 1) {
-          ctx.addIssue({ code: "custom", path: ["stocks", index, "quantity"], message: "Indica un entero mayor a 0." });
+        if (parseQuantity(row.quantity) === null || (parseQuantity(row.quantity) ?? 0) <= 0) {
+          ctx.addIssue({ code: "custom", path: ["stocks", index, "quantity"], message: "Indica una cantidad mayor a 0, hasta 3 decimales." });
         }
       });
     }
@@ -157,9 +158,9 @@ export function toCreatePayload(values: ItemFormValues, isAdmin: boolean): ItemC
   if (values.kind === "consumable") {
     payload.unit = values.unit.trim();
     if (values.stocks.length > 0) {
-      payload.stocks = values.stocks.map((row) => ({ location_id: Number(row.location_id), quantity: Number(row.quantity) }));
+      payload.stocks = values.stocks.map((row) => ({ location_id: Number(row.location_id), quantity: parseQuantity(row.quantity) ?? 0 }));
     }
-    payload.stock_min = Number(values.stock_min || "0");
+    payload.stock_min = parseQuantity(values.stock_min || "0") ?? 0;
   } else if (values.maintenance_interval_days.trim()) {
     payload.maintenance_interval_days = Number(values.maintenance_interval_days);
   }
@@ -182,7 +183,7 @@ export function toUpdatePayload(values: ItemFormValues, initial: ItemFormValues)
   }
   if (values.kind === "consumable") {
     payload.unit = values.unit.trim();
-    payload.stock_min = Number(values.stock_min || "0");
+    payload.stock_min = parseQuantity(values.stock_min || "0") ?? 0;
   } else {
     payload.maintenance_interval_days = values.maintenance_interval_days.trim()
       ? Number(values.maintenance_interval_days)

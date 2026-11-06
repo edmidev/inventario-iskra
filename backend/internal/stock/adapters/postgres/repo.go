@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 
 	"github.com/edgar/inventario/backend/internal/platform/db"
 	"github.com/edgar/inventario/backend/internal/stock/domain"
@@ -210,7 +211,7 @@ func RecordOpenings(ctx context.Context, tx pgx.Tx, itemID string, stocks []doma
 	if userID != "" {
 		uid = &userID
 	}
-	before := 0
+	var before qtyval.Quantity
 	for _, st := range stocks {
 		if st.Quantity <= 0 {
 			continue

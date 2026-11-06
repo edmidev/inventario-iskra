@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 
 	"github.com/edgar/inventario/backend/internal/stock/domain"
 )
@@ -16,7 +17,7 @@ func NewService(r MovementRepository) *Service { return &Service{repo: r} }
 // Result is a recorded movement and the item state it produced.
 type Result struct {
 	Movement     domain.Movement
-	StockCurrent int
+	StockCurrent qtyval.Quantity
 	// LocationID is an asset's new location; consumables have none.
 	LocationID *int64
 	// Stocks is a consumable's per-location stock after the movement (empty

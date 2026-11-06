@@ -2,6 +2,7 @@ package quantity
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -18,7 +19,7 @@ func TestParseAndJSON(t *testing.T) {
 			}
 		})
 	}
-	for _, in := range []string{"0.0001", "null", "\"1\"", "9223372036854776", "1e1000000"} {
+	for _, in := range []string{"0.0001", "1.0000", "null", "\"1\"", "9223372036854776", "1e1000000"} {
 		t.Run(in, func(t *testing.T) {
 			var q Quantity
 			if json.Unmarshal([]byte(in), &q) == nil {
@@ -87,5 +88,12 @@ func TestInvalidDecodeDoesNotMutateReceiver(t *testing.T) {
 	}
 	if q.String() != "2.5" {
 		t.Fatal("failed decoding changed receiver")
+	}
+}
+
+func TestHumanUnitReportFormatting(t *testing.T) {
+	q, _ := Parse("2.125")
+	if got := fmt.Sprintf("%d", q); got != "2.125" {
+		t.Fatalf("report quantity %s", got)
 	}
 }

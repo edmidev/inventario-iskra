@@ -87,7 +87,7 @@ func TestSummaryShape(t *testing.T) {
 	repo.Set(domain.Summary{
 		Items:    domain.ItemCounts{Total: 3, Assets: 2, Consumables: 1},
 		Assets:   domain.AssetCounts{Available: 1, Unavailable: 1, OnLoan: 1, Inoperative: 0, InRepair: 0},
-		LowStock: domain.LowStock{Count: 1, Top: []domain.LowStockItem{{ID: "i1", Code: "ISK-CON-001", Description: "Tape", Unit: "roll", StockCurrent: 1, StockMin: 4, LocationName: &loc}}},
+		LowStock: domain.LowStock{Count: 1, Top: []domain.LowStockItem{{ID: "i1", Code: "ISK-CON-001", Description: "Tape", Unit: "roll", StockCurrent: 1 * 1000, StockMin: 4 * 1000, LocationName: &loc}}},
 		Loans: domain.Loans{Active: 1, Overdue: 1, OverdueTop: []domain.OverdueLoan{
 			{ItemID: "i2", Code: "ISK-HER-001", Description: "Drill", AssigneeName: "Juan", DueAt: clock.Add(-time.Hour)}}},
 	})
@@ -181,10 +181,10 @@ func TestReorderSuggestionsShape(t *testing.T) {
 	srv, repo := newServer(t)
 	sid, name, cost, cur := int64(7), "Alfa", int64(250), "USD"
 	repo.SetCandidates([]domain.ReorderCandidate{
-		{ItemID: "i1", Code: "ISK-CON-001", Description: "Tape", Unit: "roll", StockCurrent: 1, StockMin: 5, PendingOrdered: 2,
+		{ItemID: "i1", Code: "ISK-CON-001", Description: "Tape", Unit: "roll", StockCurrent: 1 * 1000, StockMin: 5 * 1000, PendingOrdered: 2 * 1000,
 			SupplierID: &sid, SupplierName: &name, LastUnitCostMinor: &cost, LastCurrency: &cur},
-		{ItemID: "i2", Code: "ISK-CON-002", Description: "Glue", StockCurrent: 0, StockMin: 3},
-		{ItemID: "i3", Code: "ISK-CON-003", StockCurrent: 1, StockMin: 5, PendingOrdered: 9}, // covered
+		{ItemID: "i2", Code: "ISK-CON-002", Description: "Glue", StockCurrent: 0 * 1000, StockMin: 3 * 1000},
+		{ItemID: "i3", Code: "ISK-CON-003", StockCurrent: 1 * 1000, StockMin: 5 * 1000, PendingOrdered: 9 * 1000}, // covered
 	})
 	status, body := getPath(t, srv, reorderPath, "viewer")
 	if status != 200 {
@@ -218,7 +218,7 @@ func TestReorderSuggestionsRepositoryFailureIs500(t *testing.T) {
 
 func TestSummaryLowStockCarriesPendingOrdered(t *testing.T) {
 	srv, repo := newServer(t)
-	repo.Set(domain.Summary{LowStock: domain.LowStock{Count: 1, Top: []domain.LowStockItem{{ID: "i1", PendingOrdered: 4}}}})
+	repo.Set(domain.Summary{LowStock: domain.LowStock{Count: 1, Top: []domain.LowStockItem{{ID: "i1", PendingOrdered: 4 * 1000}}}})
 	_, body := get(t, srv, "viewer")
 	first := body["low_stock"].(map[string]any)["top"].([]any)[0].(map[string]any)
 	if first["pending_ordered"] != float64(4) {

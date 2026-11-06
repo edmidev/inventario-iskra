@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"os"
 	"sort"
 	"sync"
@@ -156,7 +157,7 @@ func TestItemRoundTripAndKindConstraints(t *testing.T) {
 		Description: "Taladro", Kind: domain.KindAsset, LocationID: &loc.ID, MaintenanceIntervalDays: ptr(90),
 		Attributes: map[string]any{"marca": "Bosch", "nivel": float64(3)},
 	}, "")
-	if it.Code != "ISK-HER-001" || it.ID == "" || it.CreatedAt.IsZero() || it.StockCurrent != 1 {
+	if it.Code != "ISK-HER-001" || it.ID == "" || it.CreatedAt.IsZero() || it.StockCurrent != 1*1000 {
 		t.Fatalf("created: %+v", it)
 	}
 	got, err := f.svc.GetItem(ctx, it.ID)
@@ -193,20 +194,20 @@ func TestItemRoundTripAndKindConstraints(t *testing.T) {
 func TestUpdateNeverTouchesStockOrCode(t *testing.T) {
 	f := setup(t)
 	ctx := t.Context()
-	cons := f.create(t, domain.NewItemInput{Description: "Cinta", Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(8)}, "")
+	cons := f.create(t, domain.NewItemInput{Description: "Cinta", Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(qtyval.Quantity(8) * 1000)}, "")
 	// Simulate a stock movement (T3) landing between read and write.
 	if _, err := f.pool.Exec(ctx, `WITH a AS (UPDATE item_stocks SET quantity = 20 WHERE item_id = $1 RETURNING 1)
 		UPDATE items SET stock_current = 20 WHERE id = $1`, cons.ID); err != nil {
 		t.Fatal(err)
 	}
 	stale := cons
-	stale.StockMin = 4
+	stale.StockMin = 4 * 1000
 	stale.Code, stale.StockCurrent = "ISK-HACK-1", 8
 	if err := f.repo.Items().Update(ctx, &stale); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := f.svc.GetItem(ctx, cons.ID)
-	if got.StockCurrent != 20 || got.Code != cons.Code || got.StockMin != 4 {
+	if got.StockCurrent != 20*1000 || got.Code != cons.Code || got.StockMin != 4*1000 {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -215,7 +216,7 @@ func TestForeignKeysAndCodeUniqueness(t *testing.T) {
 	f := setup(t)
 	ctx := t.Context()
 	repo := f.repo.Items()
-	bad := domain.Item{Code: "ISK-X-1", Description: "x", CategoryID: 9999, Kind: domain.KindAsset, Status: domain.StatusFunctional, StockCurrent: 1, Attributes: map[string]any{}}
+	bad := domain.Item{Code: "ISK-X-1", Description: "x", CategoryID: 9999, Kind: domain.KindAsset, Status: domain.StatusFunctional, StockCurrent: 1 * 1000, Attributes: map[string]any{}}
 	if err := repo.Create(ctx, &bad); !errors.Is(err, domain.ErrCategoryNotFound) {
 		t.Errorf("category fk: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestForeignKeysAndCodeUniqueness(t *testing.T) {
 		t.Errorf("location fk: %v", err)
 	}
 	it := f.create(t, domain.NewItemInput{Description: "Taladro", Kind: domain.KindAsset}, "ISK-OLD-1")
-	dup := domain.Item{Code: "ISK-OLD-1", Description: "x", CategoryID: f.cat.ID, Kind: domain.KindAsset, Status: domain.StatusFunctional, StockCurrent: 1, Attributes: map[string]any{}}
+	dup := domain.Item{Code: "ISK-OLD-1", Description: "x", CategoryID: f.cat.ID, Kind: domain.KindAsset, Status: domain.StatusFunctional, StockCurrent: 1 * 1000, Attributes: map[string]any{}}
 	if err := repo.Create(ctx, &dup); !errors.Is(err, domain.ErrCodeTaken) {
 		t.Errorf("dup code: %v", err)
 	}
@@ -291,9 +292,9 @@ func TestSearchFiltersSortAndPaging(t *testing.T) {
 	bodega, _ := f.svc.CreateLocation(ctx, "Bodega", domain.LocationStorage, nil)
 	f.create(t, domain.NewItemInput{Description: "Taladro percutor", Kind: domain.KindAsset, LocationID: &bodega.ID}, "")
 	f.create(t, domain.NewItemInput{Description: "Martillo", Kind: domain.KindAsset, Status: domain.StatusInRepair}, "")
-	f.create(t, domain.NewItemInput{Description: "Cable HDMI", CategoryID: cab.ID, Kind: domain.KindConsumable, Unit: ptr("unidad"), StockCurrent: ptr(1), StockMin: 2}, "")
-	f.create(t, domain.NewItemInput{Description: "Cinta aislante", CategoryID: cab.ID, Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(30), StockMin: 2}, "")
-	f.create(t, domain.NewItemInput{Description: "Rollo 100%_x", CategoryID: cab.ID, Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(2)}, "")
+	f.create(t, domain.NewItemInput{Description: "Cable HDMI", CategoryID: cab.ID, Kind: domain.KindConsumable, Unit: ptr("unidad"), StockCurrent: ptr(qtyval.Quantity(1) * 1000), StockMin: 2 * 1000}, "")
+	f.create(t, domain.NewItemInput{Description: "Cinta aislante", CategoryID: cab.ID, Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(qtyval.Quantity(30) * 1000), StockMin: 2 * 1000}, "")
+	f.create(t, domain.NewItemInput{Description: "Rollo 100%_x", CategoryID: cab.ID, Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(qtyval.Quantity(2) * 1000)}, "")
 	gone := f.create(t, domain.NewItemInput{Description: "Taladro viejo", Kind: domain.KindAsset}, "")
 	if err := f.svc.DeleteItem(ctx, gone.ID); err != nil {
 		t.Fatal(err)
@@ -394,7 +395,7 @@ func TestCreateHookRunsInTheCreationTransaction(t *testing.T) {
 	}))
 	svc := app.NewService(repo.Categories(), repo.Locations(), repo.Items())
 	in := app.CreateItemInput{Code: "ISK-HER-900", NewItemInput: domain.NewItemInput{
-		Description: "Cinta", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(3)}}
+		Description: "Cinta", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("rollo"), StockCurrent: ptr(qtyval.Quantity(3) * 1000)}}
 
 	if _, err := svc.CreateItem(ctx, in); err == nil {
 		t.Fatal("hook failure was swallowed")
@@ -593,20 +594,20 @@ func TestConsumableStocksAreStoredListedAndFilteredPerLocation(t *testing.T) {
 	f := setup(t)
 	ctx := t.Context()
 	taller, maleta, libre := f.location(t, "Taller"), f.location(t, "Maleta"), f.location(t, "Libre")
-	multi := f.create(t, domain.NewItemInput{Description: "Tornillos", Kind: domain.KindConsumable, Unit: ptr("u"), StockMin: 12,
-		Stocks: []domain.StockInput{{LocationID: taller, Quantity: 5}, {LocationID: maleta, Quantity: 5}}}, "")
-	legacy := f.create(t, domain.NewItemInput{Description: "Cinta", Kind: domain.KindConsumable, Unit: ptr("u"), StockCurrent: ptr(3)}, "")
+	multi := f.create(t, domain.NewItemInput{Description: "Tornillos", Kind: domain.KindConsumable, Unit: ptr("u"), StockMin: 12 * 1000,
+		Stocks: []domain.StockInput{{LocationID: taller, Quantity: 5 * 1000}, {LocationID: maleta, Quantity: 5 * 1000}}}, "")
+	legacy := f.create(t, domain.NewItemInput{Description: "Cinta", Kind: domain.KindConsumable, Unit: ptr("u"), StockCurrent: ptr(qtyval.Quantity(3) * 1000)}, "")
 	asset := f.create(t, domain.NewItemInput{Description: "Taladro", Kind: domain.KindAsset, LocationID: &maleta}, "")
 	empty := f.create(t, domain.NewItemInput{Description: "Vacío", Kind: domain.KindConsumable, Unit: ptr("u")}, "")
 
-	if multi.StockCurrent != 10 || multi.LocationID != nil || len(multi.Stocks) != 2 || multi.Stocks[0].LocationName != "Maleta" {
+	if multi.StockCurrent != 10*1000 || multi.LocationID != nil || len(multi.Stocks) != 2 || multi.Stocks[0].LocationName != "Maleta" {
 		t.Fatalf("multi: %+v", multi)
 	}
 	if len(legacy.Stocks) != 1 || legacy.Stocks[0].LocationName != "Sin ubicación" || len(asset.Stocks) != 0 || len(empty.Stocks) != 0 {
 		t.Fatalf("legacy/asset/empty: %+v %+v %+v", legacy.Stocks, asset.Stocks, empty.Stocks)
 	}
 	got, err := f.svc.GetItem(ctx, multi.ID)
-	if err != nil || len(got.Stocks) != 2 || got.StockCurrent != 10 {
+	if err != nil || len(got.Stocks) != 2 || got.StockCurrent != 10*1000 {
 		t.Fatalf("get: %+v %v", got, err)
 	}
 	if byCode, err := f.svc.GetItemByCode(ctx, multi.Code); err != nil || len(byCode.Stocks) != 2 {
@@ -659,7 +660,7 @@ func TestCreateWithDanglingStockLocationRollsBack(t *testing.T) {
 	taller := f.location(t, "Taller")
 	_, err := f.svc.CreateItem(t.Context(), app.CreateItemInput{NewItemInput: domain.NewItemInput{
 		Description: "Roto", CategoryID: f.cat.ID, Kind: domain.KindConsumable, Unit: ptr("u"),
-		Stocks: []domain.StockInput{{LocationID: taller, Quantity: 1}, {LocationID: 9999, Quantity: 1}}}})
+		Stocks: []domain.StockInput{{LocationID: taller, Quantity: 1 * 1000}, {LocationID: 9999, Quantity: 1 * 1000}}}})
 	if !errors.Is(err, domain.ErrInvalidInput) {
 		t.Fatalf("err = %v", err)
 	}

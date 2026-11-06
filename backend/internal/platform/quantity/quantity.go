@@ -28,6 +28,9 @@ func Parse(s string) (Quantity, error) {
 	if len(s) > 64 || !number.MatchString(s) {
 		return 0, ErrInvalid
 	}
+	if dot := strings.IndexByte(s, '.'); dot >= 0 && !strings.ContainsAny(s, "eE") && len(s)-dot-1 > 3 {
+		return 0, ErrInvalid
+	}
 	if p := strings.IndexAny(s, "eE"); p >= 0 {
 		e, err := strconv.Atoi(s[p+1:])
 		if err != nil || e > 18 || e < -18 {
@@ -150,4 +153,14 @@ func (q Quantity) Cost(unitCostMinor int64) (int64, error) {
 		return 0, ErrInvalid
 	}
 	return n.Int64(), nil
+}
+
+// Format renders quantities in human units, including legacy integer-format
+// report columns. The internal thousandths representation is never user copy.
+func (q Quantity) Format(s fmt.State, verb rune) {
+	text := q.String()
+	if verb == 'q' {
+		text = strconv.Quote(text)
+	}
+	_, _ = s.Write([]byte(text))
 }

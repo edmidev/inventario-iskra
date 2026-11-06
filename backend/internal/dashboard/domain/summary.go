@@ -2,7 +2,10 @@
 // projection: it owns no data and enforces no business rules.
 package domain
 
-import "time"
+import (
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
+	"time"
+)
 
 // TopLimit is the maximum number of rows in each "top" list.
 const TopLimit = 5
@@ -38,7 +41,7 @@ type AssetCounts struct {
 type StockLocation struct {
 	LocationID   int64
 	LocationName string
-	Quantity     int
+	Quantity     qtyval.Quantity
 }
 
 // LowStockItem is a consumable at or below its configured minimum. The
@@ -49,10 +52,10 @@ type LowStockItem struct {
 	Code         string
 	Description  string
 	Unit         string
-	StockCurrent int
-	StockMin     int
+	StockCurrent qtyval.Quantity
+	StockMin     qtyval.Quantity
 	// PendingOrdered is the quantity still to arrive on open purchase orders.
-	PendingOrdered int
+	PendingOrdered qtyval.Quantity
 	LocationName   *string
 	Stocks         []StockLocation
 }
