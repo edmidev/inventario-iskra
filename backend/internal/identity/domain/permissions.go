@@ -6,6 +6,8 @@ const (
 	PermWriteCustomers  Permission = "customers:write"
 	PermReadProjects    Permission = "projects:read"
 	PermWriteProjects   Permission = "projects:write"
+	PermReadExecutions  Permission = "executions:read"
+	PermWriteExecutions Permission = "executions:write"
 )
 
 // Roles returns all supported role identities in display order.
@@ -15,7 +17,7 @@ func Roles() []Role {
 
 // Permissions returns the supported capability catalog. New business modules extend this catalog.
 func Permissions() []Permission {
-	return []Permission{PermRead, PermWrite, PermWriteItems, PermManageCatalogs, PermManageUsers, PermManageRoles, PermReadCustomers, PermWriteCustomers, PermReadProjects, PermWriteProjects}
+	return []Permission{PermRead, PermWrite, PermWriteItems, PermManageCatalogs, PermManageUsers, PermManageRoles, PermReadCustomers, PermWriteCustomers, PermReadProjects, PermWriteProjects, PermReadExecutions, PermWriteExecutions}
 }
 
 // ValidateRolePermissions prevents unknown capabilities and administrator lockout.

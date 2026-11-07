@@ -1,0 +1,199 @@
+// Package domain defines immutable manufacturing execution snapshots.
+package domain
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/edgar/inventario/backend/internal/platform/quantity"
+)
+
+var (
+	ErrInvalidInput       = errors.New("invalid execution input")
+	ErrInvalidState       = errors.New("invalid execution state transition")
+	ErrNotFound           = errors.New("execution not found")
+	ErrInactiveAssignment = errors.New("execution assignment must reference active users and customers")
+)
+
+type ValidationError struct{ Fields map[string]string }
+
+func (e *ValidationError) Error() string        { return ErrInvalidInput.Error() }
+func (e *ValidationError) Is(target error) bool { return target == ErrInvalidInput }
+
+type Status string
+
+const (
+	StatusRegistered Status = "registered"
+	StatusInProgress Status = "in_progress"
+	StatusPaused     Status = "paused"
+	StatusCompleted  Status = "completed"
+	StatusCancelled  Status = "cancelled"
+)
+
+type MaterialSnapshot struct {
+	ItemID          string            `json:"item_id"`
+	QuantityPerUnit quantity.Quantity `json:"quantity_per_unit"`
+}
+
+type ProjectSnapshot struct {
+	ProjectID       int64              `json:"project_id"`
+	Name            string             `json:"project_name"`
+	Description     string             `json:"description"`
+	Characteristics []string           `json:"characteristics"`
+	Consumables     []MaterialSnapshot `json:"consumables"`
+	Tools           []string           `json:"tools"`
+	EstimatedDays   int                `json:"template_estimated_days"`
+}
+
+type CreateInput struct {
+	ProjectID       int64    `json:"project_id"`
+	Units           int      `json:"units"`
+	EstimatedDays   int      `json:"estimated_days,omitempty"`
+	CustomerIDs     []int64  `json:"customer_ids"`
+	PrincipalUserID string   `json:"principal_user_id"`
+	WorkerIDs       []string `json:"worker_ids"`
+}
+
+type Filter struct {
+	Status        *Status
+	Q             string
+	Limit, Offset int
+}
+
+func (f Filter) Normalize() (Filter, error) {
+	if f.Limit == 0 {
+		f.Limit = 25
+	}
+	if f.Limit < 1 || f.Limit > 100 || f.Offset < 0 {
+		return f, &ValidationError{Fields: map[string]string{"limit": "must be 1 to 100 and offset nonnegative"}}
+	}
+	if f.Status != nil && *f.Status != StatusRegistered && *f.Status != StatusInProgress && *f.Status != StatusPaused && *f.Status != StatusCompleted && *f.Status != StatusCancelled {
+		return f, &ValidationError{Fields: map[string]string{"status": "must be a supported execution status"}}
+	}
+	f.Q = strings.TrimSpace(f.Q)
+	return f, nil
+}
+
+func (in CreateInput) Normalize() (CreateInput, error) {
+	in.PrincipalUserID = strings.TrimSpace(in.PrincipalUserID)
+	fields := map[string]string{}
+	if in.ProjectID < 1 {
+		fields["project_id"] = "must reference an existing project"
+	}
+	if in.Units < 1 {
+		fields["units"] = "must be a positive whole number"
+	}
+	if in.EstimatedDays < 0 || in.EstimatedDays > 36500 {
+		fields["estimated_days"] = "must be between 1 and 36500 days when provided"
+	}
+	if len(in.CustomerIDs) == 0 {
+		fields["customer_ids"] = "at least one customer is required"
+	}
+	seenCustomers := map[int64]bool{}
+	in.CustomerIDs = append([]int64{}, in.CustomerIDs...)
+	for i, id := range in.CustomerIDs {
+		if id < 1 || seenCustomers[id] {
+			fields[fmt.Sprintf("customer_ids[%d]", i)] = "must be a distinct existing customer"
+		}
+		seenCustomers[id] = true
+	}
+	if in.PrincipalUserID == "" {
+		fields["principal_user_id"] = "a principal responsible user is required"
+	}
+	in.WorkerIDs = append([]string{}, in.WorkerIDs...)
+	seenUsers := map[string]bool{}
+	if in.PrincipalUserID != "" {
+		seenUsers[in.PrincipalUserID] = true
+	}
+	for i, id := range in.WorkerIDs {
+		id = strings.TrimSpace(id)
+		in.WorkerIDs[i] = id
+		if id == "" || seenUsers[id] {
+			fields[fmt.Sprintf("worker_ids[%d]", i)] = "must be a distinct assigned user"
+		}
+		seenUsers[id] = true
+	}
+	if len(fields) > 0 {
+		return CreateInput{}, &ValidationError{Fields: fields}
+	}
+	return in, nil
+}
+
+type Execution struct {
+	ID int64 `json:"id"`
+	ProjectSnapshot
+	Units           int       `json:"units"`
+	EstimatedDays   int       `json:"estimated_days"`
+	CustomerIDs     []int64   `json:"customer_ids"`
+	PrincipalUserID string    `json:"principal_user_id"`
+	WorkerIDs       []string  `json:"worker_ids"`
+	Status          Status    `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type AssignableUser struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func NewExecution(input CreateInput, snapshot ProjectSnapshot) (Execution, error) {
+	in, err := input.Normalize()
+	if err != nil {
+		return Execution{}, err
+	}
+	if snapshot.ProjectID != in.ProjectID || snapshot.ProjectID < 1 || snapshot.Name == "" || snapshot.EstimatedDays < 1 {
+		return Execution{}, &ValidationError{Fields: map[string]string{"project_id": "must reference an existing project"}}
+	}
+	days := in.EstimatedDays
+	if days == 0 {
+		days = snapshot.EstimatedDays
+	}
+	if days < 1 {
+		return Execution{}, &ValidationError{Fields: map[string]string{"estimated_days": "must be between 1 and 36500 days"}}
+	}
+	snapshot.Characteristics = append([]string{}, snapshot.Characteristics...)
+	snapshot.Consumables = append([]MaterialSnapshot{}, snapshot.Consumables...)
+	snapshot.Tools = append([]string{}, snapshot.Tools...)
+	return Execution{
+		ProjectSnapshot: snapshot,
+		Units:           in.Units, EstimatedDays: days,
+		CustomerIDs: in.CustomerIDs, PrincipalUserID: in.PrincipalUserID,
+		WorkerIDs: in.WorkerIDs, Status: StatusRegistered,
+	}, nil
+}
+
+func (e *Execution) Start() error {
+	if e.Status != StatusRegistered {
+		return ErrInvalidState
+	}
+	e.Status = StatusInProgress
+	return nil
+}
+
+func (e *Execution) Pause() error {
+	if e.Status != StatusInProgress {
+		return ErrInvalidState
+	}
+	e.Status = StatusPaused
+	return nil
+}
+
+func (e *Execution) Resume() error {
+	if e.Status != StatusPaused {
+		return ErrInvalidState
+	}
+	e.Status = StatusInProgress
+	return nil
+}
+
+func (e Execution) Clone() Execution {
+	e.Characteristics = append([]string{}, e.Characteristics...)
+	e.Consumables = append([]MaterialSnapshot{}, e.Consumables...)
+	e.Tools = append([]string{}, e.Tools...)
+	e.CustomerIDs = append([]int64{}, e.CustomerIDs...)
+	e.WorkerIDs = append([]string{}, e.WorkerIDs...)
+	return e
+}

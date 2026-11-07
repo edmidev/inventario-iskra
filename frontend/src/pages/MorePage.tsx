@@ -44,6 +44,7 @@ export function MorePage() {
   const manufacturingLinks = [
     ...(permissions.canReadProjects ? [{ to: "/proyectos", label: "Proyectos", hint: "Plantillas de fabricación" }] : []),
     ...(permissions.canReadCustomers ? [{ to: "/clientes", label: "Clientes", hint: "Datos y contactos" }] : []),
+    ...(permissions.canReadExecutions ? [{ to: "/ejecuciones", label: "Ejecuciones", hint: "Trabajos registrados en el taller" }] : []),
   ];
   const administrationLinks = administration.filter((entry) => permissions[entry.permission]);
   const { state, signOut } = useSession();

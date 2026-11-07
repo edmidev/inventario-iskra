@@ -79,6 +79,8 @@ export interface Permissions {
   canRead: boolean;
   canReadProjects: boolean;
   canReadCustomers: boolean;
+  canReadExecutions: boolean;
+  canWriteExecutions: boolean;
   canWriteItems: boolean;
   canOperate: boolean;
   canManageUsers: boolean;
@@ -95,6 +97,8 @@ export function permissionsFor(user: Pick<User, "role" | "permissions"> | null):
     canRead: has("inventory:read"),
     canReadProjects: has("projects:read"),
     canReadCustomers: has("customers:read"),
+    canReadExecutions: has("executions:read"),
+    canWriteExecutions: has("executions:write"),
     canWriteItems: has("items:write"),
     canOperate: has("operations:write"),
     canManageUsers: has("users:manage"),

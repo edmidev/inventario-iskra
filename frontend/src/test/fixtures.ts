@@ -21,7 +21,7 @@ export const user = (role: Role = "operator"): User => ({
   name: "Ana Pérez",
   email: "ana@example.com",
   role,
-  permissions: role === "admin" ? ["inventory:read", "operations:write", "items:write", "catalogs:manage", "users:manage", "roles:manage", "customers:read", "customers:write", "projects:read", "projects:write"] : role === "operator" ? ["inventory:read", "operations:write", "items:write"] : role === "viewer" ? ["inventory:read"] : [],
+  permissions: role === "admin" ? ["inventory:read", "operations:write", "items:write", "catalogs:manage", "users:manage", "roles:manage", "customers:read", "customers:write", "projects:read", "projects:write", "executions:read", "executions:write"] : role === "operator" ? ["inventory:read", "operations:write", "items:write"] : role === "viewer" ? ["inventory:read"] : [],
   active: true,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",

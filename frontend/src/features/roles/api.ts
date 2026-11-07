@@ -33,6 +33,8 @@ export const permissionLabels: Record<string, string> = {
   "customers:write": "Administrar clientes",
   "projects:read": "Consultar proyectos",
   "projects:write": "Administrar proyectos",
+  "executions:read": "Consultar ejecuciones",
+  "executions:write": "Registrar y actualizar ejecuciones",
   "inventory:read": "Consultar inventario",
   "operations:write": "Registrar movimientos, préstamos y mantenimiento",
   "items:write": "Crear y modificar artículos",
