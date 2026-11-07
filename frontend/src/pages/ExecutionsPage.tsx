@@ -8,7 +8,8 @@ import { Sheet } from "../components/molecules/Sheet";
 import { useToast } from "../components/molecules/Toast";
 import { useSession } from "../features/auth/session";
 import { useCustomers } from "../features/customers/api/customers";
-import { useAssignableUsers, useCreateExecution, useExecutions, useTransitionExecution, type Execution } from "../features/executions/api/executions";
+import { useAssignableUsers, useCreateExecution, useExecutions, useMoveExecutionMaterial, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
+import { useLocations } from "../features/catalog/api/catalog";
 import { useProjects, type Project } from "../features/projects/api/projects";
 import { describeError } from "../lib/api/errors";
 
@@ -43,6 +44,47 @@ function ExecutionActions({ execution }: { execution: Execution }) {
   }}>{label}</Button>;
 }
 
+function MaterialMovementForm({ executionID, material }: { executionID: number; material: MaterialAllocation }) {
+  const [action, setAction] = useState<"deliver" | "return">("deliver");
+  const [quantity, setQuantity] = useState("");
+  const [locationID, setLocationID] = useState("");
+  const locations = useLocations();
+  const move = useMoveExecutionMaterial(executionID, material.item_id);
+  const toast = useToast();
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      await move.mutateAsync({ action, request_id: crypto.randomUUID(), quantity: Number(quantity), location_id: Number(locationID) });
+      toast.success(action === "deliver" ? "Material entregado al proyecto." : "Material devuelto al inventario.");
+      setQuantity("");
+    } catch (error) {
+      toast.error(describeError(error));
+    }
+  }
+
+  return <form onSubmit={submit} className="mt-3 grid gap-2 rounded-xl border border-line p-3 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end">
+    <label className="flex flex-col gap-1 text-xs font-medium">Movimiento
+      <select value={action} onChange={(event) => setAction(event.target.value as "deliver" | "return")} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm">
+        <option value="deliver">Entregar reservado</option>
+        <option value="return">Devolver sobrante</option>
+      </select>
+    </label>
+    <label className="flex flex-col gap-1 text-xs font-medium">Cantidad
+      <input required type="number" min="0.001" step="0.001" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm" />
+    </label>
+    <label className="flex flex-col gap-1 text-xs font-medium">Ubicación física
+      <select required value={locationID} onChange={(event) => setLocationID(event.target.value)} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm">
+        <option value="">Seleccioná una ubicación</option>
+        {(locations.data ?? []).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+      </select>
+    </label>
+    <Button type="submit" disabled={move.isPending || !locationID || !quantity}>{move.isPending ? "Guardando…" : action === "deliver" ? "Entregar" : "Devolver"}</Button>
+    {locations.isError && <p className="text-sm text-bad sm:col-span-4">No se pudieron cargar las ubicaciones físicas.</p>}
+    {!locations.isError && !locations.isLoading && locations.data?.length === 0 && <p className="text-sm text-ink-soft sm:col-span-4">Crea una ubicación antes de mover materiales.</p>}
+  </form>;
+}
+
 function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite: boolean }) {
   return <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -57,6 +99,17 @@ function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite
       {execution.characteristics.length > 0 && <ul className="mt-2 list-inside list-disc">{execution.characteristics.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ul>}
       <p className="mt-2">{execution.consumables.length} consumibles · {execution.tools.length} herramientas requeridas</p>
     </details>
+    {execution.materials.length > 0 && <section className="rounded-xl bg-sunken p-3">
+      <h3 className="font-semibold">Insumos de la ejecución</h3>
+      <ul className="mt-2 flex flex-col gap-3">
+        {execution.materials.map((material) => <li key={material.item_id} className="rounded-xl border border-line bg-surface p-3 text-sm">
+          <p className="font-medium">Artículo {material.item_id}</p>
+          <p className="mt-1 text-ink-soft">Requerido: {material.required_quantity} · Reservado: {material.reserved_quantity} · Entregado: {material.delivered_quantity} · Faltante: {material.deficit_quantity}</p>
+          {material.returned_quantity > 0 && <p className="text-ink-soft">Devuelto: {material.returned_quantity}</p>}
+          {canWrite && (execution.status === "registered" || execution.status === "in_progress" || execution.status === "paused") && <MaterialMovementForm executionID={execution.id} material={material} />}
+        </li>)}
+      </ul>
+    </section>}
     {canWrite && <div className="flex gap-2"><ExecutionActions execution={execution} /></div>}
   </li>;
 }

@@ -64,4 +64,32 @@ describe("execution registration", () => {
     await user.click(await screen.findByRole("button", { name: "Iniciar" }));
     expect(await screen.findByText("Ejecución iniciada; el inventario puede completarse durante el trabajo.")).toBeInTheDocument();
   });
+
+  it("delivers reserved material from a selected physical location", async () => {
+    const user = userEvent.setup();
+    useAuthenticatedApi("admin");
+    const execution = {
+      id: 3, project_id: 4, project_name: "Marmita", description: "Acero inoxidable", characteristics: [],
+      consumables: [{ item_id: "item-1", quantity_per_unit: 1.25 }], tools: [], template_estimated_days: 12,
+      units: 2, estimated_days: 12, materials: [{ item_id: "item-1", required_quantity: 2.5, reserved_quantity: 2.5, delivered_quantity: 0, returned_quantity: 0, deficit_quantity: 0 }],
+      customer_ids: [8], principal_user_id: "user-a", worker_ids: [], status: "registered",
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    let movementBody: unknown;
+    server.use(
+      http.get(api("/executions"), () => HttpResponse.json({ data: [execution], total: 1, limit: 25, offset: 0 })),
+      http.get(api("/locations"), () => HttpResponse.json({ data: [{ id: 11, name: "Bodega", kind: "storage", parent_id: null }] })),
+      http.post(api("/executions/3/materials/item-1/deliver"), async ({ request }) => {
+        movementBody = await request.json();
+        return HttpResponse.json({ ...execution, materials: [{ ...execution.materials[0], reserved_quantity: 1.5, delivered_quantity: 1 }] });
+      }),
+    );
+    renderApp("/ejecuciones");
+    await screen.findByText("Requerido: 2.5 · Reservado: 2.5 · Entregado: 0 · Faltante: 0");
+    await user.type(screen.getByLabelText("Cantidad"), "1");
+    await user.selectOptions(screen.getByLabelText("Ubicación física"), "11");
+    await user.click(screen.getByRole("button", { name: "Entregar" }));
+    await screen.findByText("Material entregado al proyecto.");
+    await waitFor(() => expect(movementBody).toMatchObject({ request_id: expect.stringMatching(/^[0-9a-f-]{36}$/), quantity: 1, location_id: 11, note: "" }));
+  });
 });

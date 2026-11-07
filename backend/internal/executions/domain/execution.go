@@ -11,10 +11,11 @@ import (
 )
 
 var (
-	ErrInvalidInput       = errors.New("invalid execution input")
-	ErrInvalidState       = errors.New("invalid execution state transition")
-	ErrNotFound           = errors.New("execution not found")
-	ErrInactiveAssignment = errors.New("execution assignment must reference active users and customers")
+	ErrInvalidInput        = errors.New("invalid execution input")
+	ErrInvalidState        = errors.New("invalid execution state transition")
+	ErrNotFound            = errors.New("execution not found")
+	ErrInactiveAssignment  = errors.New("execution assignment must reference active users and customers")
+	ErrMaterialUnavailable = errors.New("execution material must reference an active consumable item")
 )
 
 type ValidationError struct{ Fields map[string]string }
@@ -124,14 +125,27 @@ func (in CreateInput) Normalize() (CreateInput, error) {
 type Execution struct {
 	ID int64 `json:"id"`
 	ProjectSnapshot
-	Units           int       `json:"units"`
-	EstimatedDays   int       `json:"estimated_days"`
-	CustomerIDs     []int64   `json:"customer_ids"`
-	PrincipalUserID string    `json:"principal_user_id"`
-	WorkerIDs       []string  `json:"worker_ids"`
-	Status          Status    `json:"status"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	Units           int                  `json:"units"`
+	EstimatedDays   int                  `json:"estimated_days"`
+	Materials       []MaterialAllocation `json:"materials"`
+	CustomerIDs     []int64              `json:"customer_ids"`
+	PrincipalUserID string               `json:"principal_user_id"`
+	WorkerIDs       []string             `json:"worker_ids"`
+	Status          Status               `json:"status"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+}
+
+// MaterialAllocation is the current fulfillment state for a snapshotted
+// consumable requirement. Reservations are informational quantities held
+// globally for this execution; tools remain outside the stock reservation flow.
+type MaterialAllocation struct {
+	ItemID            string            `json:"item_id"`
+	RequiredQuantity  quantity.Quantity `json:"required_quantity"`
+	ReservedQuantity  quantity.Quantity `json:"reserved_quantity"`
+	DeliveredQuantity quantity.Quantity `json:"delivered_quantity"`
+	ReturnedQuantity  quantity.Quantity `json:"returned_quantity"`
+	DeficitQuantity   quantity.Quantity `json:"deficit_quantity"`
 }
 
 type AssignableUser struct {
@@ -153,6 +167,14 @@ func NewExecution(input CreateInput, snapshot ProjectSnapshot) (Execution, error
 	}
 	if days < 1 {
 		return Execution{}, &ValidationError{Fields: map[string]string{"estimated_days": "must be between 1 and 36500 days"}}
+	}
+	for i, material := range snapshot.Consumables {
+		if strings.TrimSpace(material.ItemID) == "" {
+			return Execution{}, &ValidationError{Fields: map[string]string{fmt.Sprintf("consumables[%d].item_id", i): "required"}}
+		}
+		if _, err := RequiredMaterialQuantity(material.QuantityPerUnit, in.Units); err != nil {
+			return Execution{}, &ValidationError{Fields: map[string]string{fmt.Sprintf("consumables[%d].quantity_per_unit", i): "scaled quantity exceeds the supported stock limit"}}
+		}
 	}
 	snapshot.Characteristics = append([]string{}, snapshot.Characteristics...)
 	snapshot.Consumables = append([]MaterialSnapshot{}, snapshot.Consumables...)
@@ -195,5 +217,6 @@ func (e Execution) Clone() Execution {
 	e.Tools = append([]string{}, e.Tools...)
 	e.CustomerIDs = append([]int64{}, e.CustomerIDs...)
 	e.WorkerIDs = append([]string{}, e.WorkerIDs...)
+	e.Materials = append([]MaterialAllocation{}, e.Materials...)
 	return e
 }

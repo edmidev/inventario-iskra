@@ -4,9 +4,13 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/edgar/inventario/backend/internal/executions/domain"
+	"github.com/edgar/inventario/backend/internal/platform/quantity"
 	projectdomain "github.com/edgar/inventario/backend/internal/projects/domain"
+	stockapp "github.com/edgar/inventario/backend/internal/stock/app"
+	stockdomain "github.com/edgar/inventario/backend/internal/stock/domain"
 )
 
 var ErrProjectNotFound = errors.New("project template not found")
@@ -26,10 +30,19 @@ type Repository interface {
 type Service struct {
 	repo      Repository
 	templates TemplateReader
+	stock     interface {
+		RecordExecutionMaterial(context.Context, string, string, int64, string, stockdomain.Request) (stockapp.Result, error)
+	}
 }
 
-func NewService(repo Repository, templates TemplateReader) *Service {
-	return &Service{repo: repo, templates: templates}
+func NewService(repo Repository, templates TemplateReader, stock ...interface {
+	RecordExecutionMaterial(context.Context, string, string, int64, string, stockdomain.Request) (stockapp.Result, error)
+}) *Service {
+	s := &Service{repo: repo, templates: templates}
+	if len(stock) > 0 {
+		s.stock = stock[0]
+	}
+	return s
 }
 
 func (s *Service) Create(ctx context.Context, input domain.CreateInput) (domain.Execution, error) {
@@ -89,4 +102,28 @@ func (s *Service) Resume(ctx context.Context, id int64) (domain.Execution, error
 
 func (s *Service) ListAssignableUsers(ctx context.Context) ([]domain.AssignableUser, error) {
 	return s.repo.ListAssignableUsers(ctx)
+}
+
+func (s *Service) DeliverMaterial(ctx context.Context, executionID int64, itemID, userID, requestID string, qty quantity.Quantity, locationID int64, note string) (domain.Execution, error) {
+	return s.moveMaterial(ctx, executionID, itemID, userID, requestID, qty, locationID, note, stockdomain.TypeOut)
+}
+
+func (s *Service) ReturnMaterial(ctx context.Context, executionID int64, itemID, userID, requestID string, qty quantity.Quantity, locationID int64, note string) (domain.Execution, error) {
+	return s.moveMaterial(ctx, executionID, itemID, userID, requestID, qty, locationID, note, stockdomain.TypeIn)
+}
+
+func (s *Service) moveMaterial(ctx context.Context, executionID int64, itemID, userID, requestID string, qty quantity.Quantity, locationID int64, note string, movement stockdomain.MovementType) (domain.Execution, error) {
+	if s.stock == nil {
+		return domain.Execution{}, errors.New("execution material movement is not configured")
+	}
+	if executionID < 1 || strings.TrimSpace(itemID) == "" || strings.TrimSpace(userID) == "" || strings.TrimSpace(requestID) == "" || qty <= 0 || locationID < 1 {
+		return domain.Execution{}, &domain.ValidationError{Fields: map[string]string{"body": "execution, item, request id, positive quantity and physical location are required"}}
+	}
+	_, err := s.stock.RecordExecutionMaterial(ctx, itemID, userID, executionID, requestID, stockdomain.Request{
+		Type: movement, Qty: qty, LocationID: &locationID, Note: note,
+	})
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	return s.repo.Get(ctx, executionID)
 }

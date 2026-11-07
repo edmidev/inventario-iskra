@@ -46,14 +46,37 @@ func validUUID(id string) bool {
 // rows, the item total and the movement are written in the same transaction;
 // a row that reaches quantity 0 is deleted.
 func (r *Repo) Record(ctx context.Context, itemID, userID string, decide func(domain.ItemState) (domain.Outcome, error)) (domain.Movement, []domain.LocationStock, error) {
+	return r.record(ctx, itemID, userID, decide, nil, nil)
+}
+
+// RecordExecutionMaterial records a delivery from or return to inventory for
+// one execution while consuming only that execution's own reservation.
+func (r *Repo) RecordExecutionMaterial(ctx context.Context, itemID, userID string, executionID int64, requestID, fingerprint string, decide func(domain.ItemState) (domain.Outcome, error)) (domain.Movement, []domain.LocationStock, error) {
+	return r.record(ctx, itemID, userID, decide, &executionID, &materialIdempotency{RequestID: requestID, Fingerprint: fingerprint})
+}
+
+type materialIdempotency struct {
+	RequestID   string
+	Fingerprint string
+}
+
+func (r *Repo) record(ctx context.Context, itemID, userID string, decide func(domain.ItemState) (domain.Outcome, error), executionID *int64, idempotency *materialIdempotency) (domain.Movement, []domain.LocationStock, error) {
 	if !validUUID(itemID) {
 		return domain.Movement{}, nil, domain.ErrItemNotFound
+	}
+	if idempotency != nil && !validUUID(idempotency.RequestID) {
+		return domain.Movement{}, nil, domain.FieldError("request_id", "must be a UUID")
 	}
 	tx, commit, rollback, err := db.Begin(ctx, r.pool)
 	if err != nil {
 		return domain.Movement{}, nil, fmt.Errorf("begin movement: %w", err)
 	}
 	defer rollback()
+	if idempotency != nil {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, idempotency.RequestID); err != nil {
+			return domain.Movement{}, nil, err
+		}
+	}
 
 	var cur domain.ItemState
 	var kind string
@@ -67,6 +90,40 @@ func (r *Repo) Record(ctx context.Context, itemID, userID string, decide func(do
 		return domain.Movement{}, nil, fmt.Errorf("lock item: %w", err)
 	}
 	cur.Kind = domain.Kind(kind)
+	if idempotency != nil {
+		var fingerprint string
+		var movementID int64
+		err := tx.QueryRow(ctx, `SELECT fingerprint,movement_id FROM manufacturing_execution_material_operations WHERE request_id=$1::uuid`, idempotency.RequestID).Scan(&fingerprint, &movementID)
+		if err == nil {
+			if fingerprint != idempotency.Fingerprint {
+				return domain.Movement{}, nil, domain.ErrIdempotencyConflict
+			}
+			var movement domain.Movement
+			var movementType string
+			if err := tx.QueryRow(ctx, `SELECT m.id,m.item_id::text,m.type,m.qty,m.stock_before,m.stock_after,m.location_id,
+m.from_location_id,m.to_location_id,m.moved_qty,m.user_id::text,u.name,m.note,m.created_at
+FROM stock_movements m LEFT JOIN users u ON u.id=m.user_id WHERE m.id=$1`, movementID).
+				Scan(&movement.ID, &movement.ItemID, &movementType, &movement.Qty, &movement.StockBefore, &movement.StockAfter, &movement.LocationID,
+					&movement.FromLocationID, &movement.ToLocationID, &movement.MovedQty, &movement.UserID, &movement.UserName, &movement.Note, &movement.CreatedAt); err != nil {
+				return domain.Movement{}, nil, err
+			}
+			movement.Type = domain.MovementType(movementType)
+			var stocks []domain.LocationStock
+			if cur.Kind == domain.KindConsumable {
+				stocks, err = loadStocks(ctx, tx, itemID)
+				if err != nil {
+					return domain.Movement{}, nil, err
+				}
+			}
+			if err := commit(); err != nil {
+				return domain.Movement{}, nil, err
+			}
+			return movement, stocks, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return domain.Movement{}, nil, err
+		}
+	}
 	// The item row lock serializes this with custody assign/return, which
 	// lock the same row, so the flag cannot go stale before commit.
 	if err := tx.QueryRow(ctx,
@@ -97,6 +154,70 @@ func (r *Repo) Record(ctx context.Context, itemID, userID string, decide func(do
 		return domain.Movement{}, nil, err
 	}
 	m := out.Movement
+	var materialOperation string
+	if executionID != nil {
+		if m.Type != domain.TypeOut && m.Type != domain.TypeIn {
+			return domain.Movement{}, nil, domain.ErrInvalidInput
+		}
+		var status string
+		var required, reserved, delivered, returned qtyval.Quantity
+		err := tx.QueryRow(ctx, `SELECT e.status,m.quantity_required,m.quantity_reserved,m.quantity_delivered,m.quantity_returned
+FROM manufacturing_execution_materials m JOIN manufacturing_executions e ON e.id=m.execution_id
+WHERE m.execution_id=$1 AND m.item_id=$2::uuid FOR UPDATE OF m,e`, *executionID, itemID).
+			Scan(&status, &required, &reserved, &delivered, &returned)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Movement{}, nil, domain.ErrReservationUnavailable
+		}
+		if err != nil {
+			return domain.Movement{}, nil, err
+		}
+		if status != "registered" && status != "in_progress" && status != "paused" {
+			return domain.Movement{}, nil, domain.ErrExecutionInactive
+		}
+		qty := out.Movement.Qty
+		if out.Movement.Type == domain.TypeOut {
+			qty = -qty
+			if qty > reserved || delivered+qty > required {
+				return domain.Movement{}, nil, domain.ErrReservationUnavailable
+			}
+			materialOperation = "delivery"
+		} else {
+			if qty <= 0 || qty > delivered-returned {
+				return domain.Movement{}, nil, domain.ErrReservationUnavailable
+			}
+			materialOperation = "return"
+		}
+		if materialOperation == "delivery" {
+			if _, err := tx.Exec(ctx, `UPDATE manufacturing_execution_materials
+SET quantity_reserved=quantity_reserved-$3,quantity_delivered=quantity_delivered+$3
+WHERE execution_id=$1 AND item_id=$2::uuid`, *executionID, itemID, qty); err != nil {
+				return domain.Movement{}, nil, err
+			}
+		} else if _, err := tx.Exec(ctx, `UPDATE manufacturing_execution_materials
+SET quantity_returned=quantity_returned+$3
+WHERE execution_id=$1 AND item_id=$2::uuid`, *executionID, itemID, qty); err != nil {
+			return domain.Movement{}, nil, err
+		}
+		prefix := fmt.Sprintf("Execution %d material %s", *executionID, materialOperation)
+		if m.Note == "" {
+			m.Note = prefix
+		} else {
+			m.Note = prefix + ": " + m.Note
+			if len(m.Note) > domain.MaxNoteLen {
+				return domain.Movement{}, nil, domain.FieldError("note", "too long after execution reference")
+			}
+		}
+	} else if m.Type == domain.TypeOut && m.Qty < 0 {
+		var reserved qtyval.Quantity
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(quantity_reserved),0) FROM manufacturing_execution_materials WHERE item_id=$1::uuid`, itemID).Scan(&reserved); err != nil {
+			return domain.Movement{}, nil, err
+		}
+		available := cur.StockCurrent - reserved
+		requested := -m.Qty
+		if requested > available {
+			return domain.Movement{}, nil, &domain.InsufficientStockError{Available: available, Requested: requested}
+		}
+	}
 	if cur.Kind == domain.KindConsumable {
 		if out.DefaultLocation {
 			id, err := db.EnsureDefaultLocation(ctx, tx)
@@ -123,6 +244,11 @@ func (r *Repo) Record(ctx context.Context, itemID, userID string, decide func(do
 		itemID, out.StockCurrent, out.LocationID); err != nil {
 		return domain.Movement{}, nil, mapFK(fmt.Errorf("update item: %w", err))
 	}
+	if cur.Kind == domain.KindConsumable && (m.Type == domain.TypeIn || m.Type == domain.TypeAdjust || materialOperation != "") {
+		if _, err := tx.Exec(ctx, `SELECT rebalance_manufacturing_execution_materials($1::uuid)`, itemID); err != nil {
+			return domain.Movement{}, nil, fmt.Errorf("rebalance execution reservations: %w", err)
+		}
+	}
 	m.ItemID = itemID
 	m.UserID = &userID
 	err = tx.QueryRow(ctx, `
@@ -135,6 +261,12 @@ func (r *Repo) Record(ctx context.Context, itemID, userID string, decide func(do
 	).Scan(&m.ID, &m.CreatedAt, &m.UserName)
 	if err != nil {
 		return domain.Movement{}, nil, mapFK(fmt.Errorf("insert movement: %w", err))
+	}
+	if idempotency != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO manufacturing_execution_material_operations(request_id,execution_id,item_id,movement_id,fingerprint)
+VALUES($1::uuid,$2,$3::uuid,$4,$5)`, idempotency.RequestID, *executionID, itemID, m.ID, idempotency.Fingerprint); err != nil {
+			return domain.Movement{}, nil, err
+		}
 	}
 	var stocks []domain.LocationStock
 	if cur.Kind == domain.KindConsumable {

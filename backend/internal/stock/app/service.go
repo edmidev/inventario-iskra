@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 
@@ -10,6 +13,10 @@ import (
 
 // Service implements the stock use cases.
 type Service struct{ repo MovementRepository }
+
+type executionMaterialRepository interface {
+	RecordExecutionMaterial(context.Context, string, string, int64, string, string, func(domain.ItemState) (domain.Outcome, error)) (domain.Movement, []domain.LocationStock, error)
+}
 
 // NewService wires the repository.
 func NewService(r MovementRepository) *Service { return &Service{repo: r} }
@@ -43,6 +50,39 @@ func (s *Service) Record(ctx context.Context, itemID, userID string, req domain.
 	}
 	if err != nil {
 		return Result{}, err
+	}
+	return Result{Movement: m, StockCurrent: outcome.StockCurrent, LocationID: outcome.LocationID, Stocks: stocks}, nil
+}
+
+// RecordExecutionMaterial performs a stock movement against one execution's
+// reservation. Ordinary movement endpoints cannot set this execution scope.
+func (s *Service) RecordExecutionMaterial(ctx context.Context, itemID, userID string, executionID int64, requestID string, req domain.Request) (Result, error) {
+	repo, ok := s.repo.(executionMaterialRepository)
+	if !ok {
+		return Result{}, domain.ErrInvalidInput
+	}
+	serialized, err := json.Marshal(struct {
+		ExecutionID int64
+		ItemID      string
+		UserID      string
+		Request     domain.Request
+	}{executionID, itemID, userID, req})
+	if err != nil {
+		return Result{}, err
+	}
+	fingerprintBytes := sha256.Sum256(serialized)
+	fingerprint := hex.EncodeToString(fingerprintBytes[:])
+	var outcome domain.Outcome
+	m, stocks, err := repo.RecordExecutionMaterial(ctx, itemID, userID, executionID, requestID, fingerprint, func(cur domain.ItemState) (domain.Outcome, error) {
+		o, decideErr := domain.Decide(cur, req)
+		outcome = o
+		return o, decideErr
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	if outcome.Movement.Type == "" {
+		outcome.StockCurrent = m.StockAfter
 	}
 	return Result{Movement: m, StockCurrent: outcome.StockCurrent, LocationID: outcome.LocationID, Stocks: stocks}, nil
 }

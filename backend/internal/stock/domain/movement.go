@@ -51,12 +51,15 @@ const (
 
 // Domain errors the HTTP adapter maps to statuses and stable codes.
 var (
-	ErrItemNotFound      = errors.New("item not found")
-	ErrLocationNotFound  = errors.New("location not found")
-	ErrNotApplicable     = errors.New("movement not applicable to this item kind")
-	ErrInsufficientStock = errors.New("insufficient stock")
-	ErrInvalidInput      = errors.New("invalid input")
-	ErrItemOnLoan        = errors.New("item is on loan; custody owns its location")
+	ErrItemNotFound           = errors.New("item not found")
+	ErrLocationNotFound       = errors.New("location not found")
+	ErrNotApplicable          = errors.New("movement not applicable to this item kind")
+	ErrInsufficientStock      = errors.New("insufficient stock")
+	ErrInvalidInput           = errors.New("invalid input")
+	ErrItemOnLoan             = errors.New("item is on loan; custody owns its location")
+	ErrReservationUnavailable = errors.New("reserved material is unavailable for this execution")
+	ErrExecutionInactive      = errors.New("execution is not active for material movement")
+	ErrIdempotencyConflict    = errors.New("idempotency key was already used for a different material movement")
 	// ErrLocationRequired is returned when a consumable is stocked in several
 	// locations and the request did not say which one it applies to.
 	ErrLocationRequired = errors.New("location required")

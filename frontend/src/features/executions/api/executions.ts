@@ -4,6 +4,10 @@ import { request } from "../../../lib/api/client";
 import { usePagedQuery } from "../../../lib/api/paged";
 
 const materialSchema = z.object({ item_id: z.string(), quantity_per_unit: z.number() });
+const allocationSchema = z.object({
+  item_id: z.string(), required_quantity: z.number(), reserved_quantity: z.number(), delivered_quantity: z.number(),
+  returned_quantity: z.number(), deficit_quantity: z.number(),
+});
 export const executionSchema = z.object({
   id: z.number(),
   project_id: z.number(),
@@ -15,6 +19,7 @@ export const executionSchema = z.object({
   template_estimated_days: z.number(),
   units: z.number().int(),
   estimated_days: z.number().int(),
+  materials: z.array(allocationSchema).default([]),
   customer_ids: z.array(z.number()),
   principal_user_id: z.string(),
   worker_ids: z.array(z.string()),
@@ -24,6 +29,7 @@ export const executionSchema = z.object({
 });
 const assignableUserSchema = z.object({ id: z.string(), name: z.string() });
 export type Execution = z.infer<typeof executionSchema>;
+export type MaterialAllocation = z.infer<typeof allocationSchema>;
 export type ExecutionCreate = {
   project_id: number;
   units: number;
@@ -57,6 +63,17 @@ export function useTransitionExecution(id: number) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (action: "start" | "pause" | "resume") => request(`/executions/${id}/${action}`, executionSchema, { method: "POST" }),
+    onSuccess: () => client.invalidateQueries({ queryKey: executionsKey }),
+  });
+}
+
+export function useMoveExecutionMaterial(executionID: number, itemID: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { action: "deliver" | "return"; request_id: string; quantity: number; location_id: number; note?: string }) =>
+      request(`/executions/${executionID}/materials/${encodeURIComponent(itemID)}/${input.action}`, executionSchema, {
+        method: "POST", body: { request_id: input.request_id, quantity: input.quantity, location_id: input.location_id, note: input.note ?? "" },
+      }),
     onSuccess: () => client.invalidateQueries({ queryKey: executionsKey }),
   });
 }

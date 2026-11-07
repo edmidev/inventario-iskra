@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/edgar/inventario/backend/internal/executions/domain"
 	"github.com/edgar/inventario/backend/internal/platform/db"
+	"github.com/edgar/inventario/backend/internal/platform/quantity"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,14 +25,21 @@ type rowQueryer interface {
 
 const selectExecution = `SELECT e.id,e.project_snapshot,e.units,e.estimated_days,e.status,e.principal_user_id::text,e.created_at,e.updated_at,
 ARRAY(SELECT customer_id FROM manufacturing_execution_customers c WHERE c.execution_id=e.id ORDER BY customer_id)::BIGINT[],
-ARRAY(SELECT user_id::text FROM manufacturing_execution_workers w WHERE w.execution_id=e.id ORDER BY user_id)::TEXT[]
+ARRAY(SELECT user_id::text FROM manufacturing_execution_workers w WHERE w.execution_id=e.id ORDER BY user_id)::TEXT[],
+COALESCE((SELECT jsonb_agg(jsonb_build_object(
+ 'item_id',m.item_id::text,'required_quantity',m.quantity_required,
+ 'reserved_quantity',m.quantity_reserved,'delivered_quantity',m.quantity_delivered,
+ 'returned_quantity',m.quantity_returned,
+ 'deficit_quantity',m.quantity_required-m.quantity_reserved-m.quantity_delivered)
+ ORDER BY m.item_id) FROM manufacturing_execution_materials m WHERE m.execution_id=e.id),'[]'::JSONB)
 FROM manufacturing_executions e`
 
 func scanExecution(row pgx.Row) (domain.Execution, error) {
 	var e domain.Execution
 	var snapshot []byte
 	var status string
-	err := row.Scan(&e.ID, &snapshot, &e.Units, &e.EstimatedDays, &status, &e.PrincipalUserID, &e.CreatedAt, &e.UpdatedAt, &e.CustomerIDs, &e.WorkerIDs)
+	var materials []byte
+	err := row.Scan(&e.ID, &snapshot, &e.Units, &e.EstimatedDays, &status, &e.PrincipalUserID, &e.CreatedAt, &e.UpdatedAt, &e.CustomerIDs, &e.WorkerIDs, &materials)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Execution{}, domain.ErrNotFound
@@ -38,6 +47,9 @@ func scanExecution(row pgx.Row) (domain.Execution, error) {
 		return domain.Execution{}, err
 	}
 	if err := json.Unmarshal(snapshot, &e.ProjectSnapshot); err != nil {
+		return domain.Execution{}, err
+	}
+	if err := json.Unmarshal(materials, &e.Materials); err != nil {
 		return domain.Execution{}, err
 	}
 	e.Status = domain.Status(status)
@@ -50,6 +62,32 @@ func (r *Repo) Create(ctx context.Context, e domain.Execution) (domain.Execution
 		return domain.Execution{}, err
 	}
 	defer rollback()
+	itemIDs := make([]string, 0, len(e.Consumables))
+	required := make(map[string]quantity.Quantity, len(e.Consumables))
+	for _, material := range e.Consumables {
+		amount, scaleErr := domain.RequiredMaterialQuantity(material.QuantityPerUnit, e.Units)
+		if scaleErr != nil {
+			return domain.Execution{}, scaleErr
+		}
+		if _, exists := required[material.ItemID]; exists {
+			return domain.Execution{}, domain.ErrInvalidReservationAllocation
+		}
+		required[material.ItemID] = amount
+		itemIDs = append(itemIDs, material.ItemID)
+	}
+	sort.Strings(itemIDs)
+	for _, itemID := range itemIDs {
+		var kind string
+		if err := tx.QueryRow(ctx, `SELECT kind FROM items WHERE id=$1::uuid AND deleted_at IS NULL FOR UPDATE`, itemID).Scan(&kind); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.Execution{}, domain.ErrMaterialUnavailable
+			}
+			return domain.Execution{}, err
+		}
+		if kind != "consumable" {
+			return domain.Execution{}, domain.ErrMaterialUnavailable
+		}
+	}
 	customerRows, err := tx.Query(ctx, `SELECT id FROM customers WHERE id = ANY($1::BIGINT[]) AND active AND deleted_at IS NULL ORDER BY id FOR SHARE`, e.CustomerIDs)
 	if err != nil {
 		return domain.Execution{}, err
@@ -112,10 +150,25 @@ VALUES($1,$2,$3,$4,$5,$6) RETURNING id,created_at,updated_at`, e.ProjectID, snap
 			return domain.Execution{}, err
 		}
 	}
+	for _, itemID := range itemIDs {
+		if _, err = tx.Exec(ctx, `INSERT INTO manufacturing_execution_materials(execution_id,item_id,quantity_required)
+VALUES($1,$2::uuid,$3)`, e.ID, itemID, required[itemID]); err != nil {
+			return domain.Execution{}, err
+		}
+	}
+	for _, itemID := range itemIDs {
+		if _, err = tx.Exec(ctx, `SELECT rebalance_manufacturing_execution_materials($1::uuid)`, itemID); err != nil {
+			return domain.Execution{}, err
+		}
+	}
+	created, err := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, e.ID))
+	if err != nil {
+		return domain.Execution{}, err
+	}
 	if err = commit(); err != nil {
 		return domain.Execution{}, err
 	}
-	return e.Clone(), nil
+	return created, nil
 }
 
 func (r *Repo) Get(ctx context.Context, id int64) (domain.Execution, error) {

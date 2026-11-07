@@ -13,6 +13,8 @@ import (
 	"github.com/edgar/inventario/backend/internal/executions/app"
 	"github.com/edgar/inventario/backend/internal/executions/domain"
 	"github.com/edgar/inventario/backend/internal/platform/httpx"
+	"github.com/edgar/inventario/backend/internal/platform/quantity"
+	stockdomain "github.com/edgar/inventario/backend/internal/stock/domain"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -39,6 +41,8 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/start", h.start)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/pause", h.pause)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/resume", h.resume)
+			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials/{itemID}/deliver", h.deliverMaterial)
+			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials/{itemID}/return", h.returnMaterial)
 		})
 	})
 }
@@ -69,15 +73,28 @@ func executionID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 
 func writeError(w http.ResponseWriter, err error) {
 	var validation *domain.ValidationError
+	var stockValidation *stockdomain.ValidationError
 	switch {
 	case errors.As(err, &validation):
 		httpx.WriteFieldErrors(w, validation.Fields)
+	case errors.As(err, &stockValidation):
+		httpx.WriteFieldErrors(w, stockValidation.Fields)
 	case errors.Is(err, app.ErrProjectNotFound), errors.Is(err, domain.ErrNotFound):
 		httpx.WriteError(w, http.StatusNotFound, httpx.CodeNotFound, "execution or project not found")
 	case errors.Is(err, domain.ErrInactiveAssignment):
 		httpx.WriteError(w, http.StatusUnprocessableEntity, "invalid_assignment", "customers and assigned users must be active")
 	case errors.Is(err, domain.ErrInvalidState):
 		httpx.WriteError(w, http.StatusConflict, "invalid_execution_state", "execution cannot transition from its current state")
+	case errors.Is(err, stockdomain.ErrInsufficientStock), errors.Is(err, stockdomain.ErrReservationUnavailable):
+		httpx.WriteError(w, http.StatusConflict, "material_unavailable", "the execution does not have enough reserved material")
+	case errors.Is(err, stockdomain.ErrExecutionInactive):
+		httpx.WriteError(w, http.StatusConflict, "execution_not_active", "materials can only move for an active execution")
+	case errors.Is(err, stockdomain.ErrIdempotencyConflict):
+		httpx.WriteError(w, http.StatusConflict, "request_id_reused", "request_id was already used for a different material movement")
+	case errors.Is(err, stockdomain.ErrLocationNotFound):
+		httpx.WriteFieldErrors(w, map[string]string{"location_id": "location does not exist"})
+	case errors.Is(err, stockdomain.ErrInvalidInput), errors.Is(err, stockdomain.ErrNotApplicable):
+		httpx.WriteError(w, http.StatusUnprocessableEntity, "invalid_material_movement", "invalid execution material movement")
 	default:
 		slog.Error("execution error", "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, httpx.CodeInternal, "internal error")
@@ -153,6 +170,43 @@ func (h *Handler) transition(w http.ResponseWriter, r *http.Request, transition 
 		return
 	}
 	execution, err := transition(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, execution)
+}
+
+type materialMovementInput struct {
+	RequestID  string            `json:"request_id"`
+	Quantity   quantity.Quantity `json:"quantity"`
+	LocationID int64             `json:"location_id"`
+	Note       string            `json:"note"`
+}
+
+func (h *Handler) deliverMaterial(w http.ResponseWriter, r *http.Request) {
+	h.materialMovement(w, r, h.svc.DeliverMaterial)
+}
+
+func (h *Handler) returnMaterial(w http.ResponseWriter, r *http.Request) {
+	h.materialMovement(w, r, h.svc.ReturnMaterial)
+}
+
+func (h *Handler) materialMovement(w http.ResponseWriter, r *http.Request, move func(context.Context, int64, string, string, string, quantity.Quantity, int64, string) (domain.Execution, error)) {
+	executionID, ok := executionID(w, r)
+	if !ok {
+		return
+	}
+	principal, ok := httpx.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "authentication required")
+		return
+	}
+	var input materialMovementInput
+	if !decode(w, r, &input) {
+		return
+	}
+	execution, err := move(r.Context(), executionID, chi.URLParam(r, "itemID"), principal.UserID, input.RequestID, input.Quantity, input.LocationID, input.Note)
 	if err != nil {
 		writeError(w, err)
 		return
