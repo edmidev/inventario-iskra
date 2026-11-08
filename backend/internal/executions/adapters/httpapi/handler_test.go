@@ -10,6 +10,7 @@ import (
 	"github.com/edgar/inventario/backend/internal/executions/app"
 	"github.com/edgar/inventario/backend/internal/executions/domain"
 	"github.com/edgar/inventario/backend/internal/platform/httpx"
+	"github.com/edgar/inventario/backend/internal/platform/quantity"
 	projectdomain "github.com/edgar/inventario/backend/internal/projects/domain"
 	"github.com/go-chi/chi/v5"
 )
@@ -17,6 +18,9 @@ import (
 type routeRepo struct{}
 
 func (routeRepo) Create(context.Context, domain.Execution) (domain.Execution, error) {
+	return domain.Execution{}, nil
+}
+func (routeRepo) AddMaterialRequirement(context.Context, int64, string, string, quantity.Quantity, string) (domain.Execution, error) {
 	return domain.Execution{}, nil
 }
 func (routeRepo) Get(context.Context, int64) (domain.Execution, error) {
@@ -81,5 +85,23 @@ func TestExecutionCreationRequiresWritePermission(t *testing.T) {
 	routeHandler([]string{"executions:read"}).ServeHTTP(res, req)
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusForbidden, res.Body.String())
+	}
+}
+
+func TestAddingExecutionMaterialRequiresWritePermission(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/executions/1/materials", strings.NewReader(`{"request_id":"00000000-0000-4000-8000-000000000001","item_id":"00000000-0000-4000-8000-000000000002","quantity":1}`))
+	res := httptest.NewRecorder()
+	routeHandler([]string{"executions:read"}).ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusForbidden, res.Body.String())
+	}
+}
+
+func TestAddingExecutionMaterialAcceptsExecutionTotal(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/executions/1/materials", strings.NewReader(`{"request_id":"00000000-0000-4000-8000-000000000001","item_id":"00000000-0000-4000-8000-000000000002","quantity":2.5}`))
+	res := httptest.NewRecorder()
+	routeHandler([]string{"executions:write"}).ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusOK, res.Body.String())
 	}
 }

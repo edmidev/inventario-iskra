@@ -232,6 +232,145 @@ FROM items i LEFT JOIN manufacturing_execution_materials m ON m.item_id=i.id WHE
 	}
 }
 
+func TestRegistrationAddsSupplementalMaterialAsExecutionTotal(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(5000), quantity.Quantity(1250))
+	created, err := f.service.Create(f.ctx, executiondomain.CreateInput{
+		ProjectID: f.projectID, Units: 3, CustomerIDs: []int64{f.customerID}, PrincipalUserID: f.userID,
+		AdditionalMaterials: []executiondomain.AdditionalMaterial{{ItemID: f.itemID, Quantity: quantity.Quantity(750)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Materials) != 1 || created.Materials[0].RequiredQuantity != quantity.Quantity(4500) || created.Materials[0].ReservedQuantity != quantity.Quantity(4500) {
+		t.Fatalf("template demand should scale while supplemental quantity remains a total: %+v", created.Materials)
+	}
+	template, err := f.templates.Get(f.ctx, f.projectID)
+	if err != nil || template.Consumables[0].Quantity != quantity.Quantity(1250) {
+		t.Fatalf("execution addition mutated project template: template=%+v err=%v", template, err)
+	}
+}
+
+func TestActiveExecutionCanAddMaterialAndReplayIdempotently(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(4000), quantity.Quantity(1000))
+	older := f.create(3)
+	newer := f.create(3)
+	if older.Materials[0].ReservedQuantity != quantity.Quantity(3000) || newer.Materials[0].ReservedQuantity != quantity.Quantity(1000) {
+		t.Fatalf("fixture did not allocate stock FIFO: older=%+v newer=%+v", older.Materials, newer.Materials)
+	}
+	if _, err := f.service.Start(f.ctx, newer.ID); err != nil {
+		t.Fatal(err)
+	}
+	requestID := "00000000-0000-4000-8000-000000000021"
+	added, err := f.service.AddMaterialRequirement(f.ctx, newer.ID, f.userID, executiondomain.AddMaterialInput{RequestID: requestID, ItemID: f.itemID, Quantity: quantity.Quantity(1000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added.Materials) != 1 || added.Materials[0].RequiredQuantity != quantity.Quantity(4000) || added.Materials[0].ReservedQuantity != quantity.Quantity(1000) || added.Materials[0].DeficitQuantity != quantity.Quantity(3000) {
+		t.Fatalf("active addition must increase total demand and preserve FIFO: %+v", added.Materials)
+	}
+	var duplicateErrors = make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, addErr := f.service.AddMaterialRequirement(f.ctx, newer.ID, f.userID, executiondomain.AddMaterialInput{RequestID: "00000000-0000-4000-8000-000000000022", ItemID: f.itemID, Quantity: quantity.Quantity(500)})
+			duplicateErrors <- addErr
+		}()
+	}
+	wg.Wait()
+	close(duplicateErrors)
+	for addErr := range duplicateErrors {
+		if addErr != nil {
+			t.Fatalf("concurrent identical additions: %v", addErr)
+		}
+	}
+	newer, err = f.service.Get(f.ctx, newer.ID)
+	if err != nil || newer.Materials[0].RequiredQuantity != quantity.Quantity(4500) {
+		t.Fatalf("duplicate retry changed requirement more than once: %+v err=%v", newer.Materials, err)
+	}
+	if _, err := f.service.AddMaterialRequirement(f.ctx, newer.ID, f.userID, executiondomain.AddMaterialInput{RequestID: "00000000-0000-4000-8000-000000000022", ItemID: f.itemID, Quantity: quantity.Quantity(750)}); !errors.Is(err, stockdomain.ErrIdempotencyConflict) {
+		t.Fatalf("changed request payload must conflict: %v", err)
+	}
+	var operationCount int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_material_additions WHERE request_id=$1::uuid`, "00000000-0000-4000-8000-000000000022").Scan(&operationCount); err != nil || operationCount != 1 {
+		t.Fatalf("stored addition count = %d, want 1; err=%v", operationCount, err)
+	}
+	sqlDB, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(f.ctx, 17); err == nil {
+		t.Fatal("migration rollback removed supplemental material idempotency history")
+	}
+	var retained int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_material_additions WHERE request_id=$1::uuid`, "00000000-0000-4000-8000-000000000022").Scan(&retained); err != nil || retained != 1 {
+		t.Fatalf("rejected rollback changed addition history: count=%d err=%v", retained, err)
+	}
+}
+
+type supplementalMaterialFixture struct {
+	pool       *pgxpool.Pool
+	ctx        context.Context
+	userID     string
+	customerID int64
+	itemID     string
+	projectID  int64
+	templates  *projectpg.Repo
+	service    *executionapp.Service
+}
+
+func setupSupplementalMaterialFixture(t *testing.T, stockQty, perUnit quantity.Quantity) supplementalMaterialFixture {
+	t.Helper()
+	pool, ctx := setupExecutions(t)
+	var userID string
+	if err := pool.QueryRow(ctx, `INSERT INTO users(name,email,password_hash,role) VALUES('Supplemental','supplemental-' || gen_random_uuid()::text || '@example.com','x','operator') RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	var customerID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO customers(name) VALUES('Supplemental customer ' || gen_random_uuid()::text) RETURNING id`).Scan(&customerID); err != nil {
+		t.Fatal(err)
+	}
+	code := fmt.Sprintf("S%07X", time.Now().UnixNano()%0x10000000)
+	catalog := catalogpg.New(pool)
+	category, err := catalogapp.NewService(catalog.Categories(), catalog.Locations(), catalog.Items()).CreateCategory(ctx, "Supplemental "+code, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := catalogapp.NewService(catalog.Categories(), catalog.Locations(), catalog.Items()).CreateLocation(ctx, "Supplemental "+code, catalogdomain.LocationStorage, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unit := "kg"
+	item, err := catalogapp.NewService(catalog.Categories(), catalog.Locations(), catalog.Items()).CreateItem(ctx, catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{Description: "Supplemental " + code, CategoryID: category.ID, Kind: catalogdomain.KindConsumable, Unit: &unit}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	userStock := stockapp.NewService(stockpg.New(pool))
+	if _, err := userStock.Record(ctx, item.ID, userID, stockdomain.Request{Type: stockdomain.TypeIn, Qty: stockQty, LocationID: &location.ID}); err != nil {
+		t.Fatal(err)
+	}
+	templates := projectpg.New(pool)
+	project := &projectdomain.Project{Input: projectdomain.Input{Name: "Supplemental " + code, Characteristics: []string{}, Consumables: []projectdomain.Material{{ItemID: item.ID, Quantity: perUnit}}, Tools: []string{}, EstimatedDays: 1}}
+	if err := templates.Create(ctx, project); err != nil {
+		t.Fatal(err)
+	}
+	return supplementalMaterialFixture{pool: pool, ctx: ctx, userID: userID, customerID: customerID, itemID: item.ID, projectID: project.ID, templates: templates, service: executionapp.NewService(executionpg.New(pool), templates, userStock)}
+}
+
+func (f supplementalMaterialFixture) create(units int) executiondomain.Execution {
+	created, err := f.service.Create(f.ctx, executiondomain.CreateInput{ProjectID: f.projectID, Units: units, CustomerIDs: []int64{f.customerID}, PrincipalUserID: f.userID})
+	if err != nil {
+		panic(err)
+	}
+	return created
+}
+
 func TestCreateStoresIndependentSnapshotAndAllowsPartialStart(t *testing.T) {
 	pool, ctx := setupExecutions(t)
 	var principal, worker string

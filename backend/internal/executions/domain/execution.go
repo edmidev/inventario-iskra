@@ -11,11 +11,12 @@ import (
 )
 
 var (
-	ErrInvalidInput        = errors.New("invalid execution input")
-	ErrInvalidState        = errors.New("invalid execution state transition")
-	ErrNotFound            = errors.New("execution not found")
-	ErrInactiveAssignment  = errors.New("execution assignment must reference active users and customers")
-	ErrMaterialUnavailable = errors.New("execution material must reference an active consumable item")
+	ErrInvalidInput           = errors.New("invalid execution input")
+	ErrInvalidState           = errors.New("invalid execution state transition")
+	ErrNotFound               = errors.New("execution not found")
+	ErrInactiveAssignment     = errors.New("execution assignment must reference active users and customers")
+	ErrMaterialUnavailable    = errors.New("execution material must reference an active consumable item")
+	ErrMaterialAdditionClosed = errors.New("execution no longer accepts material additions")
 )
 
 type ValidationError struct{ Fields map[string]string }
@@ -38,6 +39,41 @@ type MaterialSnapshot struct {
 	QuantityPerUnit quantity.Quantity `json:"quantity_per_unit"`
 }
 
+// AdditionalMaterial is an execution-specific total, not a per-unit quantity.
+type AdditionalMaterial struct {
+	ItemID   string            `json:"item_id"`
+	Quantity quantity.Quantity `json:"quantity"`
+}
+
+type AddMaterialInput struct {
+	RequestID string            `json:"request_id"`
+	ItemID    string            `json:"item_id"`
+	Quantity  quantity.Quantity `json:"quantity"`
+}
+
+func (in AddMaterialInput) Normalize() (AddMaterialInput, error) {
+	in.RequestID = strings.TrimSpace(in.RequestID)
+	in.ItemID = strings.TrimSpace(in.ItemID)
+	fields := map[string]string{}
+	if !validUUID(in.RequestID) {
+		fields["request_id"] = "must be a valid UUID"
+	}
+	if !validUUID(in.ItemID) {
+		fields["item_id"] = "must be a valid inventory item id"
+	}
+	in.RequestID = strings.ToLower(in.RequestID)
+	in.ItemID = strings.ToLower(in.ItemID)
+	if in.Quantity <= 0 {
+		fields["quantity"] = "must be greater than zero"
+	} else if _, err := RequiredMaterialQuantity(in.Quantity, 1); err != nil {
+		fields["quantity"] = "exceeds the supported stock limit"
+	}
+	if len(fields) > 0 {
+		return AddMaterialInput{}, &ValidationError{Fields: fields}
+	}
+	return in, nil
+}
+
 type ProjectSnapshot struct {
 	ProjectID       int64              `json:"project_id"`
 	Name            string             `json:"project_name"`
@@ -49,12 +85,13 @@ type ProjectSnapshot struct {
 }
 
 type CreateInput struct {
-	ProjectID       int64    `json:"project_id"`
-	Units           int      `json:"units"`
-	EstimatedDays   int      `json:"estimated_days,omitempty"`
-	CustomerIDs     []int64  `json:"customer_ids"`
-	PrincipalUserID string   `json:"principal_user_id"`
-	WorkerIDs       []string `json:"worker_ids"`
+	ProjectID           int64                `json:"project_id"`
+	Units               int                  `json:"units"`
+	EstimatedDays       int                  `json:"estimated_days,omitempty"`
+	CustomerIDs         []int64              `json:"customer_ids"`
+	PrincipalUserID     string               `json:"principal_user_id"`
+	WorkerIDs           []string             `json:"worker_ids"`
+	AdditionalMaterials []AdditionalMaterial `json:"additional_materials,omitempty"`
 }
 
 type Filter struct {
@@ -116,24 +153,70 @@ func (in CreateInput) Normalize() (CreateInput, error) {
 		}
 		seenUsers[id] = true
 	}
+	in.AdditionalMaterials = append([]AdditionalMaterial{}, in.AdditionalMaterials...)
+	materialIndexes := map[string]int{}
+	materials := make([]AdditionalMaterial, 0, len(in.AdditionalMaterials))
+	for i, material := range in.AdditionalMaterials {
+		material.ItemID = strings.ToLower(strings.TrimSpace(material.ItemID))
+		field := fmt.Sprintf("additional_materials[%d]", i)
+		if !validUUID(material.ItemID) {
+			fields[field+".item_id"] = "must be a valid inventory item id"
+		}
+		if material.Quantity <= 0 {
+			fields[field+".quantity"] = "must be greater than zero"
+		} else if _, err := RequiredMaterialQuantity(material.Quantity, 1); err != nil {
+			fields[field+".quantity"] = "exceeds the supported stock limit"
+		}
+		if index, exists := materialIndexes[material.ItemID]; exists {
+			total := materials[index].Quantity + material.Quantity
+			if _, err := RequiredMaterialQuantity(total, 1); err != nil {
+				fields[field+".quantity"] = "combined quantity exceeds the supported stock limit"
+			} else {
+				materials[index].Quantity = total
+			}
+			continue
+		}
+		materialIndexes[material.ItemID] = len(materials)
+		materials = append(materials, material)
+	}
+	in.AdditionalMaterials = materials
 	if len(fields) > 0 {
 		return CreateInput{}, &ValidationError{Fields: fields}
 	}
 	return in, nil
 }
 
+func validUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, char := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if char != '-' {
+				return false
+			}
+			continue
+		}
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 type Execution struct {
 	ID int64 `json:"id"`
 	ProjectSnapshot
-	Units           int                  `json:"units"`
-	EstimatedDays   int                  `json:"estimated_days"`
-	Materials       []MaterialAllocation `json:"materials"`
-	CustomerIDs     []int64              `json:"customer_ids"`
-	PrincipalUserID string               `json:"principal_user_id"`
-	WorkerIDs       []string             `json:"worker_ids"`
-	Status          Status               `json:"status"`
-	CreatedAt       time.Time            `json:"created_at"`
-	UpdatedAt       time.Time            `json:"updated_at"`
+	Units               int                  `json:"units"`
+	EstimatedDays       int                  `json:"estimated_days"`
+	Materials           []MaterialAllocation `json:"materials"`
+	AdditionalMaterials []AdditionalMaterial `json:"-"`
+	CustomerIDs         []int64              `json:"customer_ids"`
+	PrincipalUserID     string               `json:"principal_user_id"`
+	WorkerIDs           []string             `json:"worker_ids"`
+	Status              Status               `json:"status"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
 }
 
 // MaterialAllocation is the current fulfillment state for a snapshotted
@@ -182,7 +265,8 @@ func NewExecution(input CreateInput, snapshot ProjectSnapshot) (Execution, error
 	return Execution{
 		ProjectSnapshot: snapshot,
 		Units:           in.Units, EstimatedDays: days,
-		CustomerIDs: in.CustomerIDs, PrincipalUserID: in.PrincipalUserID,
+		AdditionalMaterials: in.AdditionalMaterials,
+		CustomerIDs:         in.CustomerIDs, PrincipalUserID: in.PrincipalUserID,
 		WorkerIDs: in.WorkerIDs, Status: StatusRegistered,
 	}, nil
 }
@@ -218,5 +302,6 @@ func (e Execution) Clone() Execution {
 	e.CustomerIDs = append([]int64{}, e.CustomerIDs...)
 	e.WorkerIDs = append([]string{}, e.WorkerIDs...)
 	e.Materials = append([]MaterialAllocation{}, e.Materials...)
+	e.AdditionalMaterials = append([]AdditionalMaterial{}, e.AdditionalMaterials...)
 	return e
 }

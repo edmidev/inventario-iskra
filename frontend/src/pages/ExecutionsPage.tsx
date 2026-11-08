@@ -8,9 +8,9 @@ import { Sheet } from "../components/molecules/Sheet";
 import { useToast } from "../components/molecules/Toast";
 import { useSession } from "../features/auth/session";
 import { useCustomers } from "../features/customers/api/customers";
-import { useAssignableUsers, useCreateExecution, useExecutions, useMoveExecutionMaterial, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
+import { useAddExecutionMaterial, useAssignableUsers, useCreateExecution, useExecutions, useMoveExecutionMaterial, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
 import { useLocations } from "../features/catalog/api/catalog";
-import { useProjects, type Project } from "../features/projects/api/projects";
+import { useProjects, useTemplateItems, type Project } from "../features/projects/api/projects";
 import { describeError } from "../lib/api/errors";
 
 const statusLabels: Record<Execution["status"], string> = {
@@ -85,6 +85,50 @@ function MaterialMovementForm({ executionID, material }: { executionID: number; 
   </form>;
 }
 
+function AddExecutionMaterialForm({ executionID }: { executionID: number }) {
+  const [itemID, setItemID] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [requestID, setRequestID] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const items = useTemplateItems("consumable", search);
+  const add = useAddExecutionMaterial(executionID);
+  const toast = useToast();
+  const rows = items.data?.pages.flatMap((page) => page.data) ?? [];
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const requestId = requestID ?? crypto.randomUUID();
+    if (!requestID) setRequestID(requestId);
+    try {
+      await add.mutateAsync({ request_id: requestId, item_id: itemID, quantity: Number(quantity) });
+      toast.success("Material adicional agregado a la ejecución.");
+      setItemID("");
+      setQuantity("");
+      setRequestID(null);
+    } catch (error) {
+      toast.error(describeError(error));
+    }
+  }
+
+  return <form onSubmit={submit} className="mt-3 grid gap-2 rounded-xl border border-dashed border-line p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+    <label className="flex flex-col gap-1 text-xs font-medium sm:col-span-3">Buscar consumible
+      <input value={search} onChange={(event) => setSearch(event.target.value)} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm" />
+    </label>
+    <label className="flex flex-col gap-1 text-xs font-medium">Consumible adicional
+      <select required value={itemID} onChange={(event) => { setItemID(event.target.value); setRequestID(null); }} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm">
+        <option value="">Seleccioná un insumo</option>
+        {rows.map((item) => <option key={item.id} value={item.id}>{item.description}{item.unit ? ` · ${item.unit}` : ""}</option>)}
+      </select>
+    </label>
+    <label className="flex flex-col gap-1 text-xs font-medium">Cantidad total adicional
+      <input required type="number" min="0.001" step="0.001" value={quantity} onChange={(event) => { setQuantity(event.target.value); setRequestID(null); }} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm" />
+    </label>
+    <Button type="submit" disabled={add.isPending || !itemID || !quantity}>{add.isPending ? "Guardando…" : "Agregar insumo"}</Button>
+    {items.hasNextPage && <Button type="button" disabled={items.isFetchingNextPage} onClick={() => void items.fetchNextPage()} className="sm:col-span-3">Cargar más consumibles</Button>}
+    {items.isError && <p className="text-sm text-bad sm:col-span-3">No se pudieron cargar los consumibles.</p>}
+  </form>;
+}
+
 function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite: boolean }) {
   return <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -99,7 +143,7 @@ function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite
       {execution.characteristics.length > 0 && <ul className="mt-2 list-inside list-disc">{execution.characteristics.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ul>}
       <p className="mt-2">{execution.consumables.length} consumibles · {execution.tools.length} herramientas requeridas</p>
     </details>
-    {execution.materials.length > 0 && <section className="rounded-xl bg-sunken p-3">
+    {(execution.materials.length > 0 || (canWrite && ["registered", "in_progress", "paused"].includes(execution.status))) && <section className="rounded-xl bg-sunken p-3">
       <h3 className="font-semibold">Insumos de la ejecución</h3>
       <ul className="mt-2 flex flex-col gap-3">
         {execution.materials.map((material) => <li key={material.item_id} className="rounded-xl border border-line bg-surface p-3 text-sm">
@@ -109,6 +153,7 @@ function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite
           {canWrite && (execution.status === "registered" || execution.status === "in_progress" || execution.status === "paused") && <MaterialMovementForm executionID={execution.id} material={material} />}
         </li>)}
       </ul>
+      {canWrite && ["registered", "in_progress", "paused"].includes(execution.status) && <AddExecutionMaterialForm executionID={execution.id} />}
     </section>}
     {canWrite && <div className="flex gap-2"><ExecutionActions execution={execution} /></div>}
   </li>;
@@ -120,14 +165,18 @@ function CreateExecutionSheet({ open, onOpenChange }: { open: boolean; onOpenCha
   const [selectedCustomerIDs, setSelectedCustomerIDs] = useState<number[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [estimatedDays, setEstimatedDays] = useState("");
+  const [additionalMaterials, setAdditionalMaterials] = useState<Array<{ rowID: number; itemID: string; quantity: string }>>([]);
+  const [consumableSearch, setConsumableSearch] = useState("");
   const create = useCreateExecution();
   const toast = useToast();
   const projects = useProjects(projectSearch);
+  const consumables = useTemplateItems("consumable", consumableSearch);
   const customers = useCustomers({ q: customerSearch, active: "true" });
   const users = useAssignableUsers();
   const projectRows = projects.data?.pages.flatMap((page) => page.data) ?? [];
   const customerRows = customers.data?.pages.flatMap((page) => page.data) ?? [];
   const userRows = users.data ?? [];
+  const consumableRows = consumables.data?.pages.flatMap((page) => page.data) ?? [];
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -144,6 +193,7 @@ function CreateExecutionSheet({ open, onOpenChange }: { open: boolean; onOpenCha
         customer_ids: selectedCustomerIDs,
         principal_user_id: String(form.get("principal_user_id") ?? ""),
         worker_ids: form.getAll("worker_ids").map(String),
+        ...(additionalMaterials.length > 0 ? { additional_materials: additionalMaterials.map(({ itemID, quantity }) => ({ item_id: itemID, quantity: Number(quantity) })) } : {}),
       });
       toast.success("Ejecución registrada con un snapshot independiente del proyecto.");
       onOpenChange(false);
@@ -176,6 +226,27 @@ function CreateExecutionSheet({ open, onOpenChange }: { open: boolean; onOpenCha
           <input name="estimated_days" type="number" min="1" max="36500" step="1" value={estimatedDays} onChange={(event) => setEstimatedDays(event.target.value)} className="min-h-11 rounded-xl border border-line bg-sunken px-3" />
         </label>
       </div>
+      <fieldset className="flex flex-col gap-2 rounded-xl border border-line p-3">
+        <legend className="px-1 text-sm font-semibold">Consumibles adicionales (cantidades totales)</legend>
+        <label className="flex flex-col gap-1 text-xs font-medium">Buscar consumible
+          <input value={consumableSearch} onChange={(event) => setConsumableSearch(event.target.value)} className="min-h-10 rounded-lg border border-line bg-sunken px-2 text-sm" />
+        </label>
+        {additionalMaterials.map((material, index) => <div key={material.rowID} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <label className="flex flex-col gap-1 text-xs font-medium">Insumo adicional {index + 1}
+            <select required aria-label={`Insumo adicional ${index + 1}`} value={material.itemID} onChange={(event) => setAdditionalMaterials((current) => current.map((row) => row.rowID === material.rowID ? { ...row, itemID: event.target.value } : row))} className="min-h-10 rounded-lg border border-line bg-sunken px-2 text-sm">
+              <option value="">Seleccioná un insumo</option>
+              {consumableRows.map((item) => <option key={item.id} value={item.id}>{item.description}{item.unit ? ` · ${item.unit}` : ""}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium">Cantidad total {index + 1}
+            <input required aria-label={`Cantidad total ${index + 1}`} type="number" min="0.001" step="0.001" value={material.quantity} onChange={(event) => setAdditionalMaterials((current) => current.map((row) => row.rowID === material.rowID ? { ...row, quantity: event.target.value } : row))} className="min-h-10 rounded-lg border border-line bg-sunken px-2 text-sm" />
+          </label>
+          <Button type="button" onClick={() => setAdditionalMaterials((current) => current.filter((row) => row.rowID !== material.rowID))}>Quitar {index + 1}</Button>
+        </div>)}
+        <Button type="button" onClick={() => setAdditionalMaterials((current) => [...current, { rowID: current.reduce((max, row) => Math.max(max, row.rowID), 0) + 1, itemID: "", quantity: "" }])}>Agregar consumible</Button>
+        {consumables.hasNextPage && <Button type="button" disabled={consumables.isFetchingNextPage} onClick={() => void consumables.fetchNextPage()}>Cargar más consumibles</Button>}
+        {consumables.isError && <p className="text-sm text-bad">No se pudieron cargar los consumibles.</p>}
+      </fieldset>
       <label className="flex flex-col gap-1 text-sm font-medium">Buscar clientes
         <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} className="min-h-11 rounded-xl border border-line bg-sunken px-3" placeholder="Nombre del cliente" />
       </label>

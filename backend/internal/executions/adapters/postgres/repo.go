@@ -11,6 +11,7 @@ import (
 	"github.com/edgar/inventario/backend/internal/executions/domain"
 	"github.com/edgar/inventario/backend/internal/platform/db"
 	"github.com/edgar/inventario/backend/internal/platform/quantity"
+	stockdomain "github.com/edgar/inventario/backend/internal/stock/domain"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -62,18 +63,24 @@ func (r *Repo) Create(ctx context.Context, e domain.Execution) (domain.Execution
 		return domain.Execution{}, err
 	}
 	defer rollback()
-	itemIDs := make([]string, 0, len(e.Consumables))
+	itemIDs := make([]string, 0, len(e.Consumables)+len(e.AdditionalMaterials))
 	required := make(map[string]quantity.Quantity, len(e.Consumables))
 	for _, material := range e.Consumables {
 		amount, scaleErr := domain.RequiredMaterialQuantity(material.QuantityPerUnit, e.Units)
 		if scaleErr != nil {
 			return domain.Execution{}, scaleErr
 		}
-		if _, exists := required[material.ItemID]; exists {
-			return domain.Execution{}, domain.ErrInvalidReservationAllocation
+		if err := addRequiredQuantity(required, material.ItemID, amount); err != nil {
+			return domain.Execution{}, err
 		}
-		required[material.ItemID] = amount
-		itemIDs = append(itemIDs, material.ItemID)
+	}
+	for _, material := range e.AdditionalMaterials {
+		if err := addRequiredQuantity(required, material.ItemID, material.Quantity); err != nil {
+			return domain.Execution{}, err
+		}
+	}
+	for itemID := range required {
+		itemIDs = append(itemIDs, itemID)
 	}
 	sort.Strings(itemIDs)
 	for _, itemID := range itemIDs {
@@ -162,6 +169,89 @@ VALUES($1,$2::uuid,$3)`, e.ID, itemID, required[itemID]); err != nil {
 		}
 	}
 	created, err := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, e.ID))
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	if err = commit(); err != nil {
+		return domain.Execution{}, err
+	}
+	return created, nil
+}
+
+func addRequiredQuantity(required map[string]quantity.Quantity, itemID string, amount quantity.Quantity) error {
+	total := required[itemID] + amount
+	if total <= 0 {
+		return domain.ErrInvalidReservationAllocation
+	}
+	if _, err := domain.RequiredMaterialQuantity(total, 1); err != nil {
+		return domain.ErrInvalidReservationAllocation
+	}
+	required[itemID] = total
+	return nil
+}
+
+func (r *Repo) AddMaterialRequirement(ctx context.Context, executionID int64, requestID, itemID string, amount quantity.Quantity, fingerprint string) (domain.Execution, error) {
+	tx, commit, rollback, err := db.Begin(ctx, r.pool)
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	defer rollback()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, requestID); err != nil {
+		return domain.Execution{}, err
+	}
+	var kind string
+	err = tx.QueryRow(ctx, `SELECT kind FROM items WHERE id=$1::uuid AND deleted_at IS NULL FOR UPDATE`, itemID).Scan(&kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Execution{}, domain.ErrMaterialUnavailable
+	}
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	if kind != "consumable" {
+		return domain.Execution{}, domain.ErrMaterialUnavailable
+	}
+	var priorFingerprint string
+	err = tx.QueryRow(ctx, `SELECT fingerprint FROM manufacturing_execution_material_additions WHERE request_id=$1::uuid`, requestID).Scan(&priorFingerprint)
+	if err == nil {
+		if priorFingerprint != fingerprint {
+			return domain.Execution{}, stockdomain.ErrIdempotencyConflict
+		}
+		current, scanErr := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, executionID))
+		if scanErr != nil {
+			return domain.Execution{}, scanErr
+		}
+		if err = commit(); err != nil {
+			return domain.Execution{}, err
+		}
+		return current, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Execution{}, err
+	}
+	var status string
+	err = tx.QueryRow(ctx, `SELECT status FROM manufacturing_executions WHERE id=$1 FOR UPDATE`, executionID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Execution{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	if status != string(domain.StatusRegistered) && status != string(domain.StatusInProgress) && status != string(domain.StatusPaused) {
+		return domain.Execution{}, domain.ErrMaterialAdditionClosed
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO manufacturing_execution_materials(execution_id,item_id,quantity_required)
+VALUES($1,$2::uuid,$3)
+ON CONFLICT (execution_id,item_id) DO UPDATE SET quantity_required=manufacturing_execution_materials.quantity_required+EXCLUDED.quantity_required`, executionID, itemID, amount); err != nil {
+		return domain.Execution{}, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO manufacturing_execution_material_additions(request_id,execution_id,item_id,quantity,fingerprint)
+VALUES($1::uuid,$2,$3::uuid,$4,$5)`, requestID, executionID, itemID, amount, fingerprint); err != nil {
+		return domain.Execution{}, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT rebalance_manufacturing_execution_materials($1::uuid)`, itemID); err != nil {
+		return domain.Execution{}, err
+	}
+	created, err := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, executionID))
 	if err != nil {
 		return domain.Execution{}, err
 	}

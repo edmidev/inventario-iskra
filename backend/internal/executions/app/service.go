@@ -3,6 +3,9 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -21,6 +24,7 @@ type TemplateReader interface {
 
 type Repository interface {
 	Create(context.Context, domain.Execution) (domain.Execution, error)
+	AddMaterialRequirement(context.Context, int64, string, string, quantity.Quantity, string) (domain.Execution, error)
 	Get(context.Context, int64) (domain.Execution, error)
 	List(context.Context, domain.Filter) ([]domain.Execution, int, error)
 	Transition(context.Context, int64, domain.Status, domain.Status) (domain.Execution, error)
@@ -73,6 +77,27 @@ func (s *Service) Create(ctx context.Context, input domain.CreateInput) (domain.
 		return domain.Execution{}, err
 	}
 	return s.repo.Create(ctx, execution)
+}
+
+func (s *Service) AddMaterialRequirement(ctx context.Context, executionID int64, userID string, input domain.AddMaterialInput) (domain.Execution, error) {
+	if executionID < 1 || strings.TrimSpace(userID) == "" {
+		return domain.Execution{}, &domain.ValidationError{Fields: map[string]string{"execution_id": "execution and authenticated user are required"}}
+	}
+	normalized, err := input.Normalize()
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	serialized, err := json.Marshal(struct {
+		ExecutionID int64
+		UserID      string
+		ItemID      string
+		Quantity    quantity.Quantity
+	}{executionID, userID, normalized.ItemID, normalized.Quantity})
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	fingerprint := sha256.Sum256(serialized)
+	return s.repo.AddMaterialRequirement(ctx, executionID, normalized.RequestID, normalized.ItemID, normalized.Quantity, hex.EncodeToString(fingerprint[:]))
 }
 
 func (s *Service) Get(ctx context.Context, id int64) (domain.Execution, error) {

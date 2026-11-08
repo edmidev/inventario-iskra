@@ -3,6 +3,8 @@ package domain
 import (
 	"errors"
 	"testing"
+
+	"github.com/edgar/inventario/backend/internal/platform/quantity"
 )
 
 func TestCreateInputNormalize(t *testing.T) {
@@ -45,6 +47,46 @@ func TestCreateInputNormalize(t *testing.T) {
 	}
 }
 
+func TestCreateInputMergesSupplementalTotalsByItem(t *testing.T) {
+	itemID := "00000000-0000-4a00-8000-000000000098"
+	input := CreateInput{
+		ProjectID: 4, Units: 5, CustomerIDs: []int64{8}, PrincipalUserID: "user-a",
+		AdditionalMaterials: []AdditionalMaterial{{ItemID: itemID, Quantity: quantity.Quantity(250)}, {ItemID: "00000000-0000-4A00-8000-000000000098", Quantity: quantity.Quantity(750)}},
+	}
+	normalized, err := input.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalized.AdditionalMaterials) != 1 || normalized.AdditionalMaterials[0].Quantity != quantity.Quantity(1000) {
+		t.Fatalf("same-item additions should combine without unit scaling: %+v", normalized.AdditionalMaterials)
+	}
+	if normalized.AdditionalMaterials[0].ItemID != itemID {
+		t.Fatalf("item UUID should be canonical lowercase: %q", normalized.AdditionalMaterials[0].ItemID)
+	}
+}
+
+func TestAddMaterialInputRequiresPositiveTotalAndUUIDs(t *testing.T) {
+	_, err := (AddMaterialInput{RequestID: "not-a-uuid", ItemID: "not-a-uuid", Quantity: 0}).Normalize()
+	var validation *ValidationError
+	if !errors.As(err, &validation) || len(validation.Fields) != 3 {
+		t.Fatalf("Normalize() error = %v, want request/item UUID and positive total field errors", err)
+	}
+}
+
+func TestAddMaterialInputCanonicalizesUUIDs(t *testing.T) {
+	input, err := (AddMaterialInput{
+		RequestID: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+		ItemID:    "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB",
+		Quantity:  1,
+	}).Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.RequestID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || input.ItemID != "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" {
+		t.Fatalf("UUIDs should be canonical lowercase: %+v", input)
+	}
+}
+
 func TestExecutionSnapshotDoesNotAliasTemplate(t *testing.T) {
 	template := ProjectSnapshot{
 		ProjectID: 4, Name: "Marmita", Description: "Acero inoxidable",
@@ -75,5 +117,23 @@ func TestExecutionCanStartBeforeMaterialsAreAvailable(t *testing.T) {
 	}
 	if e.Status != StatusInProgress {
 		t.Fatalf("status = %q, want %q", e.Status, StatusInProgress)
+	}
+}
+
+func TestSupplementalMaterialQuantityIsExecutionTotal(t *testing.T) {
+	template := ProjectSnapshot{
+		ProjectID: 4, Name: "Marmita", EstimatedDays: 12,
+		Consumables: []MaterialSnapshot{{ItemID: "item-template", QuantityPerUnit: 1000}},
+	}
+	input := CreateInput{
+		ProjectID: 4, Units: 3, CustomerIDs: []int64{8}, PrincipalUserID: "user-a",
+		AdditionalMaterials: []AdditionalMaterial{{ItemID: "00000000-0000-4000-8000-000000000099", Quantity: 1250}},
+	}
+	execution, err := NewExecution(input, template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Units != 3 || len(execution.AdditionalMaterials) != 1 || execution.AdditionalMaterials[0].Quantity != 1250 {
+		t.Fatalf("supplemental quantity must remain a total for the execution: %+v", execution)
 	}
 }

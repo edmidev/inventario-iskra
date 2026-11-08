@@ -25,6 +25,10 @@ func (f *executionRepoFake) Create(_ context.Context, e domain.Execution) (domai
 	return f.saved, nil
 }
 
+func (f *executionRepoFake) AddMaterialRequirement(context.Context, int64, string, string, quantity.Quantity, string) (domain.Execution, error) {
+	return domain.Execution{}, nil
+}
+
 func (f *executionRepoFake) Get(context.Context, int64) (domain.Execution, error) {
 	return domain.Execution{}, nil
 }
@@ -76,5 +80,24 @@ func TestCreateAllowsExecutionDurationOverride(t *testing.T) {
 	}
 	if got.EstimatedDays != 7 {
 		t.Fatalf("estimated days = %d, want override 7", got.EstimatedDays)
+	}
+}
+
+func TestCreateCopiesSupplementalMaterialsWithoutScaling(t *testing.T) {
+	template := projectdomain.Project{ID: 5, Input: projectdomain.Input{
+		Name: "Marmita", EstimatedDays: 12,
+		Consumables: []projectdomain.Material{{ItemID: "00000000-0000-4000-8000-000000000010", Quantity: 1250}},
+	}}
+	repo := &executionRepoFake{}
+	svc := NewService(repo, templateReaderFake{project: template})
+	_, err := svc.Create(context.Background(), domain.CreateInput{
+		ProjectID: 5, Units: 4, CustomerIDs: []int64{9}, PrincipalUserID: "user-a",
+		AdditionalMaterials: []domain.AdditionalMaterial{{ItemID: "00000000-0000-4000-8000-000000000011", Quantity: 750}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.saved.Units != 4 || len(repo.saved.AdditionalMaterials) != 1 || repo.saved.AdditionalMaterials[0].Quantity != 750 {
+		t.Fatalf("supplemental quantity was not retained as an execution total: %+v", repo.saved)
 	}
 }
