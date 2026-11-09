@@ -17,6 +17,8 @@ var (
 	ErrInactiveAssignment     = errors.New("execution assignment must reference active users and customers")
 	ErrMaterialUnavailable    = errors.New("execution material must reference an active consumable item")
 	ErrMaterialAdditionClosed = errors.New("execution no longer accepts material additions")
+	ErrToolUnavailable        = errors.New("execution tool must reference an inventory asset")
+	ErrToolAdditionClosed     = errors.New("execution no longer accepts tool additions")
 )
 
 type ValidationError struct{ Fields map[string]string }
@@ -49,6 +51,27 @@ type AddMaterialInput struct {
 	RequestID string            `json:"request_id"`
 	ItemID    string            `json:"item_id"`
 	Quantity  quantity.Quantity `json:"quantity"`
+}
+
+type AddToolInput struct {
+	RequestID string `json:"request_id"`
+	ItemID    string `json:"item_id"`
+}
+
+func (in AddToolInput) Normalize() (AddToolInput, error) {
+	in.RequestID = strings.ToLower(strings.TrimSpace(in.RequestID))
+	in.ItemID = strings.ToLower(strings.TrimSpace(in.ItemID))
+	fields := map[string]string{}
+	if !validUUID(in.RequestID) {
+		fields["request_id"] = "must be a valid UUID"
+	}
+	if !validUUID(in.ItemID) {
+		fields["item_id"] = "must be a valid inventory item id"
+	}
+	if len(fields) > 0 {
+		return AddToolInput{}, &ValidationError{Fields: fields}
+	}
+	return in, nil
 }
 
 func (in AddMaterialInput) Normalize() (AddMaterialInput, error) {
@@ -92,6 +115,7 @@ type CreateInput struct {
 	PrincipalUserID     string               `json:"principal_user_id"`
 	WorkerIDs           []string             `json:"worker_ids"`
 	AdditionalMaterials []AdditionalMaterial `json:"additional_materials,omitempty"`
+	AdditionalTools     []string             `json:"additional_tools,omitempty"`
 }
 
 type Filter struct {
@@ -180,6 +204,22 @@ func (in CreateInput) Normalize() (CreateInput, error) {
 		materials = append(materials, material)
 	}
 	in.AdditionalMaterials = materials
+	in.AdditionalTools = append([]string{}, in.AdditionalTools...)
+	seenTools := make(map[string]struct{}, len(in.AdditionalTools))
+	tools := make([]string, 0, len(in.AdditionalTools))
+	for i, id := range in.AdditionalTools {
+		id = strings.ToLower(strings.TrimSpace(id))
+		field := fmt.Sprintf("additional_tools[%d]", i)
+		if !validUUID(id) {
+			fields[field] = "must be a valid inventory item id"
+		}
+		if _, exists := seenTools[id]; exists {
+			continue
+		}
+		seenTools[id] = struct{}{}
+		tools = append(tools, id)
+	}
+	in.AdditionalTools = tools
 	if len(fields) > 0 {
 		return CreateInput{}, &ValidationError{Fields: fields}
 	}
@@ -211,6 +251,7 @@ type Execution struct {
 	EstimatedDays       int                  `json:"estimated_days"`
 	Materials           []MaterialAllocation `json:"materials"`
 	AdditionalMaterials []AdditionalMaterial `json:"-"`
+	AdditionalTools     []string             `json:"-"`
 	CustomerIDs         []int64              `json:"customer_ids"`
 	PrincipalUserID     string               `json:"principal_user_id"`
 	WorkerIDs           []string             `json:"worker_ids"`
@@ -266,6 +307,7 @@ func NewExecution(input CreateInput, snapshot ProjectSnapshot) (Execution, error
 		ProjectSnapshot: snapshot,
 		Units:           in.Units, EstimatedDays: days,
 		AdditionalMaterials: in.AdditionalMaterials,
+		AdditionalTools:     in.AdditionalTools,
 		CustomerIDs:         in.CustomerIDs, PrincipalUserID: in.PrincipalUserID,
 		WorkerIDs: in.WorkerIDs, Status: StatusRegistered,
 	}, nil
@@ -303,5 +345,6 @@ func (e Execution) Clone() Execution {
 	e.WorkerIDs = append([]string{}, e.WorkerIDs...)
 	e.Materials = append([]MaterialAllocation{}, e.Materials...)
 	e.AdditionalMaterials = append([]AdditionalMaterial{}, e.AdditionalMaterials...)
+	e.AdditionalTools = append([]string{}, e.AdditionalTools...)
 	return e
 }

@@ -20,12 +20,33 @@ func (f templateReaderFake) Get(_ context.Context, id int64) (projectdomain.Proj
 
 type executionRepoFake struct{ saved domain.Execution }
 
+type addedToolCall struct {
+	executionID int64
+	requestID   string
+	userID      string
+	itemID      string
+	fingerprint string
+}
+type toolRepoFake struct {
+	executionRepoFake
+	toolCall addedToolCall
+}
+
 func (f *executionRepoFake) Create(_ context.Context, e domain.Execution) (domain.Execution, error) {
 	f.saved = e.Clone()
 	return f.saved, nil
 }
 
 func (f *executionRepoFake) AddMaterialRequirement(context.Context, int64, string, string, quantity.Quantity, string) (domain.Execution, error) {
+	return domain.Execution{}, nil
+}
+
+func (f *executionRepoFake) AddToolRequirement(context.Context, int64, string, string, string, string) (domain.Execution, error) {
+	return domain.Execution{}, nil
+}
+
+func (f *toolRepoFake) AddToolRequirement(_ context.Context, executionID int64, requestID, userID, itemID, fingerprint string) (domain.Execution, error) {
+	f.toolCall = addedToolCall{executionID, requestID, userID, itemID, fingerprint}
 	return domain.Execution{}, nil
 }
 
@@ -99,5 +120,36 @@ func TestCreateCopiesSupplementalMaterialsWithoutScaling(t *testing.T) {
 	}
 	if repo.saved.Units != 4 || len(repo.saved.AdditionalMaterials) != 1 || repo.saved.AdditionalMaterials[0].Quantity != 750 {
 		t.Fatalf("supplemental quantity was not retained as an execution total: %+v", repo.saved)
+	}
+}
+
+func TestCreateKeepsSupplementalToolsExecutionSpecific(t *testing.T) {
+	template := projectdomain.Project{ID: 5, Input: projectdomain.Input{Name: "Marmita", Tools: []string{"template-tool"}, EstimatedDays: 12}}
+	repo := &executionRepoFake{}
+	svc := NewService(repo, templateReaderFake{project: template})
+	_, err := svc.Create(context.Background(), domain.CreateInput{
+		ProjectID: 5, Units: 1, CustomerIDs: []int64{9}, PrincipalUserID: "user-a",
+		AdditionalTools: []string{"00000000-0000-4000-8000-000000000011"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.saved.Tools) != 1 || repo.saved.Tools[0] != "template-tool" || len(repo.saved.AdditionalTools) != 1 {
+		t.Fatalf("template tools must remain separate from execution-only tools: %+v", repo.saved)
+	}
+}
+
+func TestAddToolRequirementFingerprintsCanonicalExecutionRequest(t *testing.T) {
+	repo := &toolRepoFake{}
+	svc := NewService(repo, templateReaderFake{})
+	_, err := svc.AddToolRequirement(context.Background(), 42, "user-a", domain.AddToolInput{
+		RequestID: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+		ItemID:    "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.toolCall.executionID != 42 || repo.toolCall.userID != "user-a" || repo.toolCall.requestID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || repo.toolCall.itemID != "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" || repo.toolCall.fingerprint == "" {
+		t.Fatalf("tool addition request was not canonicalized/fingerprinted: %+v", repo.toolCall)
 	}
 }

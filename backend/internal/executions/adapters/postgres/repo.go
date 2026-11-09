@@ -33,6 +33,9 @@ COALESCE((SELECT jsonb_agg(jsonb_build_object(
  'returned_quantity',m.quantity_returned,
  'deficit_quantity',m.quantity_required-m.quantity_reserved-m.quantity_delivered)
  ORDER BY m.item_id) FROM manufacturing_execution_materials m WHERE m.execution_id=e.id),'[]'::JSONB)
+,
+COALESCE((SELECT array_agg(t.item_id::text ORDER BY t.item_id)
+ FROM manufacturing_execution_supplemental_tools t WHERE t.execution_id=e.id),ARRAY[]::TEXT[])
 FROM manufacturing_executions e`
 
 func scanExecution(row pgx.Row) (domain.Execution, error) {
@@ -40,7 +43,8 @@ func scanExecution(row pgx.Row) (domain.Execution, error) {
 	var snapshot []byte
 	var status string
 	var materials []byte
-	err := row.Scan(&e.ID, &snapshot, &e.Units, &e.EstimatedDays, &status, &e.PrincipalUserID, &e.CreatedAt, &e.UpdatedAt, &e.CustomerIDs, &e.WorkerIDs, &materials)
+	var supplementalTools []string
+	err := row.Scan(&e.ID, &snapshot, &e.Units, &e.EstimatedDays, &status, &e.PrincipalUserID, &e.CreatedAt, &e.UpdatedAt, &e.CustomerIDs, &e.WorkerIDs, &materials, &supplementalTools)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Execution{}, domain.ErrNotFound
@@ -53,8 +57,26 @@ func scanExecution(row pgx.Row) (domain.Execution, error) {
 	if err := json.Unmarshal(materials, &e.Materials); err != nil {
 		return domain.Execution{}, err
 	}
+	e.Tools = mergeToolIDs(e.Tools, supplementalTools)
 	e.Status = domain.Status(status)
 	return e, nil
+}
+
+func mergeToolIDs(templateTools, additionalTools []string) []string {
+	merged := append([]string{}, templateTools...)
+	seen := make(map[string]struct{}, len(templateTools)+len(additionalTools))
+	for _, id := range templateTools {
+		seen[strings.ToLower(strings.TrimSpace(id))] = struct{}{}
+	}
+	for _, id := range additionalTools {
+		key := strings.ToLower(strings.TrimSpace(id))
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, id)
+	}
+	return merged
 }
 
 func (r *Repo) Create(ctx context.Context, e domain.Execution) (domain.Execution, error) {
@@ -63,7 +85,8 @@ func (r *Repo) Create(ctx context.Context, e domain.Execution) (domain.Execution
 		return domain.Execution{}, err
 	}
 	defer rollback()
-	itemIDs := make([]string, 0, len(e.Consumables)+len(e.AdditionalMaterials))
+	itemIDs := make([]string, 0, len(e.Consumables)+len(e.AdditionalMaterials)+len(e.AdditionalTools))
+	materialIDs := make([]string, 0, len(e.Consumables)+len(e.AdditionalMaterials))
 	required := make(map[string]quantity.Quantity, len(e.Consumables))
 	for _, material := range e.Consumables {
 		amount, scaleErr := domain.RequiredMaterialQuantity(material.QuantityPerUnit, e.Units)
@@ -81,18 +104,44 @@ func (r *Repo) Create(ctx context.Context, e domain.Execution) (domain.Execution
 	}
 	for itemID := range required {
 		itemIDs = append(itemIDs, itemID)
+		materialIDs = append(materialIDs, itemID)
+	}
+	sort.Strings(materialIDs)
+	toolIDs := make(map[string]struct{}, len(e.AdditionalTools))
+	for _, itemID := range e.AdditionalTools {
+		if _, exists := toolIDs[itemID]; exists {
+			continue
+		}
+		toolIDs[itemID] = struct{}{}
+		if _, exists := required[itemID]; !exists {
+			itemIDs = append(itemIDs, itemID)
+		}
 	}
 	sort.Strings(itemIDs)
 	for _, itemID := range itemIDs {
 		var kind string
-		if err := tx.QueryRow(ctx, `SELECT kind FROM items WHERE id=$1::uuid AND deleted_at IS NULL FOR UPDATE`, itemID).Scan(&kind); err != nil {
+		lock := `FOR KEY SHARE`
+		if _, isMaterial := required[itemID]; isMaterial {
+			lock = `FOR UPDATE`
+		}
+		if err := tx.QueryRow(ctx, `SELECT kind FROM items WHERE id=$1::uuid AND deleted_at IS NULL `+lock, itemID).Scan(&kind); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return domain.Execution{}, domain.ErrMaterialUnavailable
+				if _, isMaterial := required[itemID]; isMaterial {
+					return domain.Execution{}, domain.ErrMaterialUnavailable
+				}
+				return domain.Execution{}, domain.ErrToolUnavailable
 			}
 			return domain.Execution{}, err
 		}
-		if kind != "consumable" {
-			return domain.Execution{}, domain.ErrMaterialUnavailable
+		_, isMaterial := required[itemID]
+		_, isTool := toolIDs[itemID]
+		if isMaterial {
+			if kind != "consumable" {
+				return domain.Execution{}, domain.ErrMaterialUnavailable
+			}
+		}
+		if isTool && kind != "asset" {
+			return domain.Execution{}, domain.ErrToolUnavailable
 		}
 	}
 	customerRows, err := tx.Query(ctx, `SELECT id FROM customers WHERE id = ANY($1::BIGINT[]) AND active AND deleted_at IS NULL ORDER BY id FOR SHARE`, e.CustomerIDs)
@@ -157,13 +206,19 @@ VALUES($1,$2,$3,$4,$5,$6) RETURNING id,created_at,updated_at`, e.ProjectID, snap
 			return domain.Execution{}, err
 		}
 	}
-	for _, itemID := range itemIDs {
+	for itemID := range toolIDs {
+		if _, err = tx.Exec(ctx, `INSERT INTO manufacturing_execution_supplemental_tools(execution_id,item_id)
+VALUES($1,$2::uuid) ON CONFLICT (execution_id,item_id) DO NOTHING`, e.ID, itemID); err != nil {
+			return domain.Execution{}, err
+		}
+	}
+	for _, itemID := range materialIDs {
 		if _, err = tx.Exec(ctx, `INSERT INTO manufacturing_execution_materials(execution_id,item_id,quantity_required)
 VALUES($1,$2::uuid,$3)`, e.ID, itemID, required[itemID]); err != nil {
 			return domain.Execution{}, err
 		}
 	}
-	for _, itemID := range itemIDs {
+	for _, itemID := range materialIDs {
 		if _, err = tx.Exec(ctx, `SELECT rebalance_manufacturing_execution_materials($1::uuid)`, itemID); err != nil {
 			return domain.Execution{}, err
 		}
@@ -249,6 +304,73 @@ VALUES($1::uuid,$2,$3::uuid,$4,$5)`, requestID, executionID, itemID, amount, fin
 		return domain.Execution{}, err
 	}
 	if _, err := tx.Exec(ctx, `SELECT rebalance_manufacturing_execution_materials($1::uuid)`, itemID); err != nil {
+		return domain.Execution{}, err
+	}
+	created, err := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, executionID))
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	if err = commit(); err != nil {
+		return domain.Execution{}, err
+	}
+	return created, nil
+}
+
+func (r *Repo) AddToolRequirement(ctx context.Context, executionID int64, requestID, userID, itemID, fingerprint string) (domain.Execution, error) {
+	tx, commit, rollback, err := db.Begin(ctx, r.pool)
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	defer rollback()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, requestID); err != nil {
+		return domain.Execution{}, err
+	}
+	var kind string
+	err = tx.QueryRow(ctx, `SELECT kind FROM items WHERE id=$1::uuid AND deleted_at IS NULL FOR KEY SHARE`, itemID).Scan(&kind)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && kind != "asset") {
+		return domain.Execution{}, domain.ErrToolUnavailable
+	}
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	var priorFingerprint string
+	err = tx.QueryRow(ctx, `SELECT fingerprint FROM manufacturing_execution_tool_additions WHERE request_id=$1::uuid`, requestID).Scan(&priorFingerprint)
+	if err == nil {
+		if priorFingerprint != fingerprint {
+			return domain.Execution{}, stockdomain.ErrIdempotencyConflict
+		}
+		current, scanErr := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, executionID))
+		if scanErr != nil {
+			return domain.Execution{}, scanErr
+		}
+		if err = commit(); err != nil {
+			return domain.Execution{}, err
+		}
+		return current, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Execution{}, err
+	}
+	var status string
+	err = tx.QueryRow(ctx, `SELECT status FROM manufacturing_executions WHERE id=$1 FOR UPDATE`, executionID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Execution{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	if status != string(domain.StatusRegistered) && status != string(domain.StatusInProgress) && status != string(domain.StatusPaused) {
+		return domain.Execution{}, domain.ErrToolAdditionClosed
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO manufacturing_execution_supplemental_tools(execution_id,item_id)
+VALUES($1,$2::uuid) ON CONFLICT (execution_id,item_id) DO NOTHING`, executionID, itemID); err != nil {
+		return domain.Execution{}, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO manufacturing_execution_tool_additions(request_id,execution_id,item_id,actor_id,fingerprint)
+VALUES($1::uuid,$2,$3::uuid,$4::uuid,$5)`, requestID, executionID, itemID, userID, fingerprint); err != nil {
+		return domain.Execution{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE manufacturing_executions SET updated_at=now() WHERE id=$1`, executionID); err != nil {
 		return domain.Execution{}, err
 	}
 	created, err := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, executionID))

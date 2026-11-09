@@ -43,7 +43,7 @@ func setupExecutions(t *testing.T) (*pgxpool.Pool, context.Context) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE manufacturing_execution_material_operations, manufacturing_execution_materials, manufacturing_execution_workers, manufacturing_execution_customers, manufacturing_executions, project_templates, customers, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE manufacturing_execution_tool_additions, manufacturing_execution_supplemental_tools, manufacturing_execution_material_operations, manufacturing_execution_material_additions, manufacturing_execution_materials, manufacturing_execution_workers, manufacturing_execution_customers, manufacturing_executions, project_templates, customers, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	return pool, ctx
@@ -250,6 +250,177 @@ func TestRegistrationAddsSupplementalMaterialAsExecutionTotal(t *testing.T) {
 	}
 }
 
+func TestRegistrationAddsSupplementalToolsWithoutChangingTemplateOrStock(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(5000), quantity.Quantity(1250))
+	created, err := f.service.Create(f.ctx, executiondomain.CreateInput{
+		ProjectID: f.projectID, Units: 3, CustomerIDs: []int64{f.customerID}, PrincipalUserID: f.userID,
+		AdditionalTools: []string{f.additionalToolID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Tools) != 2 || created.Tools[0] != f.templateToolID || created.Tools[1] != f.additionalToolID {
+		t.Fatalf("execution tools = %#v; want template and supplemental assets", created.Tools)
+	}
+	template, err := f.templates.Get(f.ctx, f.projectID)
+	if err != nil || len(template.Tools) != 1 || template.Tools[0] != f.templateToolID {
+		t.Fatalf("supplemental tool mutated project template: tools=%#v err=%v", template.Tools, err)
+	}
+	var materialRows, supplementalRows, stockMovements int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_materials WHERE execution_id=$1 AND item_id=$2::uuid`, created.ID, f.additionalToolID).Scan(&materialRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_supplemental_tools WHERE execution_id=$1 AND item_id=$2::uuid`, created.ID, f.additionalToolID).Scan(&supplementalRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM stock_movements WHERE item_id=$1::uuid`, f.additionalToolID).Scan(&stockMovements); err != nil {
+		t.Fatal(err)
+	}
+	if materialRows != 0 || supplementalRows != 1 || stockMovements != 0 {
+		t.Fatalf("informational tool affected materials or stock: materials=%d supplemental=%d movements=%d", materialRows, supplementalRows, stockMovements)
+	}
+}
+
+func TestRegistrationRejectsConsumableAsSupplementalTool(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(5000), quantity.Quantity(1250))
+	var beforeExecutions, beforeTools int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_executions`).Scan(&beforeExecutions); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_supplemental_tools`).Scan(&beforeTools); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := f.service.Create(f.ctx, executiondomain.CreateInput{
+		ProjectID: f.projectID, Units: 1, CustomerIDs: []int64{f.customerID}, PrincipalUserID: f.userID,
+		AdditionalTools: []string{f.itemID},
+	})
+	if !errors.Is(err, executiondomain.ErrToolUnavailable) {
+		t.Fatalf("consumable accepted as supplemental tool: %v", err)
+	}
+	var afterExecutions, afterTools int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_executions`).Scan(&afterExecutions); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_supplemental_tools`).Scan(&afterTools); err != nil {
+		t.Fatal(err)
+	}
+	if afterExecutions != beforeExecutions || afterTools != beforeTools {
+		t.Fatalf("rejected registration mutated state: executions %d -> %d, supplemental tools %d -> %d", beforeExecutions, afterExecutions, beforeTools, afterTools)
+	}
+}
+
+func TestActiveExecutionCanAddSupplementalToolIdempotently(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(5000), quantity.Quantity(1250))
+	execution := f.create(1)
+	if _, err := f.service.Start(f.ctx, execution.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Pause(f.ctx, execution.ID); err != nil {
+		t.Fatal(err)
+	}
+	input := executiondomain.AddToolInput{RequestID: "00000000-0000-4000-8000-000000000031", ItemID: f.additionalToolID}
+	type addResult struct {
+		execution executiondomain.Execution
+		err       error
+	}
+	results := make(chan addResult, 2)
+	var additions sync.WaitGroup
+	for range 2 {
+		additions.Add(1)
+		go func() {
+			defer additions.Done()
+			added, addErr := f.service.AddToolRequirement(f.ctx, execution.ID, f.userID, input)
+			results <- addResult{added, addErr}
+		}()
+	}
+	additions.Wait()
+	close(results)
+	for result := range results {
+		if result.err != nil || len(result.execution.Tools) != 2 || result.execution.Tools[1] != f.additionalToolID {
+			t.Fatalf("concurrent tool addition replay = %#v, err=%v", result.execution.Tools, result.err)
+		}
+	}
+	if _, err := f.service.AddToolRequirement(f.ctx, execution.ID, f.userID, executiondomain.AddToolInput{RequestID: input.RequestID, ItemID: f.templateToolID}); !errors.Is(err, stockdomain.ErrIdempotencyConflict) {
+		t.Fatalf("changed request payload must conflict: %v", err)
+	}
+	other := f.create(1)
+	if _, err := f.service.AddToolRequirement(f.ctx, other.ID, f.userID, executiondomain.AddToolInput{RequestID: "00000000-0000-4000-8000-000000000032", ItemID: f.additionalToolID}); err != nil {
+		t.Fatalf("same tool should be shared across executions: %v", err)
+	}
+	var operationCount int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_tool_additions WHERE request_id=$1::uuid`, input.RequestID).Scan(&operationCount); err != nil || operationCount != 1 {
+		t.Fatalf("stored idempotency operations = %d, want 1; err=%v", operationCount, err)
+	}
+	sqlDB, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(f.ctx, 18); err == nil {
+		t.Fatal("migration rollback removed supplemental tool history")
+	}
+	var retained int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_tool_additions WHERE request_id=$1::uuid`, input.RequestID).Scan(&retained); err != nil || retained != 1 {
+		t.Fatalf("rejected rollback changed tool addition history: count=%d err=%v", retained, err)
+	}
+}
+
+func TestToolAdditionsRejectConsumablesAndClosedExecutions(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(5000), quantity.Quantity(1250))
+	execution := f.create(1)
+	if _, err := f.service.AddToolRequirement(f.ctx, execution.ID, f.userID, executiondomain.AddToolInput{RequestID: "00000000-0000-4000-8000-000000000041", ItemID: f.itemID}); !errors.Is(err, executiondomain.ErrToolUnavailable) {
+		t.Fatalf("consumable accepted as a tool: %v", err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE manufacturing_executions SET status='completed' WHERE id=$1`, execution.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.AddToolRequirement(f.ctx, execution.ID, f.userID, executiondomain.AddToolInput{RequestID: "00000000-0000-4000-8000-000000000042", ItemID: f.additionalToolID}); !errors.Is(err, executiondomain.ErrToolAdditionClosed) {
+		t.Fatalf("tool accepted after execution closed: %v", err)
+	}
+	current, err := f.service.Get(f.ctx, execution.ID)
+	if err != nil || len(current.Tools) != 1 || current.Tools[0] != f.templateToolID {
+		t.Fatalf("rejected tool additions changed execution: tools=%#v err=%v", current.Tools, err)
+	}
+	var additions, supplemental int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_tool_additions WHERE execution_id=$1`, execution.ID).Scan(&additions); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_supplemental_tools WHERE execution_id=$1`, execution.ID).Scan(&supplemental); err != nil {
+		t.Fatal(err)
+	}
+	if additions != 0 || supplemental != 0 {
+		t.Fatalf("rejected additions mutated tool history: operations=%d rows=%d", additions, supplemental)
+	}
+}
+
+func TestSupplementalToolsMigrationRollsBackWhenHistoryIsEmpty(t *testing.T) {
+	pool, ctx := setupExecutions(t)
+	sqlDB, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 18); err != nil {
+		t.Fatalf("empty supplemental-tools migration rollback: %v", err)
+	}
+	var tableExists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('manufacturing_execution_supplemental_tools') IS NOT NULL`).Scan(&tableExists); err != nil || tableExists {
+		t.Fatalf("empty rollback left tool table behind: exists=%v err=%v", tableExists, err)
+	}
+	if _, err := provider.UpTo(ctx, 19); err != nil {
+		t.Fatalf("supplemental-tools migration re-apply: %v", err)
+	}
+}
+
 func TestActiveExecutionCanAddMaterialAndReplayIdempotently(t *testing.T) {
 	f := setupSupplementalMaterialFixture(t, quantity.Quantity(4000), quantity.Quantity(1000))
 	older := f.create(3)
@@ -315,14 +486,16 @@ func TestActiveExecutionCanAddMaterialAndReplayIdempotently(t *testing.T) {
 }
 
 type supplementalMaterialFixture struct {
-	pool       *pgxpool.Pool
-	ctx        context.Context
-	userID     string
-	customerID int64
-	itemID     string
-	projectID  int64
-	templates  *projectpg.Repo
-	service    *executionapp.Service
+	pool             *pgxpool.Pool
+	ctx              context.Context
+	userID           string
+	customerID       int64
+	itemID           string
+	templateToolID   string
+	additionalToolID string
+	projectID        int64
+	templates        *projectpg.Repo
+	service          *executionapp.Service
 }
 
 func setupSupplementalMaterialFixture(t *testing.T, stockQty, perUnit quantity.Quantity) supplementalMaterialFixture {
@@ -351,16 +524,25 @@ func setupSupplementalMaterialFixture(t *testing.T, stockQty, perUnit quantity.Q
 	if err != nil {
 		t.Fatal(err)
 	}
+	toolCatalog := catalogapp.NewService(catalog.Categories(), catalog.Locations(), catalog.Items())
+	templateTool, err := toolCatalog.CreateItem(ctx, catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{Description: "Template tool " + code, CategoryID: category.ID, Kind: catalogdomain.KindAsset}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	additionalTool, err := toolCatalog.CreateItem(ctx, catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{Description: "Additional tool " + code, CategoryID: category.ID, Kind: catalogdomain.KindAsset}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	userStock := stockapp.NewService(stockpg.New(pool))
 	if _, err := userStock.Record(ctx, item.ID, userID, stockdomain.Request{Type: stockdomain.TypeIn, Qty: stockQty, LocationID: &location.ID}); err != nil {
 		t.Fatal(err)
 	}
 	templates := projectpg.New(pool)
-	project := &projectdomain.Project{Input: projectdomain.Input{Name: "Supplemental " + code, Characteristics: []string{}, Consumables: []projectdomain.Material{{ItemID: item.ID, Quantity: perUnit}}, Tools: []string{}, EstimatedDays: 1}}
+	project := &projectdomain.Project{Input: projectdomain.Input{Name: "Supplemental " + code, Characteristics: []string{}, Consumables: []projectdomain.Material{{ItemID: item.ID, Quantity: perUnit}}, Tools: []string{templateTool.ID}, EstimatedDays: 1}}
 	if err := templates.Create(ctx, project); err != nil {
 		t.Fatal(err)
 	}
-	return supplementalMaterialFixture{pool: pool, ctx: ctx, userID: userID, customerID: customerID, itemID: item.ID, projectID: project.ID, templates: templates, service: executionapp.NewService(executionpg.New(pool), templates, userStock)}
+	return supplementalMaterialFixture{pool: pool, ctx: ctx, userID: userID, customerID: customerID, itemID: item.ID, templateToolID: templateTool.ID, additionalToolID: additionalTool.ID, projectID: project.ID, templates: templates, service: executionapp.NewService(executionpg.New(pool), templates, userStock)}
 }
 
 func (f supplementalMaterialFixture) create(units int) executiondomain.Execution {

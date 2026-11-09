@@ -87,6 +87,36 @@ func TestAddMaterialInputCanonicalizesUUIDs(t *testing.T) {
 	}
 }
 
+func TestCreateInputCanonicalizesAndDeduplicatesAdditionalTools(t *testing.T) {
+	input := CreateInput{
+		ProjectID: 4, Units: 1, CustomerIDs: []int64{8}, PrincipalUserID: "user-a",
+		AdditionalTools: []string{
+			"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+			"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		},
+	}
+	normalized, err := input.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalized.AdditionalTools) != 1 || normalized.AdditionalTools[0] != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+		t.Fatalf("additional tools should be canonical and unique: %#v", normalized.AdditionalTools)
+	}
+}
+
+func TestAddToolInputCanonicalizesUUIDs(t *testing.T) {
+	input, err := (AddToolInput{
+		RequestID: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+		ItemID:    "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB",
+	}).Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.RequestID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || input.ItemID != "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" {
+		t.Fatalf("UUIDs should be canonical lowercase: %+v", input)
+	}
+}
+
 func TestExecutionSnapshotDoesNotAliasTemplate(t *testing.T) {
 	template := ProjectSnapshot{
 		ProjectID: 4, Name: "Marmita", Description: "Acero inoxidable",
@@ -135,5 +165,22 @@ func TestSupplementalMaterialQuantityIsExecutionTotal(t *testing.T) {
 	}
 	if execution.Units != 3 || len(execution.AdditionalMaterials) != 1 || execution.AdditionalMaterials[0].Quantity != 1250 {
 		t.Fatalf("supplemental quantity must remain a total for the execution: %+v", execution)
+	}
+}
+
+func TestNewExecutionKeepsSupplementalToolsSeparateFromTemplate(t *testing.T) {
+	template := ProjectSnapshot{ProjectID: 4, Name: "Marmita", Tools: []string{"tool-template"}, EstimatedDays: 12}
+	input := CreateInput{ProjectID: 4, Units: 2, CustomerIDs: []int64{8}, PrincipalUserID: "user-a", AdditionalTools: []string{"00000000-0000-4000-8000-000000000099"}}
+	execution, err := NewExecution(input, template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(execution.Tools) != 1 || execution.Tools[0] != "tool-template" || len(execution.AdditionalTools) != 1 {
+		t.Fatalf("template and supplemental tool snapshots should remain separate: %+v", execution)
+	}
+	clone := execution.Clone()
+	clone.AdditionalTools[0] = "changed"
+	if execution.AdditionalTools[0] == "changed" {
+		t.Fatal("clone aliases supplemental tool list")
 	}
 }

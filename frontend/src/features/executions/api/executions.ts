@@ -38,6 +38,7 @@ export type ExecutionCreate = {
   principal_user_id: string;
   worker_ids: string[];
   additional_materials?: { item_id: string; quantity: number }[];
+  additional_tools?: string[];
 };
 
 export const executionsKey = ["executions"] as const;
@@ -65,6 +66,15 @@ export function useAddExecutionMaterial(executionID: number) {
   return useMutation({
     mutationFn: (input: { request_id: string; item_id: string; quantity: number }) =>
       request(`/executions/${executionID}/materials`, executionSchema, { method: "POST", body: input }),
+    onSuccess: () => client.invalidateQueries({ queryKey: executionsKey }),
+  });
+}
+
+export function useAddExecutionTool(executionID: number) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { request_id: string; item_id: string }) =>
+      request(`/executions/${executionID}/tools`, executionSchema, { method: "POST", body: input }),
     onSuccess: () => client.invalidateQueries({ queryKey: executionsKey }),
   });
 }

@@ -8,7 +8,7 @@ import { Sheet } from "../components/molecules/Sheet";
 import { useToast } from "../components/molecules/Toast";
 import { useSession } from "../features/auth/session";
 import { useCustomers } from "../features/customers/api/customers";
-import { useAddExecutionMaterial, useAssignableUsers, useCreateExecution, useExecutions, useMoveExecutionMaterial, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
+import { useAddExecutionMaterial, useAddExecutionTool, useAssignableUsers, useCreateExecution, useExecutions, useMoveExecutionMaterial, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
 import { useLocations } from "../features/catalog/api/catalog";
 import { useProjects, useTemplateItems, type Project } from "../features/projects/api/projects";
 import { describeError } from "../lib/api/errors";
@@ -129,6 +129,47 @@ function AddExecutionMaterialForm({ executionID }: { executionID: number }) {
   </form>;
 }
 
+function AddExecutionToolForm({ executionID, existingToolIDs }: { executionID: number; existingToolIDs: string[] }) {
+  const [itemID, setItemID] = useState("");
+  const [requestID, setRequestID] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const items = useTemplateItems("asset", search);
+  const add = useAddExecutionTool(executionID);
+  const toast = useToast();
+  const rows = items.data?.pages.flatMap((page) => page.data) ?? [];
+  const selectableRows = rows.filter((item) => !existingToolIDs.includes(item.id));
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const requestId = requestID ?? crypto.randomUUID();
+    if (!requestID) setRequestID(requestId);
+    try {
+      await add.mutateAsync({ request_id: requestId, item_id: itemID });
+      toast.success("Herramienta agregada a la ejecución.");
+      setItemID("");
+      setRequestID(null);
+    } catch (error) {
+      toast.error(describeError(error));
+    }
+  }
+
+  return <form onSubmit={submit} className="mt-3 grid gap-2 rounded-xl border border-dashed border-line p-3 sm:grid-cols-[1fr_auto] sm:items-end">
+    <label className="flex flex-col gap-1 text-xs font-medium sm:col-span-2">Buscar herramienta
+      <input value={search} onChange={(event) => setSearch(event.target.value)} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm" />
+    </label>
+    <label className="flex flex-col gap-1 text-xs font-medium">Herramienta adicional (informativa)
+      <select required value={itemID} onChange={(event) => { setItemID(event.target.value); setRequestID(null); }} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm">
+        <option value="">Seleccioná una herramienta</option>
+        {selectableRows.map((item) => <option key={item.id} value={item.id}>{item.description}</option>)}
+      </select>
+    </label>
+    <Button type="submit" disabled={add.isPending || !itemID}>{add.isPending ? "Guardando…" : "Agregar herramienta"}</Button>
+    {items.hasNextPage && <Button type="button" disabled={items.isFetchingNextPage} onClick={() => void items.fetchNextPage()} className="sm:col-span-2">Cargar más herramientas</Button>}
+    {items.isError && <p className="text-sm text-bad sm:col-span-2">No se pudieron cargar las herramientas.</p>}
+    <p className="text-xs text-ink-soft sm:col-span-2">Las herramientas se comparten entre ejecuciones y no se reservan.</p>
+  </form>;
+}
+
 function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite: boolean }) {
   return <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -142,6 +183,7 @@ function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite
       <p className="mt-2">{execution.description || "Sin descripción"}</p>
       {execution.characteristics.length > 0 && <ul className="mt-2 list-inside list-disc">{execution.characteristics.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ul>}
       <p className="mt-2">{execution.consumables.length} consumibles · {execution.tools.length} herramientas requeridas</p>
+      {execution.tools.length > 0 && <ul className="mt-2 list-inside list-disc text-ink-soft">{execution.tools.map((toolID) => <li key={toolID}>Herramienta {toolID}</li>)}</ul>}
     </details>
     {(execution.materials.length > 0 || (canWrite && ["registered", "in_progress", "paused"].includes(execution.status))) && <section className="rounded-xl bg-sunken p-3">
       <h3 className="font-semibold">Insumos de la ejecución</h3>
@@ -155,6 +197,10 @@ function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite
       </ul>
       {canWrite && ["registered", "in_progress", "paused"].includes(execution.status) && <AddExecutionMaterialForm executionID={execution.id} />}
     </section>}
+    {canWrite && ["registered", "in_progress", "paused"].includes(execution.status) && <section className="rounded-xl bg-sunken p-3">
+      <h3 className="font-semibold">Herramientas informativas</h3>
+      <AddExecutionToolForm executionID={execution.id} existingToolIDs={execution.tools} />
+    </section>}
     {canWrite && <div className="flex gap-2"><ExecutionActions execution={execution} /></div>}
   </li>;
 }
@@ -166,17 +212,23 @@ function CreateExecutionSheet({ open, onOpenChange }: { open: boolean; onOpenCha
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [estimatedDays, setEstimatedDays] = useState("");
   const [additionalMaterials, setAdditionalMaterials] = useState<Array<{ rowID: number; itemID: string; quantity: string }>>([]);
+  const [additionalTools, setAdditionalTools] = useState<string[]>([]);
+  const [selectedToolID, setSelectedToolID] = useState("");
   const [consumableSearch, setConsumableSearch] = useState("");
+  const [toolSearch, setToolSearch] = useState("");
   const create = useCreateExecution();
   const toast = useToast();
   const projects = useProjects(projectSearch);
   const consumables = useTemplateItems("consumable", consumableSearch);
+  const tools = useTemplateItems("asset", toolSearch);
   const customers = useCustomers({ q: customerSearch, active: "true" });
   const users = useAssignableUsers();
   const projectRows = projects.data?.pages.flatMap((page) => page.data) ?? [];
   const customerRows = customers.data?.pages.flatMap((page) => page.data) ?? [];
   const userRows = users.data ?? [];
   const consumableRows = consumables.data?.pages.flatMap((page) => page.data) ?? [];
+  const toolRows = tools.data?.pages.flatMap((page) => page.data) ?? [];
+  const selectedTools = additionalTools.map((id) => toolRows.find((item) => item.id === id)?.description ?? id);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -194,6 +246,7 @@ function CreateExecutionSheet({ open, onOpenChange }: { open: boolean; onOpenCha
         principal_user_id: String(form.get("principal_user_id") ?? ""),
         worker_ids: form.getAll("worker_ids").map(String),
         ...(additionalMaterials.length > 0 ? { additional_materials: additionalMaterials.map(({ itemID, quantity }) => ({ item_id: itemID, quantity: Number(quantity) })) } : {}),
+        ...(additionalTools.length > 0 ? { additional_tools: additionalTools } : {}),
       });
       toast.success("Ejecución registrada con un snapshot independiente del proyecto.");
       onOpenChange(false);
@@ -212,6 +265,8 @@ function CreateExecutionSheet({ open, onOpenChange }: { open: boolean; onOpenCha
           const project = projectRows.find((candidate) => candidate.id === Number(event.target.value)) ?? null;
           setSelectedProject(project);
           setEstimatedDays(project ? String(project.estimated_days) : "");
+          setAdditionalTools([]);
+          setSelectedToolID("");
         }} className="min-h-11 rounded-xl border border-line bg-sunken px-3">
           <option value="">Seleccioná una plantilla</option>
           {projectRows.map((project) => <option key={project.id} value={project.id}>{project.name} · {project.estimated_days} días</option>)}
@@ -246,6 +301,25 @@ function CreateExecutionSheet({ open, onOpenChange }: { open: boolean; onOpenCha
         <Button type="button" onClick={() => setAdditionalMaterials((current) => [...current, { rowID: current.reduce((max, row) => Math.max(max, row.rowID), 0) + 1, itemID: "", quantity: "" }])}>Agregar consumible</Button>
         {consumables.hasNextPage && <Button type="button" disabled={consumables.isFetchingNextPage} onClick={() => void consumables.fetchNextPage()}>Cargar más consumibles</Button>}
         {consumables.isError && <p className="text-sm text-bad">No se pudieron cargar los consumibles.</p>}
+      </fieldset>
+      <fieldset className="flex flex-col gap-2 rounded-xl border border-line p-3">
+        <legend className="px-1 text-sm font-semibold">Herramientas adicionales (informativas)</legend>
+        <label className="flex flex-col gap-1 text-xs font-medium">Buscar herramienta
+          <input value={toolSearch} onChange={(event) => setToolSearch(event.target.value)} className="min-h-10 rounded-lg border border-line bg-sunken px-2 text-sm" />
+        </label>
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+          <label className="flex flex-col gap-1 text-xs font-medium">Herramienta adicional
+            <select value={selectedToolID} onChange={(event) => setSelectedToolID(event.target.value)} className="min-h-10 rounded-lg border border-line bg-sunken px-2 text-sm">
+              <option value="">Seleccioná una herramienta</option>
+              {toolRows.filter((item) => !additionalTools.includes(item.id) && !selectedProject?.tools.includes(item.id)).map((item) => <option key={item.id} value={item.id}>{item.description}</option>)}
+            </select>
+          </label>
+          <Button type="button" disabled={!selectedToolID} onClick={() => { setAdditionalTools((current) => [...current, selectedToolID]); setSelectedToolID(""); }}>Agregar herramienta</Button>
+        </div>
+        {additionalTools.length > 0 && <ul className="list-inside list-disc text-sm text-ink-soft">{selectedTools.map((name, index) => <li key={additionalTools[index]}>{name}<Button type="button" className="ml-2" onClick={() => setAdditionalTools((current) => current.filter((_, row) => row !== index))}>Quitar</Button></li>)}</ul>}
+        {tools.hasNextPage && <Button type="button" disabled={tools.isFetchingNextPage} onClick={() => void tools.fetchNextPage()}>Cargar más herramientas</Button>}
+        {tools.isError && <p className="text-sm text-bad">No se pudieron cargar las herramientas.</p>}
+        <p className="text-xs text-ink-soft">Las herramientas se comparten y no quedan reservadas.</p>
       </fieldset>
       <label className="flex flex-col gap-1 text-sm font-medium">Buscar clientes
         <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} className="min-h-11 rounded-xl border border-line bg-sunken px-3" placeholder="Nombre del cliente" />

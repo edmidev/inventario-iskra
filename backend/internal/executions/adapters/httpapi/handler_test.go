@@ -23,6 +23,9 @@ func (routeRepo) Create(context.Context, domain.Execution) (domain.Execution, er
 func (routeRepo) AddMaterialRequirement(context.Context, int64, string, string, quantity.Quantity, string) (domain.Execution, error) {
 	return domain.Execution{}, nil
 }
+func (routeRepo) AddToolRequirement(context.Context, int64, string, string, string, string) (domain.Execution, error) {
+	return domain.Execution{}, nil
+}
 func (routeRepo) Get(context.Context, int64) (domain.Execution, error) {
 	return domain.Execution{}, nil
 }
@@ -99,6 +102,24 @@ func TestAddingExecutionMaterialRequiresWritePermission(t *testing.T) {
 
 func TestAddingExecutionMaterialAcceptsExecutionTotal(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/executions/1/materials", strings.NewReader(`{"request_id":"00000000-0000-4000-8000-000000000001","item_id":"00000000-0000-4000-8000-000000000002","quantity":2.5}`))
+	res := httptest.NewRecorder()
+	routeHandler([]string{"executions:write"}).ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+}
+
+func TestAddingExecutionToolRequiresWritePermission(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/executions/1/tools", strings.NewReader(`{"request_id":"00000000-0000-4000-8000-000000000001","item_id":"00000000-0000-4000-8000-000000000002"}`))
+	res := httptest.NewRecorder()
+	routeHandler([]string{"executions:read"}).ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusForbidden, res.Body.String())
+	}
+}
+
+func TestAddingExecutionToolReturnsExecution(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/executions/1/tools", strings.NewReader(`{"request_id":"00000000-0000-4000-8000-000000000001","item_id":"00000000-0000-4000-8000-000000000002"}`))
 	res := httptest.NewRecorder()
 	routeHandler([]string{"executions:write"}).ServeHTTP(res, req)
 	if res.Code != http.StatusOK {

@@ -42,6 +42,7 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/pause", h.pause)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/resume", h.resume)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials", h.addMaterial)
+			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/tools", h.addTool)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials/{itemID}/deliver", h.deliverMaterial)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials/{itemID}/return", h.returnMaterial)
 		})
@@ -86,10 +87,14 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusUnprocessableEntity, "invalid_assignment", "customers and assigned users must be active")
 	case errors.Is(err, domain.ErrMaterialUnavailable):
 		httpx.WriteError(w, http.StatusUnprocessableEntity, "invalid_material", "supplemental material must reference an active consumable")
+	case errors.Is(err, domain.ErrToolUnavailable):
+		httpx.WriteError(w, http.StatusUnprocessableEntity, "invalid_tool", "supplemental tool must reference an inventory asset")
 	case errors.Is(err, domain.ErrInvalidState):
 		httpx.WriteError(w, http.StatusConflict, "invalid_execution_state", "execution cannot transition from its current state")
 	case errors.Is(err, domain.ErrMaterialAdditionClosed):
 		httpx.WriteError(w, http.StatusConflict, "execution_not_active", "materials can only be added while the execution is active")
+	case errors.Is(err, domain.ErrToolAdditionClosed):
+		httpx.WriteError(w, http.StatusConflict, "execution_not_active", "tools can only be added while the execution is active")
 	case errors.Is(err, stockdomain.ErrInsufficientStock), errors.Is(err, stockdomain.ErrReservationUnavailable):
 		httpx.WriteError(w, http.StatusConflict, "material_unavailable", "the execution does not have enough reserved material")
 	case errors.Is(err, stockdomain.ErrExecutionInactive):
@@ -184,6 +189,28 @@ func (h *Handler) addMaterial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	execution, err := h.svc.AddMaterialRequirement(r.Context(), id, principal.UserID, input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, execution)
+}
+
+func (h *Handler) addTool(w http.ResponseWriter, r *http.Request) {
+	id, ok := executionID(w, r)
+	if !ok {
+		return
+	}
+	principal, ok := httpx.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "authentication required")
+		return
+	}
+	var input domain.AddToolInput
+	if !decode(w, r, &input) {
+		return
+	}
+	execution, err := h.svc.AddToolRequirement(r.Context(), id, principal.UserID, input)
 	if err != nil {
 		writeError(w, err)
 		return

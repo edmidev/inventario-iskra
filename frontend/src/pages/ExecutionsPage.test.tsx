@@ -16,6 +16,12 @@ const extraConsumable = {
   stocks: [], low_stock: false, on_loan: false, location_id: null, last_maintenance_at: null, maintenance_interval_days: null,
   maintenance_due_at: null, maintenance_overdue: false, attributes: {}, notes: "", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
 };
+const extraTool = {
+  ...extraConsumable, id: "00000000-0000-4000-8000-000000000098", code: "HER-1", description: "Soldadora TIG", kind: "asset",
+};
+const itemList = () => {
+  return { data: [extraConsumable, extraTool], total: 2, limit: 100, offset: 0 };
+};
 
 describe("execution registration", () => {
   it("submits a template snapshot with multiple customers, workers, and an adjusted duration", async () => {
@@ -26,14 +32,14 @@ describe("execution registration", () => {
       http.get(api("/projects"), () => HttpResponse.json({ data: [project], total: 1, limit: 25, offset: 0 })),
       http.get(api("/customers"), () => HttpResponse.json({ data: customers, total: 2, limit: 100, offset: 0 })),
       http.get(api("/executions/assignable-users"), () => HttpResponse.json({ data: [{ id: "user-a", name: "Ana" }, { id: "user-b", name: "Luis" }] })),
-      http.get(api("/items"), () => HttpResponse.json({ data: [extraConsumable], total: 1, limit: 100, offset: 0 })),
+      http.get(api("/items"), () => HttpResponse.json(itemList())),
     );
     let body: unknown;
     server.use(http.post(api("/executions"), async ({ request }) => {
       body = await request.json();
       return HttpResponse.json({
         id: 1, project_id: 4, project_name: "Marmita", description: "Acero inoxidable", characteristics: ["Aislada"],
-        consumables: [{ item_id: "item-1", quantity_per_unit: 1.25 }], tools: ["tool-1"], template_estimated_days: 12,
+        consumables: [{ item_id: "item-1", quantity_per_unit: 1.25 }], tools: ["tool-1", extraTool.id], template_estimated_days: 12,
         units: 3, estimated_days: 8, customer_ids: [8, 9], principal_user_id: "user-a", worker_ids: ["user-b"],
         status: "registered", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
       }, { status: 201 });
@@ -48,6 +54,8 @@ describe("execution registration", () => {
     await user.click(screen.getByRole("button", { name: "Agregar consumible" }));
     await user.selectOptions(screen.getByLabelText("Insumo adicional 1"), extraConsumable.id);
     await user.type(screen.getByLabelText("Cantidad total 1"), "2.5");
+    await user.selectOptions(screen.getByLabelText("Herramienta adicional"), extraTool.id);
+    await user.click(screen.getByRole("button", { name: "Agregar herramienta" }));
     await user.click(screen.getByLabelText("Cliente Norte"));
     await user.type(screen.getByLabelText("Buscar clientes"), "Sur");
     await user.click(screen.getByLabelText("Cliente Sur"));
@@ -55,7 +63,7 @@ describe("execution registration", () => {
     await user.click(screen.getByLabelText("Luis"));
     await user.click(screen.getByRole("button", { name: "Registrar ejecución" }));
     await screen.findByText("Ejecución registrada con un snapshot independiente del proyecto.");
-    await waitFor(() => expect(body).toEqual({ project_id: 4, units: 3, estimated_days: 8, customer_ids: [8, 9], principal_user_id: "user-a", worker_ids: ["user-b"], additional_materials: [{ item_id: extraConsumable.id, quantity: 2.5 }] }));
+    await waitFor(() => expect(body).toEqual({ project_id: 4, units: 3, estimated_days: 8, customer_ids: [8, 9], principal_user_id: "user-a", worker_ids: ["user-b"], additional_materials: [{ item_id: extraConsumable.id, quantity: 2.5 }], additional_tools: [extraTool.id] }));
   });
 
   it("retries an uncertain supplemental addition with the same idempotency key", async () => {
@@ -87,6 +95,39 @@ describe("execution registration", () => {
     await waitFor(() => expect(attempts).toBe(1));
     await user.click(screen.getByRole("button", { name: "Agregar insumo" }));
     await screen.findByText("Material adicional agregado a la ejecución.");
+    expect(requestIDs).toHaveLength(2);
+    expect(requestIDs[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(requestIDs[1]).toBe(requestIDs[0]);
+  });
+
+  it("adds an informational tool during execution with a stable retry key", async () => {
+    const user = userEvent.setup();
+    useAuthenticatedApi("admin");
+    const execution = {
+      id: 3, project_id: 4, project_name: "Marmita", description: "Acero inoxidable", characteristics: [], consumables: [], tools: [],
+      template_estimated_days: 12, units: 2, estimated_days: 12, materials: [], customer_ids: [8], principal_user_id: "user-a", worker_ids: [],
+      status: "in_progress", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    const requestIDs: string[] = [];
+    let attempts = 0;
+    server.use(
+      http.get(api("/executions"), () => HttpResponse.json({ data: [execution], total: 1, limit: 25, offset: 0 })),
+      http.get(api("/items"), () => HttpResponse.json(itemList())),
+      http.post(api("/executions/3/tools"), async ({ request }) => {
+        const body = await request.json() as { request_id: string; item_id: string };
+        requestIDs.push(body.request_id);
+        attempts++;
+        if (attempts === 1) return HttpResponse.error();
+        return HttpResponse.json({ ...execution, tools: [extraTool.id] });
+      }),
+    );
+    renderApp("/ejecuciones");
+    await screen.findByRole("option", { name: /Soldadora TIG/ });
+    await user.selectOptions(await screen.findByLabelText("Herramienta adicional (informativa)"), extraTool.id);
+    await user.click(screen.getByRole("button", { name: "Agregar herramienta" }));
+    await waitFor(() => expect(attempts).toBe(1));
+    await user.click(screen.getByRole("button", { name: "Agregar herramienta" }));
+    await screen.findByText("Herramienta agregada a la ejecución.");
     expect(requestIDs).toHaveLength(2);
     expect(requestIDs[0]).toMatch(/^[0-9a-f-]{36}$/);
     expect(requestIDs[1]).toBe(requestIDs[0]);
