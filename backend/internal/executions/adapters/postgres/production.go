@@ -46,6 +46,40 @@ func (r *Repo) ListUnits(ctx context.Context, executionID int64) ([]domain.Finis
 	return queryUnits(ctx, r.pool, selectFinishedUnits+` WHERE u.execution_id=$1 ORDER BY u.id`, executionID)
 }
 
+// Finished stock is derived from serialized production and delivery records;
+// it never shares consumable or tool balances.
+func (r *Repo) ListFinishedStock(ctx context.Context, filter domain.FinishedStockFilter) ([]domain.FinishedStockRow, int, error) {
+	pattern := ""
+	if filter.Q != "" {
+		pattern = "%" + escape.Replace(filter.Q) + "%"
+	}
+	from := ` FROM finished_product_units u
+JOIN manufacturing_executions e ON e.id=u.execution_id
+LEFT JOIN manufacturing_delivery_units du ON du.unit_id=u.id
+LEFT JOIN manufacturing_deliveries d ON d.id=du.delivery_id
+WHERE ($1='' OR ($1='available' AND d.id IS NULL) OR ($1='delivered' AND d.id IS NOT NULL))
+AND ($2='' OR u.code ILIKE $2 ESCAPE '\' OR e.project_snapshot->>'project_name' ILIKE $2 ESCAPE '\')`
+	var total int
+	if err := r.pool.QueryRow(ctx, `SELECT count(*)`+from, filter.Status, pattern).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.pool.Query(ctx, `SELECT u.id,u.code,u.execution_id,e.project_snapshot->>'project_name',u.produced_at,
+CASE WHEN d.id IS NULL THEN 'available' ELSE 'delivered' END,COALESCE(d.number,''),COALESCE(d.customer_name,''),d.delivered_at`+from+` ORDER BY u.id DESC LIMIT $3 OFFSET $4`, filter.Status, pattern, filter.Limit, filter.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	result := []domain.FinishedStockRow{}
+	for rows.Next() {
+		var row domain.FinishedStockRow
+		if err := rows.Scan(&row.ID, &row.Code, &row.ExecutionID, &row.ProjectName, &row.ProducedAt, &row.Status, &row.Receipt, &row.CustomerName, &row.DeliveredAt); err != nil {
+			return nil, 0, err
+		}
+		result = append(result, row)
+	}
+	return result, total, rows.Err()
+}
+
 // Produce serializes production for one execution so concurrent requests cannot
 // exceed its planned count. A request ID can be replayed without creating units.
 func (r *Repo) Produce(ctx context.Context, executionID int64, actorID string, input domain.ProduceInput) ([]domain.FinishedUnit, error) {

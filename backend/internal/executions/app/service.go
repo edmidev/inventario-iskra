@@ -35,6 +35,7 @@ type Repository interface {
 	ListUnits(context.Context, int64) ([]domain.FinishedUnit, error)
 	DeliverFinishedUnits(context.Context, int64, string, domain.DeliveryInput, string) (domain.DeliveryReceipt, error)
 	ListDeliveries(context.Context, int64) ([]domain.DeliveryReceipt, error)
+	ListFinishedStock(context.Context, domain.FinishedStockFilter) ([]domain.FinishedStockRow, int, error)
 	ListAssignableUsers(context.Context) ([]domain.AssignableUser, error)
 }
 
@@ -208,6 +209,15 @@ func (s *Service) ListDeliveries(ctx context.Context, executionID int64) ([]doma
 		return nil, domain.ErrNotFound
 	}
 	return s.repo.ListDeliveries(ctx, executionID)
+}
+
+func (s *Service) ListFinishedStock(ctx context.Context, filter domain.FinishedStockFilter) ([]domain.FinishedStockRow, int, domain.FinishedStockFilter, error) {
+	normalized, err := filter.Normalize()
+	if err != nil {
+		return nil, 0, normalized, err
+	}
+	rows, total, err := s.repo.ListFinishedStock(ctx, normalized)
+	return rows, total, normalized, err
 }
 
 func (s *Service) ListAssignableUsers(ctx context.Context) ([]domain.AssignableUser, error) {

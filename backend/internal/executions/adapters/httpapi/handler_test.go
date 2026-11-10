@@ -53,6 +53,9 @@ func (routeRepo) DeliverFinishedUnits(context.Context, int64, string, domain.Del
 func (routeRepo) ListDeliveries(context.Context, int64) ([]domain.DeliveryReceipt, error) {
 	return []domain.DeliveryReceipt{}, nil
 }
+func (routeRepo) ListFinishedStock(context.Context, domain.FinishedStockFilter) ([]domain.FinishedStockRow, int, error) {
+	return []domain.FinishedStockRow{}, 0, nil
+}
 func (routeRepo) ListAssignableUsers(context.Context) ([]domain.AssignableUser, error) {
 	return []domain.AssignableUser{{ID: "active-user", Name: "Active User"}}, nil
 }
@@ -95,6 +98,26 @@ func TestAssignableUsersRequiresExecutionReadPermission(t *testing.T) {
 			}
 			if tt.wantStatus == http.StatusOK && !strings.Contains(res.Body.String(), "active-user") {
 				t.Fatalf("assignable user missing from response: %s", res.Body.String())
+			}
+		})
+	}
+}
+
+func TestFinishedStockListRequiresReadPermissionAndValidFilter(t *testing.T) {
+	for _, tt := range []struct {
+		name, path  string
+		permissions []string
+		want        int
+	}{
+		{name: "without read", path: "/finished-products", want: http.StatusForbidden},
+		{name: "available stock", path: "/finished-products?status=available&limit=20", permissions: []string{"executions:read"}, want: http.StatusOK},
+		{name: "invalid status", path: "/finished-products?status=unknown", permissions: []string{"executions:read"}, want: http.StatusUnprocessableEntity},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			res := httptest.NewRecorder()
+			routeHandler(tt.permissions).ServeHTTP(res, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if res.Code != tt.want {
+				t.Fatalf("status = %d, want %d; body=%s", res.Code, tt.want, res.Body.String())
 			}
 		})
 	}

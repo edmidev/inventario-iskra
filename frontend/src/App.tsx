@@ -33,6 +33,7 @@ const CustomersPage = lazy(() => import("./pages/CustomersPage").then((m) => ({ 
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 const ProjectDetailPage = lazy(() => import("./pages/ProjectDetailPage").then((m) => ({ default: m.ProjectDetailPage })));
 const ExecutionsPage = lazy(() => import("./pages/ExecutionsPage").then((m) => ({ default: m.ExecutionsPage })));
+const FinishedStockPage = lazy(() => import("./pages/FinishedStockPage").then((m) => ({ default: m.FinishedStockPage })));
 
 export function App() {
   return (
@@ -70,6 +71,7 @@ export function App() {
               </Route>
               <Route element={<RequireRole check={(p) => p.canReadExecutions} />}>
                 <Route path="ejecuciones" element={<ExecutionsPage />} />
+                <Route path="productos-terminados" element={<FinishedStockPage />} />
               </Route>
               <Route path="mas" element={<MorePage />} />
               <Route path="cuenta" element={<AccountPage />} />

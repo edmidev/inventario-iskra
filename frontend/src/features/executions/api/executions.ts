@@ -17,6 +17,10 @@ const deliveryReceiptSchema = z.object({
   id: z.number().int(), number: z.string(), execution_id: z.number().int(), customer_id: z.number().int(),
   customer_name: z.string(), actor_id: z.string(), unit_codes: z.array(z.string()), delivered_at: z.string(),
 });
+const finishedStockSchema = z.object({
+  id: z.number().int(), code: z.string(), execution_id: z.number().int(), project_name: z.string(), produced_at: z.string(),
+  status: z.enum(["available", "delivered"]), receipt: z.string().optional(), customer_name: z.string().optional(), delivered_at: z.string().optional(),
+});
 export const executionSchema = z.object({
   id: z.number(),
   project_id: z.number(),
@@ -43,6 +47,7 @@ export type Execution = z.infer<typeof executionSchema>;
 export type MaterialAllocation = z.infer<typeof allocationSchema>;
 export type FinishedUnit = z.infer<typeof finishedUnitSchema>;
 export type DeliveryReceipt = z.infer<typeof deliveryReceiptSchema>;
+export type FinishedStockRow = z.infer<typeof finishedStockSchema>;
 export type ExecutionCreate = {
   project_id: number;
   units: number;
@@ -132,6 +137,12 @@ export function useExecutionDeliveries(executionID: number, enabled: boolean) {
   return useQuery({
     queryKey: [...executionsKey, executionID, "deliveries"], enabled,
     queryFn: ({ signal }) => request(`/executions/${executionID}/deliveries`, z.object({ data: z.array(deliveryReceiptSchema) }), { signal }).then((r) => r.data),
+  });
+}
+
+export function useFinishedStock(status: "" | "available" | "delivered", q: string) {
+  return usePagedQuery([...executionsKey, "finished-stock", status, q], "/finished-products", finishedStockSchema, {
+    status: status || undefined, q: q.trim() || undefined,
   });
 }
 

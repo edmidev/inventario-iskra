@@ -45,6 +45,7 @@ export function MorePage() {
     ...(permissions.canReadProjects ? [{ to: "/proyectos", label: "Proyectos", hint: "Plantillas de fabricación" }] : []),
     ...(permissions.canReadCustomers ? [{ to: "/clientes", label: "Clientes", hint: "Datos y contactos" }] : []),
     ...(permissions.canReadExecutions ? [{ to: "/ejecuciones", label: "Ejecuciones", hint: "Trabajos registrados en el taller" }] : []),
+    ...(permissions.canReadExecutions ? [{ to: "/productos-terminados", label: "Productos terminados", hint: "Unidades disponibles y entregadas" }] : []),
   ];
   const administrationLinks = administration.filter((entry) => permissions[entry.permission]);
   const { state, signOut } = useSession();

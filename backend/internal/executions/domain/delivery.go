@@ -56,3 +56,40 @@ type DeliveryReceipt struct {
 	UnitCodes    []string  `json:"unit_codes"`
 	DeliveredAt  time.Time `json:"delivered_at"`
 }
+
+type FinishedStockFilter struct {
+	Status        string
+	Q             string
+	Limit, Offset int
+}
+
+func (f FinishedStockFilter) Normalize() (FinishedStockFilter, error) {
+	f.Status = strings.TrimSpace(f.Status)
+	f.Q = strings.TrimSpace(f.Q)
+	if f.Limit == 0 {
+		f.Limit = 25
+	}
+	fields := map[string]string{}
+	if f.Status != "" && f.Status != "available" && f.Status != "delivered" {
+		fields["status"] = "must be available or delivered"
+	}
+	if f.Limit < 1 || f.Limit > 100 || f.Offset < 0 {
+		fields["limit"] = "must be 1 to 100 and offset nonnegative"
+	}
+	if len(fields) > 0 {
+		return f, &ValidationError{Fields: fields}
+	}
+	return f, nil
+}
+
+type FinishedStockRow struct {
+	ID           int64      `json:"id"`
+	Code         string     `json:"code"`
+	ExecutionID  int64      `json:"execution_id"`
+	ProjectName  string     `json:"project_name"`
+	ProducedAt   time.Time  `json:"produced_at"`
+	Status       string     `json:"status"`
+	Receipt      string     `json:"receipt,omitempty"`
+	CustomerName string     `json:"customer_name,omitempty"`
+	DeliveredAt  *time.Time `json:"delivered_at,omitempty"`
+}

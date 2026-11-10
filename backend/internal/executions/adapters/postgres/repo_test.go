@@ -1060,6 +1060,10 @@ func TestFinishedUnitDeliveriesAllocateOnlyToExecutionCustomers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	availableStock, total, _, err := svc.ListFinishedStock(ctx, executiondomain.FinishedStockFilter{Status: "available", Q: units[0].Code})
+	if err != nil || total != 1 || len(availableStock) != 1 || availableStock[0].Code != units[0].Code || availableStock[0].ProjectName != "Marmita delivery" {
+		t.Fatalf("available finished stock = %+v, total=%d, err=%v", availableStock, total, err)
+	}
 	firstInput := executiondomain.DeliveryInput{RequestID: "00000000-0000-4000-8000-000000000102", CustomerID: customers[0], UnitIDs: []int64{units[0].ID}}
 	first, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, firstInput)
 	if err != nil || first.Number != "DEL-000001" || first.CustomerID != customers[0] || len(first.UnitCodes) != 1 || first.UnitCodes[0] != units[0].Code {
@@ -1074,6 +1078,10 @@ func TestFinishedUnitDeliveriesAllocateOnlyToExecutionCustomers(t *testing.T) {
 	}
 	if first.CustomerName != "Client A" {
 		t.Fatalf("receipt lost customer name snapshot: %+v", first)
+	}
+	deliveredStock, total, _, err := svc.ListFinishedStock(ctx, executiondomain.FinishedStockFilter{Status: "delivered", Q: "Marmita delivery"})
+	if err != nil || total != 1 || len(deliveredStock) != 1 || deliveredStock[0].Code != units[0].Code || deliveredStock[0].CustomerName != "Client A" {
+		t.Fatalf("delivered finished stock = %+v, total=%d, err=%v", deliveredStock, total, err)
 	}
 	if _, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, executiondomain.DeliveryInput{RequestID: firstInput.RequestID, CustomerID: customers[1], UnitIDs: firstInput.UnitIDs}); !errors.Is(err, executiondomain.ErrDeliveryReplay) {
 		t.Fatalf("changed delivery replay = %v", err)

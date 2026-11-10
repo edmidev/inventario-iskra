@@ -33,6 +33,7 @@ func New(service *app.Service, authenticate func(http.Handler) http.Handler, per
 func (h *Handler) Register(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(h.authenticate)
+		r.With(httpx.RequirePermission(h.perms.Read)).Get("/finished-products", h.listFinishedStock)
 		r.Route("/executions", func(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/", h.list)
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/assignable-users", h.assignableUsers)
@@ -54,6 +55,26 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials/{itemID}/return", h.returnMaterial)
 		})
 	})
+}
+
+func (h *Handler) listFinishedStock(w http.ResponseWriter, r *http.Request) {
+	filter := domain.FinishedStockFilter{Status: r.URL.Query().Get("status"), Q: r.URL.Query().Get("q")}
+	for key, target := range map[string]*int{"limit": &filter.Limit, "offset": &filter.Offset} {
+		if value := r.URL.Query().Get(key); value != "" {
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				httpx.WriteFieldErrors(w, map[string]string{key: "must be an integer"})
+				return
+			}
+			*target = n
+		}
+	}
+	rows, total, normalized, err := h.svc.ListFinishedStock(r.Context(), filter)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": rows, "total": total, "limit": normalized.Limit, "offset": normalized.Offset})
 }
 
 func (h *Handler) linkPurchaseLine(w http.ResponseWriter, r *http.Request) {
