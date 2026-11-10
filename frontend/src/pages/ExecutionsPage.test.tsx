@@ -177,4 +177,18 @@ describe("execution registration", () => {
     await screen.findByText("Material entregado al proyecto.");
     await waitFor(() => expect(movementBody).toMatchObject({ request_id: expect.stringMatching(/^[0-9a-f-]{36}$/), quantity: 1, location_id: 11, note: "" }));
   });
+
+  it("shows the automatically generated shortage request on an execution", async () => {
+    useAuthenticatedApi("admin");
+    const execution = {
+      id: 27, project_id: 4, project_name: "Marmita", description: "Acero inoxidable", characteristics: [], consumables: [], tools: [],
+      template_estimated_days: 12, units: 1, estimated_days: 12,
+      materials: [{ item_id: "item-1", required_quantity: 5, reserved_quantity: 2, delivered_quantity: 0, returned_quantity: 0, deficit_quantity: 3 }],
+      shortage_request_id: 31, customer_ids: [8], principal_user_id: "user-a", worker_ids: [], status: "completed",
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    server.use(http.get(api("/executions"), () => HttpResponse.json({ data: [execution], total: 1, limit: 25, offset: 0 })));
+    renderApp("/ejecuciones");
+    expect(await screen.findByText("Solicitud de insumos #31")).toBeInTheDocument();
+  });
 });

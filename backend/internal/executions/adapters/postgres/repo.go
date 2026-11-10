@@ -27,6 +27,7 @@ type rowQueryer interface {
 const selectExecution = `SELECT e.id,e.project_snapshot,e.units,e.estimated_days,e.status,e.principal_user_id::text,e.created_at,e.updated_at,
 ARRAY(SELECT customer_id FROM manufacturing_execution_customers c WHERE c.execution_id=e.id ORDER BY customer_id)::BIGINT[],
 ARRAY(SELECT user_id::text FROM manufacturing_execution_workers w WHERE w.execution_id=e.id ORDER BY user_id)::TEXT[],
+COALESCE((SELECT id FROM manufacturing_execution_shortage_requests r WHERE r.execution_id=e.id),0),
 COALESCE((SELECT jsonb_agg(jsonb_build_object(
  'item_id',m.item_id::text,'required_quantity',m.quantity_required,
  'reserved_quantity',m.quantity_reserved,'delivered_quantity',m.quantity_delivered,
@@ -44,7 +45,7 @@ func scanExecution(row pgx.Row) (domain.Execution, error) {
 	var status string
 	var materials []byte
 	var supplementalTools []string
-	err := row.Scan(&e.ID, &snapshot, &e.Units, &e.EstimatedDays, &status, &e.PrincipalUserID, &e.CreatedAt, &e.UpdatedAt, &e.CustomerIDs, &e.WorkerIDs, &materials, &supplementalTools)
+	err := row.Scan(&e.ID, &snapshot, &e.Units, &e.EstimatedDays, &status, &e.PrincipalUserID, &e.CreatedAt, &e.UpdatedAt, &e.CustomerIDs, &e.WorkerIDs, &e.ShortageRequestID, &materials, &supplementalTools)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Execution{}, domain.ErrNotFound
@@ -439,6 +440,18 @@ func (r *Repo) Transition(ctx context.Context, id int64, from, to domain.Status)
 			return domain.Execution{}, err
 		}
 		return domain.Execution{}, domain.ErrInvalidState
+	}
+	requestStatus := ""
+	switch to {
+	case domain.StatusCompleted:
+		requestStatus = "completed"
+	case domain.StatusCancelled:
+		requestStatus = "cancelled"
+	}
+	if requestStatus != "" {
+		if _, err := tx.Exec(ctx, `UPDATE manufacturing_execution_shortage_requests SET status=$2,updated_at=now() WHERE execution_id=$1`, id, requestStatus); err != nil {
+			return domain.Execution{}, err
+		}
 	}
 	e, err := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, id))
 	if err != nil {

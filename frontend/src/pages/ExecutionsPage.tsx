@@ -178,6 +178,7 @@ function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite
     </div>
     <p className="text-sm">{execution.units} {execution.units === 1 ? "unidad" : "unidades"} · {execution.estimated_days} días · {execution.customer_ids.length} {execution.customer_ids.length === 1 ? "cliente" : "clientes"}</p>
     <p className="text-sm text-ink-soft">Responsable principal asignado · {execution.worker_ids.length} trabajadores</p>
+    {execution.shortage_request_id && <p><Badge tone="warn">Solicitud de insumos #{execution.shortage_request_id}</Badge></p>}
     <details className="rounded-xl bg-sunken p-3 text-sm">
       <summary className="cursor-pointer font-semibold">Ver snapshot del proyecto</summary>
       <p className="mt-2">{execution.description || "Sin descripción"}</p>

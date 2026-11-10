@@ -19,6 +19,7 @@ export const executionSchema = z.object({
   template_estimated_days: z.number(),
   units: z.number().int(),
   estimated_days: z.number().int(),
+  shortage_request_id: z.number().int().positive().optional(),
   materials: z.array(allocationSchema).default([]),
   customer_ids: z.array(z.number()),
   principal_user_id: z.string(),

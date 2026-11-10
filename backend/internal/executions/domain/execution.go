@@ -247,6 +247,7 @@ func validUUID(value string) bool {
 type Execution struct {
 	ID int64 `json:"id"`
 	ProjectSnapshot
+	ShortageRequestID   int64                `json:"shortage_request_id,omitempty"`
 	Units               int                  `json:"units"`
 	EstimatedDays       int                  `json:"estimated_days"`
 	Materials           []MaterialAllocation `json:"materials"`

@@ -553,6 +553,77 @@ func (f supplementalMaterialFixture) create(units int) executiondomain.Execution
 	return created
 }
 
+func TestExecutionShortageCreatesProcurementRequest(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(1000), quantity.Quantity(1250))
+	execution := f.create(1)
+	if execution.ShortageRequestID < 1 {
+		t.Fatalf("short execution has no procurement request: %+v", execution)
+	}
+	var requestCount int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_shortage_requests WHERE execution_id=$1 AND id=$2`, execution.ID, execution.ShortageRequestID).Scan(&requestCount); err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("short execution has %d procurement requests, want one", requestCount)
+	}
+
+	sqlDB, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(f.ctx, 19); err == nil {
+		t.Fatal("migration rollback removed shortage request history")
+	}
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_shortage_requests WHERE execution_id=$1`, execution.ID).Scan(&requestCount); err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("rejected rollback changed shortage requests: count=%d", requestCount)
+	}
+}
+
+func TestNewReservationShortageCreatesSingleRequest(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(5000), quantity.Quantity(1250))
+	first := f.create(1)
+	if first.ShortageRequestID != 0 {
+		t.Fatalf("fully reserved execution unexpectedly created shortage request %d", first.ShortageRequestID)
+	}
+	second := f.create(4)
+	if second.ShortageRequestID < 1 {
+		t.Fatalf("execution with a FIFO deficit has no shortage request: %+v", second)
+	}
+	var requestCount int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_shortage_requests WHERE execution_id=$1`, second.ID).Scan(&requestCount); err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("reservation updates created %d requests for one execution, want one", requestCount)
+	}
+}
+
+func TestCancellingExecutionClosesItsShortageRequest(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(1000), quantity.Quantity(1250))
+	execution := f.create(1)
+	if execution.ShortageRequestID < 1 {
+		t.Fatal("expected an initial shortage request")
+	}
+	if _, err := executionpg.New(f.pool).Transition(f.ctx, execution.ID, executiondomain.StatusRegistered, executiondomain.StatusCancelled); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := f.pool.QueryRow(f.ctx, `SELECT status FROM manufacturing_execution_shortage_requests WHERE execution_id=$1`, execution.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "cancelled" {
+		t.Fatalf("shortage request status = %q, want cancelled", status)
+	}
+}
+
 func TestCreateStoresIndependentSnapshotAndAllowsPartialStart(t *testing.T) {
 	pool, ctx := setupExecutions(t)
 	var principal, worker string
