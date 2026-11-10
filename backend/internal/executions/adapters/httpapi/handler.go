@@ -43,10 +43,31 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/resume", h.resume)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials", h.addMaterial)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/tools", h.addTool)
+			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/purchase-lines", h.linkPurchaseLine)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials/{itemID}/deliver", h.deliverMaterial)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials/{itemID}/return", h.returnMaterial)
 		})
 	})
+}
+
+func (h *Handler) linkPurchaseLine(w http.ResponseWriter, r *http.Request) {
+	id, ok := executionID(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		PurchaseOrderLineID int64             `json:"purchase_order_line_id"`
+		Quantity            quantity.Quantity `json:"quantity"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	execution, err := h.svc.LinkPurchaseOrderLine(r.Context(), id, input.PurchaseOrderLineID, input.Quantity)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, execution)
 }
 
 func decode(w http.ResponseWriter, r *http.Request, dst any) bool {

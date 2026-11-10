@@ -20,6 +20,9 @@ type routeRepo struct{}
 func (routeRepo) Create(context.Context, domain.Execution) (domain.Execution, error) {
 	return domain.Execution{}, nil
 }
+func (routeRepo) LinkPurchaseOrderLine(context.Context, int64, int64, quantity.Quantity) (domain.Execution, error) {
+	return domain.Execution{}, nil
+}
 func (routeRepo) AddMaterialRequirement(context.Context, int64, string, string, quantity.Quantity, string) (domain.Execution, error) {
 	return domain.Execution{}, nil
 }
@@ -93,6 +96,16 @@ func TestExecutionCreationRequiresWritePermission(t *testing.T) {
 
 func TestAddingExecutionMaterialRequiresWritePermission(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/executions/1/materials", strings.NewReader(`{"request_id":"00000000-0000-4000-8000-000000000001","item_id":"00000000-0000-4000-8000-000000000002","quantity":1}`))
+	res := httptest.NewRecorder()
+	routeHandler([]string{"executions:read"}).ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusForbidden, res.Body.String())
+	}
+}
+
+func TestLinkingExecutionPurchaseLineRequiresWritePermission(t *testing.T) {
+	body := strings.NewReader(`{"purchase_order_line_id":42,"quantity":1.5}`)
+	req := httptest.NewRequest(http.MethodPost, "/executions/1/purchase-lines", body)
 	res := httptest.NewRecorder()
 	routeHandler([]string{"executions:read"}).ServeHTTP(res, req)
 	if res.Code != http.StatusForbidden {

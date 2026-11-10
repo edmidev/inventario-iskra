@@ -189,8 +189,16 @@ WHERE m.execution_id=$1 AND m.item_id=$2::uuid FOR UPDATE OF m,e`, *executionID,
 		}
 		if materialOperation == "delivery" {
 			if _, err := tx.Exec(ctx, `UPDATE manufacturing_execution_materials
-SET quantity_reserved=quantity_reserved-$3,quantity_delivered=quantity_delivered+$3
-WHERE execution_id=$1 AND item_id=$2::uuid`, *executionID, itemID, qty); err != nil {
+AS m SET quantity_reserved=m.quantity_reserved-$3,quantity_delivered=m.quantity_delivered+$3,
+quantity_earmarked_consumed=m.quantity_earmarked_consumed+
+LEAST($3,GREATEST(0,COALESCE((
+    SELECT SUM(LEAST(link.quantity,l.received_qty))
+    FROM manufacturing_execution_purchase_links link
+    JOIN manufacturing_execution_shortage_requests r ON r.id=link.shortage_request_id
+    JOIN purchase_order_lines l ON l.id=link.purchase_order_line_id
+    WHERE r.execution_id=m.execution_id AND r.status='open' AND l.item_id=m.item_id
+),0)-m.quantity_earmarked_consumed))
+WHERE m.execution_id=$1 AND m.item_id=$2::uuid`, *executionID, itemID, qty); err != nil {
 				return domain.Movement{}, nil, err
 			}
 		} else if _, err := tx.Exec(ctx, `UPDATE manufacturing_execution_materials

@@ -183,12 +183,45 @@ describe("execution registration", () => {
     const execution = {
       id: 27, project_id: 4, project_name: "Marmita", description: "Acero inoxidable", characteristics: [], consumables: [], tools: [],
       template_estimated_days: 12, units: 1, estimated_days: 12,
-      materials: [{ item_id: "item-1", required_quantity: 5, reserved_quantity: 2, delivered_quantity: 0, returned_quantity: 0, deficit_quantity: 3 }],
+      materials: [{ item_id: "item-1", required_quantity: 5, reserved_quantity: 2, delivered_quantity: 0, returned_quantity: 0, deficit_quantity: 3, purchased_pending_quantity: 1.5, unpurchased_quantity: 1.5 }],
       shortage_request_id: 31, customer_ids: [8], principal_user_id: "user-a", worker_ids: [], status: "completed",
       created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
     };
     server.use(http.get(api("/executions"), () => HttpResponse.json({ data: [execution], total: 1, limit: 25, offset: 0 })));
     renderApp("/ejecuciones");
     expect(await screen.findByText("Solicitud de insumos #31")).toBeInTheDocument();
+    expect(screen.getByText("Sin comprar: 1.5 · Comprado pendiente de recibir: 1.5")).toBeInTheDocument();
+  });
+
+  it("links an ordered purchase line to the execution shortage", async () => {
+    const user = userEvent.setup();
+    useAuthenticatedApi("admin");
+    const execution = {
+      id: 27, project_id: 4, project_name: "Marmita", description: "Acero inoxidable", characteristics: [], consumables: [], tools: [],
+      template_estimated_days: 12, units: 1, estimated_days: 12,
+      materials: [{ item_id: "item-1", required_quantity: 1.5, reserved_quantity: 0, delivered_quantity: 0, returned_quantity: 0, deficit_quantity: 1.5, purchased_pending_quantity: 0, unpurchased_quantity: 1.5 }],
+      shortage_request_id: 31, customer_ids: [8], principal_user_id: "user-a", worker_ids: [], status: "registered",
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    const order = {
+      id: 7, supplier_id: 3, supplier_name: "Proveedor Acero", status: "ordered", currency: "USD",
+      exchange_rate: null, expected_at: null, notes: "", total_minor: 150, receipts: [],
+      lines: [{ id: 42, item_id: "item-1", new_item: null, description: "Lámina", quantity: 1.5, received_qty: 0, unit_cost_minor: 100 }],
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", ordered_at: "2026-01-01T00:00:00Z", cancelled_at: null,
+    };
+    let submitted: unknown;
+    server.use(
+      http.get(api("/executions"), () => HttpResponse.json({ data: [execution], total: 1, limit: 25, offset: 0 })),
+      http.get(api("/purchase-orders"), () => HttpResponse.json({ data: [order], total: 1, limit: 25, offset: 0 })),
+      http.post(api("/executions/27/purchase-lines"), async ({ request }) => {
+        submitted = await request.json();
+        return HttpResponse.json({ ...execution, materials: [{ ...execution.materials[0], purchased_pending_quantity: 1.5, unpurchased_quantity: 0 }] });
+      }),
+    );
+    renderApp("/ejecuciones");
+    await screen.findByRole("option", { name: /Orden #7/ });
+    await user.selectOptions(screen.getByLabelText("Línea de compra"), "42");
+    await user.click(screen.getByRole("button", { name: "Vincular compra" }));
+    await waitFor(() => expect(submitted).toEqual({ purchase_order_line_id: 42, quantity: 1.5 }));
   });
 });

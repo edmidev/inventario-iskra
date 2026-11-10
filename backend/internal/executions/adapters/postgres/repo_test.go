@@ -624,6 +624,72 @@ func TestCancellingExecutionClosesItsShortageRequest(t *testing.T) {
 	}
 }
 
+func TestLinkPurchaseLineTracksPendingShortageWithoutChangingStock(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(500), quantity.Quantity(2500))
+	execution := f.create(1)
+	if execution.ShortageRequestID == 0 {
+		t.Fatal("expected a shortage request")
+	}
+	var supplierID, orderID, lineID int64
+	if err := f.pool.QueryRow(f.ctx, `INSERT INTO suppliers(name) VALUES($1) RETURNING id`, fmt.Sprintf("Shortage supplier %d", time.Now().UnixNano())).Scan(&supplierID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(f.ctx, `INSERT INTO purchase_orders(supplier_id,currency,status) VALUES($1,'USD','ordered') RETURNING id`, supplierID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(f.ctx, `INSERT INTO purchase_order_lines(order_id,position,item_id,quantity,unit_cost_minor) VALUES($1,1,$2::uuid,1500,100) RETURNING id`, orderID, f.itemID).Scan(&lineID); err != nil {
+		t.Fatal(err)
+	}
+	repo := executionpg.New(f.pool)
+	if _, err := repo.LinkPurchaseOrderLine(f.ctx, execution.ID, lineID, quantity.Quantity(1500)); err != nil {
+		t.Fatal(err)
+	}
+	linked, err := repo.Get(f.ctx, execution.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(linked.Materials) != 1 || linked.Materials[0].PurchasedPendingQuantity != quantity.Quantity(1500) || linked.Materials[0].UnpurchasedQuantity != quantity.Quantity(500) {
+		t.Fatalf("purchase tracking = %+v", linked.Materials)
+	}
+	if _, err := repo.LinkPurchaseOrderLine(f.ctx, execution.ID, lineID, quantity.Quantity(1500)); err != nil {
+		t.Fatalf("identical link replay: %v", err)
+	}
+	var linkCount int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM manufacturing_execution_purchase_links WHERE shortage_request_id=$1`, execution.ShortageRequestID).Scan(&linkCount); err != nil {
+		t.Fatal(err)
+	}
+	if linkCount != 1 {
+		t.Fatalf("replayed link created %d records", linkCount)
+	}
+	if _, err := repo.LinkPurchaseOrderLine(f.ctx, execution.ID, lineID, quantity.Quantity(1000)); !errors.Is(err, executiondomain.ErrInvalidInput) {
+		t.Fatalf("changed link replay error = %v, want invalid input", err)
+	}
+	var excessLineID int64
+	if err := f.pool.QueryRow(f.ctx, `INSERT INTO purchase_order_lines(order_id,position,item_id,quantity,unit_cost_minor) VALUES($1,2,$2::uuid,1000,100) RETURNING id`, orderID, f.itemID).Scan(&excessLineID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.LinkPurchaseOrderLine(f.ctx, execution.ID, excessLineID, quantity.Quantity(1000)); !errors.Is(err, executiondomain.ErrInvalidInput) {
+		t.Fatalf("over-purchase link error = %v, want invalid input", err)
+	}
+	var stock quantity.Quantity
+	if err := f.pool.QueryRow(f.ctx, `SELECT stock_current FROM items WHERE id=$1::uuid`, f.itemID).Scan(&stock); err != nil {
+		t.Fatal(err)
+	}
+	if stock != quantity.Quantity(500) {
+		t.Fatalf("linking a purchase changed physical stock to %v", stock)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE purchase_orders SET status='cancelled' WHERE id=$1`, orderID); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := repo.Get(f.ctx, execution.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Materials[0].PurchasedPendingQuantity != 0 || cancelled.Materials[0].UnpurchasedQuantity != quantity.Quantity(2000) {
+		t.Fatalf("cancelled order still covers a shortage: %+v", cancelled.Materials[0])
+	}
+}
+
 func TestCreateStoresIndependentSnapshotAndAllowsPartialStart(t *testing.T) {
 	pool, ctx := setupExecutions(t)
 	var principal, worker string

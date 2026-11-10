@@ -24,12 +24,17 @@ type TemplateReader interface {
 
 type Repository interface {
 	Create(context.Context, domain.Execution) (domain.Execution, error)
+	LinkPurchaseOrderLine(context.Context, int64, int64, quantity.Quantity) (domain.Execution, error)
 	AddMaterialRequirement(context.Context, int64, string, string, quantity.Quantity, string) (domain.Execution, error)
 	AddToolRequirement(context.Context, int64, string, string, string, string) (domain.Execution, error)
 	Get(context.Context, int64) (domain.Execution, error)
 	List(context.Context, domain.Filter) ([]domain.Execution, int, error)
 	Transition(context.Context, int64, domain.Status, domain.Status) (domain.Execution, error)
 	ListAssignableUsers(context.Context) ([]domain.AssignableUser, error)
+}
+
+func (s *Service) LinkPurchaseOrderLine(ctx context.Context, executionID, lineID int64, amount quantity.Quantity) (domain.Execution, error) {
+	return s.repo.LinkPurchaseOrderLine(ctx, executionID, lineID, amount)
 }
 
 type Service struct {

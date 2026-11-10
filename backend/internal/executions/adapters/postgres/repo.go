@@ -32,8 +32,21 @@ COALESCE((SELECT jsonb_agg(jsonb_build_object(
  'item_id',m.item_id::text,'required_quantity',m.quantity_required,
  'reserved_quantity',m.quantity_reserved,'delivered_quantity',m.quantity_delivered,
  'returned_quantity',m.quantity_returned,
- 'deficit_quantity',m.quantity_required-m.quantity_reserved-m.quantity_delivered)
- ORDER BY m.item_id) FROM manufacturing_execution_materials m WHERE m.execution_id=e.id),'[]'::JSONB)
+ 'deficit_quantity',m.quantity_required-m.quantity_reserved-m.quantity_delivered,
+ 'purchased_pending_quantity',p.pending,
+ 'unpurchased_quantity',GREATEST(m.quantity_required-m.quantity_reserved-m.quantity_delivered-p.pending,0))
+ ORDER BY m.item_id)
+ FROM manufacturing_execution_materials m
+ LEFT JOIN LATERAL (
+   SELECT COALESCE(SUM(GREATEST(link.quantity-l.received_qty,0)),0) AS pending
+   FROM manufacturing_execution_purchase_links link
+   JOIN manufacturing_execution_shortage_requests req ON req.id=link.shortage_request_id
+   JOIN purchase_order_lines l ON l.id=link.purchase_order_line_id
+   JOIN purchase_orders po ON po.id=l.order_id
+   WHERE req.execution_id=m.execution_id AND req.status='open'
+     AND l.item_id=m.item_id AND po.status<>'cancelled'
+ ) p ON TRUE
+ WHERE m.execution_id=e.id),'[]'::JSONB)
 ,
 COALESCE((SELECT array_agg(t.item_id::text ORDER BY t.item_id)
  FROM manufacturing_execution_supplemental_tools t WHERE t.execution_id=e.id),ARRAY[]::TEXT[])
@@ -386,6 +399,91 @@ VALUES($1::uuid,$2,$3::uuid,$4::uuid,$5)`, requestID, executionID, itemID, userI
 
 func (r *Repo) Get(ctx context.Context, id int64) (domain.Execution, error) {
 	return scanExecution(r.pool.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, id))
+}
+
+// LinkPurchaseOrderLine earmarks an unreceived supplier-order line for an
+// execution's current deficit. Repeating an identical link is idempotent.
+func (r *Repo) LinkPurchaseOrderLine(ctx context.Context, executionID, lineID int64, amount quantity.Quantity) (domain.Execution, error) {
+	if executionID < 1 || lineID < 1 || amount <= 0 {
+		return domain.Execution{}, &domain.ValidationError{Fields: map[string]string{"quantity": "execution, line and positive quantity are required"}}
+	}
+	tx, commit, rollback, err := db.Begin(ctx, r.pool)
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	defer rollback()
+	// Purchasing receives under the order row lock before touching stock or
+	// execution state. Link in the same order to avoid a cross-module cycle.
+	var itemID, orderStatus string
+	var lineQuantity, receivedQuantity quantity.Quantity
+	err = tx.QueryRow(ctx, `SELECT l.item_id::text,l.quantity,l.received_qty,po.status
+FROM purchase_order_lines l JOIN purchase_orders po ON po.id=l.order_id
+WHERE l.id=$1 AND l.item_id IS NOT NULL FOR UPDATE OF po,l`, lineID).Scan(&itemID, &lineQuantity, &receivedQuantity, &orderStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Execution{}, &domain.ValidationError{Fields: map[string]string{"purchase_order_line_id": "must reference an existing consumable line"}}
+	}
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	if orderStatus != "ordered" || receivedQuantity != 0 || amount > lineQuantity {
+		return domain.Execution{}, &domain.ValidationError{Fields: map[string]string{"purchase_order_line_id": "line must be ordered, unreceived and have enough quantity"}}
+	}
+	var requestID int64
+	var executionStatus, requestStatus string
+	err = tx.QueryRow(ctx, `SELECT r.id,e.status,r.status
+FROM manufacturing_executions e
+JOIN manufacturing_execution_shortage_requests r ON r.execution_id=e.id
+WHERE e.id=$1 FOR UPDATE OF e,r`, executionID).Scan(&requestID, &executionStatus, &requestStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Execution{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	if requestStatus != "open" || (executionStatus != "registered" && executionStatus != "in_progress" && executionStatus != "paused") {
+		return domain.Execution{}, domain.ErrInvalidState
+	}
+	var existingRequest int64
+	var existingAmount quantity.Quantity
+	err = tx.QueryRow(ctx, `SELECT shortage_request_id,quantity FROM manufacturing_execution_purchase_links WHERE purchase_order_line_id=$1`, lineID).Scan(&existingRequest, &existingAmount)
+	if err == nil {
+		if existingRequest != requestID || existingAmount != amount {
+			return domain.Execution{}, &domain.ValidationError{Fields: map[string]string{"purchase_order_line_id": "line is already linked with different terms"}}
+		}
+		out, err := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, executionID))
+		if err != nil {
+			return domain.Execution{}, err
+		}
+		return out, commit()
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Execution{}, err
+	}
+	var deficit, pending quantity.Quantity
+	err = tx.QueryRow(ctx, `SELECT m.quantity_required-m.quantity_reserved-m.quantity_delivered,
+COALESCE((SELECT SUM(GREATEST(link.quantity-l.received_qty,0))
+FROM manufacturing_execution_purchase_links link
+JOIN purchase_order_lines l ON l.id=link.purchase_order_line_id
+JOIN purchase_orders po ON po.id=l.order_id
+WHERE link.shortage_request_id=$1 AND l.item_id=m.item_id AND po.status<>'cancelled'),0)
+FROM manufacturing_execution_materials m WHERE m.execution_id=$2 AND m.item_id=$3::uuid`, requestID, executionID, itemID).Scan(&deficit, &pending)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Execution{}, &domain.ValidationError{Fields: map[string]string{"quantity": "exceeds the unpurchased execution shortage"}}
+	}
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	if amount > deficit-pending {
+		return domain.Execution{}, &domain.ValidationError{Fields: map[string]string{"quantity": "exceeds the unpurchased execution shortage"}}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO manufacturing_execution_purchase_links(shortage_request_id,purchase_order_line_id,quantity) VALUES($1,$2,$3)`, requestID, lineID, amount); err != nil {
+		return domain.Execution{}, err
+	}
+	out, err := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, executionID))
+	if err != nil {
+		return domain.Execution{}, err
+	}
+	return out, commit()
 }
 
 var escape = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)

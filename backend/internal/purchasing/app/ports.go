@@ -78,6 +78,23 @@ type StockReceiver interface {
 	ReceiveIn(ctx context.Context, itemID, userID string, locationID int64, qty qtyval.Quantity, note string) error
 }
 
+// PurchaseReservation captures a linked execution's reservation before a
+// receipt changes stock. Only the receipt allocator should construct it.
+type PurchaseReservation struct {
+	ExecutionID    int64
+	ItemID         string
+	ReservedBefore qtyval.Quantity
+	LinkRemaining  qtyval.Quantity
+}
+
+// PurchaseAllocator earmarks linked inbound for its execution in the same
+// order/stock transaction. Prepare holds the item lock through Allocate.
+type PurchaseAllocator interface {
+	LockReceiptItems(context.Context, []string) error
+	PrepareReceipt(context.Context, int64, string, qtyval.Quantity) (PurchaseReservation, error)
+	AllocateReceipt(context.Context, PurchaseReservation, qtyval.Quantity) error
+}
+
 // Suppliers looks suppliers up.
 type Suppliers interface {
 	// Get returns a live supplier's name and whether it is active, or

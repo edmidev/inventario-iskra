@@ -265,12 +265,14 @@ type Execution struct {
 // consumable requirement. Reservations are informational quantities held
 // globally for this execution; tools remain outside the stock reservation flow.
 type MaterialAllocation struct {
-	ItemID            string            `json:"item_id"`
-	RequiredQuantity  quantity.Quantity `json:"required_quantity"`
-	ReservedQuantity  quantity.Quantity `json:"reserved_quantity"`
-	DeliveredQuantity quantity.Quantity `json:"delivered_quantity"`
-	ReturnedQuantity  quantity.Quantity `json:"returned_quantity"`
-	DeficitQuantity   quantity.Quantity `json:"deficit_quantity"`
+	ItemID                   string            `json:"item_id"`
+	RequiredQuantity         quantity.Quantity `json:"required_quantity"`
+	ReservedQuantity         quantity.Quantity `json:"reserved_quantity"`
+	DeliveredQuantity        quantity.Quantity `json:"delivered_quantity"`
+	ReturnedQuantity         quantity.Quantity `json:"returned_quantity"`
+	DeficitQuantity          quantity.Quantity `json:"deficit_quantity"`
+	PurchasedPendingQuantity quantity.Quantity `json:"purchased_pending_quantity"`
+	UnpurchasedQuantity      quantity.Quantity `json:"unpurchased_quantity"`
 }
 
 type AssignableUser struct {

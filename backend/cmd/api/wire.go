@@ -16,6 +16,7 @@ import (
 	dashboardapi "github.com/edgar/inventario/backend/internal/dashboard/adapters/httpapi"
 	dashboardpg "github.com/edgar/inventario/backend/internal/dashboard/adapters/postgres"
 	dashboardapp "github.com/edgar/inventario/backend/internal/dashboard/app"
+	executionpg "github.com/edgar/inventario/backend/internal/executions/adapters/postgres"
 	"github.com/edgar/inventario/backend/internal/identity/adapters"
 	"github.com/edgar/inventario/backend/internal/identity/adapters/httpapi"
 	"github.com/edgar/inventario/backend/internal/identity/adapters/postgres"
@@ -170,6 +171,7 @@ func newPurchasingService(pool *pgxpool.Pool) *purchasingapp.Service {
 		purchasingStock{svc: stockapp.NewService(stockpg.New(pool))},
 		purchasingSuppliers{svc: suppliersapp.NewService(supplierspg.New(pool))},
 		nil,
+		executionpg.New(pool),
 	)
 }
 

@@ -7,6 +7,7 @@ const materialSchema = z.object({ item_id: z.string(), quantity_per_unit: z.numb
 const allocationSchema = z.object({
   item_id: z.string(), required_quantity: z.number(), reserved_quantity: z.number(), delivered_quantity: z.number(),
   returned_quantity: z.number(), deficit_quantity: z.number(),
+  purchased_pending_quantity: z.number().default(0), unpurchased_quantity: z.number().default(0),
 });
 export const executionSchema = z.object({
   id: z.number(),
@@ -76,6 +77,15 @@ export function useAddExecutionTool(executionID: number) {
   return useMutation({
     mutationFn: (input: { request_id: string; item_id: string }) =>
       request(`/executions/${executionID}/tools`, executionSchema, { method: "POST", body: input }),
+    onSuccess: () => client.invalidateQueries({ queryKey: executionsKey }),
+  });
+}
+
+export function useLinkExecutionPurchaseLine(executionID: number) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { purchase_order_line_id: number; quantity: number }) =>
+      request(`/executions/${executionID}/purchase-lines`, executionSchema, { method: "POST", body: input }),
     onSuccess: () => client.invalidateQueries({ queryKey: executionsKey }),
   });
 }

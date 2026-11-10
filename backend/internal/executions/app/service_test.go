@@ -37,6 +37,10 @@ func (f *executionRepoFake) Create(_ context.Context, e domain.Execution) (domai
 	return f.saved, nil
 }
 
+func (f *executionRepoFake) LinkPurchaseOrderLine(context.Context, int64, int64, quantity.Quantity) (domain.Execution, error) {
+	return domain.Execution{}, nil
+}
+
 func (f *executionRepoFake) AddMaterialRequirement(context.Context, int64, string, string, quantity.Quantity, string) (domain.Execution, error) {
 	return domain.Execution{}, nil
 }

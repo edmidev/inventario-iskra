@@ -16,16 +16,21 @@ type Service struct {
 	repo      Repository
 	items     ItemCatalog
 	stock     StockReceiver
+	allocator PurchaseAllocator
 	suppliers Suppliers
 	now       func() time.Time
 }
 
 // NewService wires the repository and the ports. now may be nil.
-func NewService(r Repository, items ItemCatalog, stock StockReceiver, sups Suppliers, now func() time.Time) *Service {
+func NewService(r Repository, items ItemCatalog, stock StockReceiver, sups Suppliers, now func() time.Time, allocators ...PurchaseAllocator) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{repo: r, items: items, stock: stock, suppliers: sups, now: now}
+	s := &Service{repo: r, items: items, stock: stock, suppliers: sups, now: now}
+	if len(allocators) > 0 {
+		s.allocator = allocators[0]
+	}
+	return s
 }
 
 // Create validates and stores a draft order.
@@ -188,11 +193,34 @@ func (s *Service) Receive(ctx context.Context, id int64, userID string, req doma
 		if plan.Note != "" {
 			note += ": " + plan.Note
 		}
+		if s.allocator != nil {
+			itemIDs := make([]string, 0, len(plan.Lines))
+			for i := range plan.Lines {
+				if itemID := o.Lines[idx[i]].ItemID; itemID != "" {
+					itemIDs = append(itemIDs, itemID)
+				}
+			}
+			if err := s.allocator.LockReceiptItems(ctx, itemIDs); err != nil {
+				return fmt.Errorf("lock receipt items: %w", err)
+			}
+		}
 		for i, rl := range plan.Lines {
 			line := &o.Lines[idx[i]]
+			var reservation PurchaseReservation
+			if s.allocator != nil && line.ItemID != "" {
+				reservation, err = s.allocator.PrepareReceipt(ctx, line.ID, line.ItemID, line.ReceivedQty)
+				if err != nil {
+					return fmt.Errorf("prepare line %d allocation: %w", line.ID, err)
+				}
+			}
 			items, err := s.bringIn(ctx, line, rl.Quantity, plan.LocationID, userID, note)
 			if err != nil {
 				return fmt.Errorf("line %d: %w", line.ID, err)
+			}
+			if s.allocator != nil && reservation.ExecutionID != 0 {
+				if err := s.allocator.AllocateReceipt(ctx, reservation, rl.Quantity); err != nil {
+					return fmt.Errorf("allocate line %d receipt: %w", line.ID, err)
+				}
 			}
 			rc.Lines = append(rc.Lines, domain.ReceiptLine{LineID: line.ID, Quantity: rl.Quantity, Items: items})
 		}

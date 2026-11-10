@@ -8,7 +8,8 @@ import { Sheet } from "../components/molecules/Sheet";
 import { useToast } from "../components/molecules/Toast";
 import { useSession } from "../features/auth/session";
 import { useCustomers } from "../features/customers/api/customers";
-import { useAddExecutionMaterial, useAddExecutionTool, useAssignableUsers, useCreateExecution, useExecutions, useMoveExecutionMaterial, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
+import { useAddExecutionMaterial, useAddExecutionTool, useAssignableUsers, useCreateExecution, useExecutions, useLinkExecutionPurchaseLine, useMoveExecutionMaterial, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
+import { usePurchaseOrders } from "../features/purchasing/api/purchaseOrders";
 import { useLocations } from "../features/catalog/api/catalog";
 import { useProjects, useTemplateItems, type Project } from "../features/projects/api/projects";
 import { describeError } from "../lib/api/errors";
@@ -82,6 +83,51 @@ function MaterialMovementForm({ executionID, material }: { executionID: number; 
     <Button type="submit" disabled={move.isPending || !locationID || !quantity}>{move.isPending ? "Guardando…" : action === "deliver" ? "Entregar" : "Devolver"}</Button>
     {locations.isError && <p className="text-sm text-bad sm:col-span-4">No se pudieron cargar las ubicaciones físicas.</p>}
     {!locations.isError && !locations.isLoading && locations.data?.length === 0 && <p className="text-sm text-ink-soft sm:col-span-4">Crea una ubicación antes de mover materiales.</p>}
+  </form>;
+}
+
+function PurchaseLineLinkForm({ executionID, material }: { executionID: number; material: MaterialAllocation }) {
+  const orders = usePurchaseOrders({ status: "ordered", supplierId: "", q: "" });
+  const link = useLinkExecutionPurchaseLine(executionID);
+  const toast = useToast();
+  const [lineID, setLineID] = useState("");
+  const [amount, setAmount] = useState("");
+  const choices = (orders.data?.pages.flatMap((page) => page.data) ?? []).flatMap((order) =>
+    order.lines.filter((line) => line.item_id === material.item_id && line.received_qty === 0).map((line) => ({
+      id: line.id, label: `Orden #${order.id} · ${order.supplier_name} · ${line.description} · ${line.quantity}`, quantity: line.quantity,
+    })),
+  );
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      await link.mutateAsync({ purchase_order_line_id: Number(lineID), quantity: Number(amount) });
+      toast.success("Compra vinculada a la solicitud de insumos.");
+      setLineID("");
+      setAmount("");
+    } catch (error) {
+      toast.error(describeError(error));
+    }
+  }
+
+  return <form onSubmit={submit} className="mt-3 grid gap-2 rounded-xl border border-line p-3 sm:grid-cols-[1fr_8rem_auto] sm:items-end">
+    <label className="flex flex-col gap-1 text-xs font-medium">Línea de compra
+      <select required value={lineID} onChange={(event) => {
+        const selected = choices.find((choice) => String(choice.id) === event.target.value);
+        setLineID(event.target.value);
+        setAmount(selected ? String(Math.min(selected.quantity, material.unpurchased_quantity)) : "");
+      }} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm">
+        <option value="">Seleccioná una línea ordenada</option>
+        {choices.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+      </select>
+    </label>
+    <label className="flex flex-col gap-1 text-xs font-medium">Cantidad a vincular
+      <input required type="number" min="0.001" step="0.001" max={material.unpurchased_quantity} value={amount} onChange={(event) => setAmount(event.target.value)} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm" />
+    </label>
+    <Button type="submit" disabled={link.isPending || !lineID || !amount}>{link.isPending ? "Vinculando…" : "Vincular compra"}</Button>
+    {orders.hasNextPage && <Button type="button" onClick={() => void orders.fetchNextPage()} disabled={orders.isFetchingNextPage} className="sm:col-span-3">Cargar más órdenes</Button>}
+    {orders.isError && <p className="text-sm text-bad sm:col-span-3">No se pudieron cargar las órdenes de compra.</p>}
+    <p className="text-xs text-ink-soft sm:col-span-3">Primero registrá y ordená la compra en <Link to="/ordenes-compra" className="font-semibold text-accent">Órdenes de compra</Link>.</p>
   </form>;
 }
 
@@ -192,6 +238,8 @@ function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite
         {execution.materials.map((material) => <li key={material.item_id} className="rounded-xl border border-line bg-surface p-3 text-sm">
           <p className="font-medium">Artículo {material.item_id}</p>
           <p className="mt-1 text-ink-soft">Requerido: {material.required_quantity} · Reservado: {material.reserved_quantity} · Entregado: {material.delivered_quantity} · Faltante: {material.deficit_quantity}</p>
+          {material.deficit_quantity > 0 && <p className="text-ink-soft">Sin comprar: {material.unpurchased_quantity} · Comprado pendiente de recibir: {material.purchased_pending_quantity}</p>}
+          {canWrite && execution.shortage_request_id && ["registered", "in_progress", "paused"].includes(execution.status) && material.unpurchased_quantity > 0 && <PurchaseLineLinkForm executionID={execution.id} material={material} />}
           {material.returned_quantity > 0 && <p className="text-ink-soft">Devuelto: {material.returned_quantity}</p>}
           {canWrite && (execution.status === "registered" || execution.status === "in_progress" || execution.status === "paused") && <MaterialMovementForm executionID={execution.id} material={material} />}
         </li>)}
