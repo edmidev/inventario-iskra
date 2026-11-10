@@ -35,14 +35,22 @@ function ExecutionActions({ execution }: { execution: Execution }) {
   const action = execution.status === "registered" ? "start" : execution.status === "paused" ? "resume" : execution.status === "in_progress" ? "pause" : null;
   if (!action) return null;
   const label = action === "start" ? "Iniciar" : action === "pause" ? "Pausar" : "Reanudar";
-  return <Button disabled={transition.isPending} onClick={async () => {
+  async function apply(next: "start" | "pause" | "resume" | "complete" | "cancel") {
+    if (next === "cancel" && !window.confirm("¿Cancelar esta ejecución? Se liberarán las reservas, pero los materiales entregados no volverán automáticamente al inventario.")) return;
     try {
-      await transition.mutateAsync(action);
-      toast.success(action === "start" ? "Ejecución iniciada; el inventario puede completarse durante el trabajo." : `Ejecución ${action === "pause" ? "pausada" : "reanudad"}a.`);
+      await transition.mutateAsync(next);
+      if (next === "complete") toast.success("Fabricación finalizada; los productos terminados permanecen en inventario.");
+      else if (next === "cancel") toast.success("Ejecución cancelada; productos ya fabricados conservados.");
+      else toast.success(next === "start" ? "Ejecución iniciada; el inventario puede completarse durante el trabajo." : `Ejecución ${next === "pause" ? "pausada" : "reanudad"}a.`);
     } catch (error) {
       toast.error(describeError(error));
     }
-  }}>{label}</Button>;
+  }
+  return <div className="flex flex-wrap gap-2">
+    <Button disabled={transition.isPending} onClick={() => void apply(action)}>{label}</Button>
+    {(execution.status === "in_progress" || execution.status === "paused") && execution.produced_units === execution.units && <Button variant="primary" disabled={transition.isPending} onClick={() => void apply("complete")}>Finalizar fabricación</Button>}
+    <Button variant="danger" disabled={transition.isPending} onClick={() => void apply("cancel")}>Cancelar ejecución</Button>
+  </div>;
 }
 
 function MaterialMovementForm({ executionID, material }: { executionID: number; material: MaterialAllocation }) {

@@ -98,7 +98,7 @@ export function useLinkExecutionPurchaseLine(executionID: number) {
 export function useTransitionExecution(id: number) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (action: "start" | "pause" | "resume") => request(`/executions/${id}/${action}`, executionSchema, { method: "POST" }),
+    mutationFn: (action: "start" | "pause" | "resume" | "complete" | "cancel") => request(`/executions/${id}/${action}`, executionSchema, { method: "POST" }),
     onSuccess: () => client.invalidateQueries({ queryKey: executionsKey }),
   });
 }

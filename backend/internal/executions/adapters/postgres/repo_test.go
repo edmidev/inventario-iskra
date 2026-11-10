@@ -490,6 +490,7 @@ type supplementalMaterialFixture struct {
 	ctx              context.Context
 	userID           string
 	customerID       int64
+	locationID       int64
 	itemID           string
 	templateToolID   string
 	additionalToolID string
@@ -542,7 +543,7 @@ func setupSupplementalMaterialFixture(t *testing.T, stockQty, perUnit quantity.Q
 	if err := templates.Create(ctx, project); err != nil {
 		t.Fatal(err)
 	}
-	return supplementalMaterialFixture{pool: pool, ctx: ctx, userID: userID, customerID: customerID, itemID: item.ID, templateToolID: templateTool.ID, additionalToolID: additionalTool.ID, projectID: project.ID, templates: templates, service: executionapp.NewService(executionpg.New(pool), templates, userStock)}
+	return supplementalMaterialFixture{pool: pool, ctx: ctx, userID: userID, customerID: customerID, locationID: location.ID, itemID: item.ID, templateToolID: templateTool.ID, additionalToolID: additionalTool.ID, projectID: project.ID, templates: templates, service: executionapp.NewService(executionpg.New(pool), templates, userStock)}
 }
 
 func (f supplementalMaterialFixture) create(units int) executiondomain.Execution {
@@ -940,5 +941,92 @@ func TestProduceFinishedUnitsIsPartialSerializedAndIdempotent(t *testing.T) {
 	}
 	if _, err := svc.Produce(ctx, second.ID, userID, executiondomain.ProduceInput{RequestID: "00000000-0000-4000-8000-000000000076", Quantity: 1}); !errors.Is(err, executiondomain.ErrInvalidState) {
 		t.Fatalf("paused execution produced units: %v", err)
+	}
+}
+
+func TestTerminalExecutionReleasesReservationsWithoutCreditingDeliveredStock(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(2000), quantity.Quantity(1000))
+	older := f.create(2)
+	newer := f.create(1)
+	if older.Materials[0].ReservedQuantity != quantity.Quantity(2000) || newer.Materials[0].ReservedQuantity != 0 {
+		t.Fatalf("initial reservations: older=%+v newer=%+v", older.Materials, newer.Materials)
+	}
+	if _, err := f.service.Complete(f.ctx, older.ID); !errors.Is(err, executiondomain.ErrInvalidState) {
+		t.Fatalf("registered execution completed: %v", err)
+	}
+	if _, err := f.service.Start(f.ctx, older.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Complete(f.ctx, older.ID); !errors.Is(err, executiondomain.ErrProductionIncomplete) {
+		t.Fatalf("unproduced execution completed: %v", err)
+	}
+	if _, err := f.service.Produce(f.ctx, older.ID, f.userID, executiondomain.ProduceInput{RequestID: "00000000-0000-4000-8000-000000000081", Quantity: 2}); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := f.service.Complete(f.ctx, older.ID)
+	if err != nil || completed.Status != executiondomain.StatusCompleted || completed.Materials[0].ReservedQuantity != 0 || completed.ProducedUnits != 2 {
+		t.Fatalf("completed execution = %+v, err=%v", completed, err)
+	}
+	newer, err = f.service.Get(f.ctx, newer.ID)
+	if err != nil || newer.Materials[0].ReservedQuantity != quantity.Quantity(1000) {
+		t.Fatalf("released stock was not reserved for next execution: %+v, err=%v", newer.Materials, err)
+	}
+	if _, err := f.service.Cancel(f.ctx, newer.ID); err != nil {
+		t.Fatal(err)
+	}
+	third := f.create(2)
+	if _, err := f.service.Start(f.ctx, third.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Produce(f.ctx, third.ID, f.userID, executiondomain.ProduceInput{RequestID: "00000000-0000-4000-8000-000000000082", Quantity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.DeliverMaterial(f.ctx, third.ID, f.itemID, f.userID, "00000000-0000-4000-8000-000000000083", quantity.Quantity(1000), f.locationID, "used"); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := f.service.Cancel(f.ctx, third.ID)
+	if err != nil || cancelled.Status != executiondomain.StatusCancelled || cancelled.ProducedUnits != 1 || cancelled.Materials[0].ReservedQuantity != 0 {
+		t.Fatalf("cancelled execution = %+v, err=%v", cancelled, err)
+	}
+	units, err := f.service.ListUnits(f.ctx, third.ID)
+	if err != nil || len(units) != 1 {
+		t.Fatalf("cancelled execution lost production: %+v, err=%v", units, err)
+	}
+	var stock quantity.Quantity
+	if err := f.pool.QueryRow(f.ctx, `SELECT stock_current FROM items WHERE id=$1::uuid`, f.itemID).Scan(&stock); err != nil || stock != quantity.Quantity(1000) {
+		t.Fatalf("terminal transition credited physical stock: %s, err=%v", stock, err)
+	}
+}
+
+func TestCancellationAndMaterialAdditionDoNotLeaveStaleReservations(t *testing.T) {
+	f := setupSupplementalMaterialFixture(t, quantity.Quantity(2000), quantity.Quantity(1000))
+	execution := f.create(1)
+	ctx, cancel := context.WithTimeout(f.ctx, 5*time.Second)
+	defer cancel()
+	start := make(chan struct{})
+	addResult := make(chan error, 1)
+	closeResult := make(chan error, 1)
+	go func() {
+		<-start
+		_, err := f.service.AddMaterialRequirement(ctx, execution.ID, f.userID, executiondomain.AddMaterialInput{
+			RequestID: "00000000-0000-4000-8000-000000000091", ItemID: f.itemID, Quantity: quantity.Quantity(500),
+		})
+		addResult <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.Cancel(ctx, execution.ID)
+		closeResult <- err
+	}()
+	close(start)
+	if err := <-closeResult; err != nil {
+		t.Fatalf("cancel = %v", err)
+	}
+	if err := <-addResult; err != nil && !errors.Is(err, executiondomain.ErrMaterialAdditionClosed) {
+		t.Fatalf("concurrent addition = %v", err)
+	}
+	current, err := f.service.Get(f.ctx, execution.ID)
+	if err != nil || current.Status != executiondomain.StatusCancelled || current.Materials[0].ReservedQuantity != 0 {
+		t.Fatalf("cancel/addition left a reservation: %+v, err=%v", current, err)
 	}
 }

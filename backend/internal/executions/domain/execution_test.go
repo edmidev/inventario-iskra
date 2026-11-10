@@ -127,6 +127,47 @@ func TestProduceInputRequiresUUIDAndPositiveWholeQuantity(t *testing.T) {
 	}
 }
 
+func TestExecutionTerminalTransitionsRequireProductionAndPreserveOutput(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   Status
+		planned  int
+		produced int
+		complete bool
+		wantErr  error
+	}{
+		{name: "registered cannot complete", status: StatusRegistered, planned: 1, produced: 1, complete: true, wantErr: ErrInvalidState},
+		{name: "partial production cannot complete", status: StatusInProgress, planned: 2, produced: 1, complete: true, wantErr: ErrProductionIncomplete},
+		{name: "paused finished work can complete", status: StatusPaused, planned: 2, produced: 2, complete: true},
+		{name: "registered can cancel", status: StatusRegistered, planned: 2, produced: 0},
+		{name: "partially produced work can cancel", status: StatusInProgress, planned: 2, produced: 1},
+		{name: "terminal cannot cancel twice", status: StatusCancelled, planned: 2, produced: 1, wantErr: ErrInvalidState},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execution := Execution{Status: tt.status, Units: tt.planned, ProducedUnits: tt.produced}
+			var err error
+			if tt.complete {
+				err = execution.Complete()
+			} else {
+				err = execution.Cancel()
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("terminal transition error = %v, want %v", err, tt.wantErr)
+			}
+			if err == nil {
+				want := StatusCancelled
+				if tt.complete {
+					want = StatusCompleted
+				}
+				if execution.Status != want || execution.ProducedUnits != tt.produced {
+					t.Fatalf("terminal state = %+v", execution)
+				}
+			}
+		})
+	}
+}
+
 func TestExecutionSnapshotDoesNotAliasTemplate(t *testing.T) {
 	template := ProjectSnapshot{
 		ProjectID: 4, Name: "Marmita", Description: "Acero inoxidable",

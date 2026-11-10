@@ -269,6 +269,9 @@ func (r *Repo) AddMaterialRequirement(ctx context.Context, executionID int64, re
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, requestID); err != nil {
 		return domain.Execution{}, err
 	}
+	if _, err := tx.Exec(ctx, executionMaterialLockSQL, executionID); err != nil {
+		return domain.Execution{}, err
+	}
 	var kind string
 	err = tx.QueryRow(ctx, `SELECT kind FROM items WHERE id=$1::uuid AND deleted_at IS NULL FOR UPDATE`, itemID).Scan(&kind)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -520,6 +523,9 @@ func (r *Repo) List(ctx context.Context, f domain.Filter) ([]domain.Execution, i
 }
 
 func (r *Repo) Transition(ctx context.Context, id int64, from, to domain.Status) (domain.Execution, error) {
+	if to == domain.StatusCompleted || to == domain.StatusCancelled {
+		return r.closeExecution(ctx, id, &from, to)
+	}
 	tx, commit, rollback, err := db.Begin(ctx, r.pool)
 	if err != nil {
 		return domain.Execution{}, err
@@ -539,18 +545,6 @@ func (r *Repo) Transition(ctx context.Context, id int64, from, to domain.Status)
 			return domain.Execution{}, err
 		}
 		return domain.Execution{}, domain.ErrInvalidState
-	}
-	requestStatus := ""
-	switch to {
-	case domain.StatusCompleted:
-		requestStatus = "completed"
-	case domain.StatusCancelled:
-		requestStatus = "cancelled"
-	}
-	if requestStatus != "" {
-		if _, err := tx.Exec(ctx, `UPDATE manufacturing_execution_shortage_requests SET status=$2,updated_at=now() WHERE execution_id=$1`, id, requestStatus); err != nil {
-			return domain.Execution{}, err
-		}
 	}
 	e, err := scanExecution(tx.QueryRow(ctx, selectExecution+` WHERE e.id=$1`, id))
 	if err != nil {

@@ -42,6 +42,8 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/start", h.start)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/pause", h.pause)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/resume", h.resume)
+			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/complete", h.complete)
+			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/cancel", h.cancel)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/produce", h.produce)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials", h.addMaterial)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/tools", h.addTool)
@@ -116,6 +118,8 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "invalid_execution_state", "execution cannot transition from its current state")
 	case errors.Is(err, domain.ErrProductionLimit):
 		httpx.WriteError(w, http.StatusConflict, "production_limit", "production exceeds the planned unit count")
+	case errors.Is(err, domain.ErrProductionIncomplete):
+		httpx.WriteError(w, http.StatusConflict, "production_incomplete", "all planned units must be produced before completion")
 	case errors.Is(err, domain.ErrProductionReplay):
 		httpx.WriteError(w, http.StatusConflict, "request_id_reused", "request_id was already used for a different production batch")
 	case errors.Is(err, domain.ErrMaterialAdditionClosed):
@@ -235,6 +239,10 @@ func (h *Handler) assignableUsers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) start(w http.ResponseWriter, r *http.Request)  { h.transition(w, r, h.svc.Start) }
 func (h *Handler) pause(w http.ResponseWriter, r *http.Request)  { h.transition(w, r, h.svc.Pause) }
 func (h *Handler) resume(w http.ResponseWriter, r *http.Request) { h.transition(w, r, h.svc.Resume) }
+func (h *Handler) complete(w http.ResponseWriter, r *http.Request) {
+	h.transition(w, r, h.svc.Complete)
+}
+func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) { h.transition(w, r, h.svc.Cancel) }
 
 func (h *Handler) addMaterial(w http.ResponseWriter, r *http.Request) {
 	id, ok := executionID(w, r)

@@ -21,6 +21,7 @@ var (
 	ErrToolAdditionClosed     = errors.New("execution no longer accepts tool additions")
 	ErrProductionLimit        = errors.New("production exceeds planned units")
 	ErrProductionReplay       = errors.New("production request id was reused with different terms")
+	ErrProductionIncomplete   = errors.New("planned production is not complete")
 )
 
 type ValidationError struct{ Fields map[string]string }
@@ -367,6 +368,25 @@ func (e *Execution) Resume() error {
 		return ErrInvalidState
 	}
 	e.Status = StatusInProgress
+	return nil
+}
+
+func (e *Execution) Complete() error {
+	if e.Status != StatusInProgress && e.Status != StatusPaused {
+		return ErrInvalidState
+	}
+	if e.ProducedUnits != e.Units {
+		return ErrProductionIncomplete
+	}
+	e.Status = StatusCompleted
+	return nil
+}
+
+func (e *Execution) Cancel() error {
+	if e.Status != StatusRegistered && e.Status != StatusInProgress && e.Status != StatusPaused {
+		return ErrInvalidState
+	}
+	e.Status = StatusCancelled
 	return nil
 }
 

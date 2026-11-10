@@ -66,6 +66,10 @@ func (f *executionRepoFake) Transition(context.Context, int64, domain.Status, do
 	return domain.Execution{}, nil
 }
 
+func (f *executionRepoFake) Close(context.Context, int64, domain.Status) (domain.Execution, error) {
+	return domain.Execution{}, nil
+}
+
 func (f *executionRepoFake) Produce(context.Context, int64, string, domain.ProduceInput) ([]domain.FinishedUnit, error) {
 	return []domain.FinishedUnit{}, nil
 }

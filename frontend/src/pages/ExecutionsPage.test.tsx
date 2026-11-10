@@ -1,7 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { api, renderApp, useAuthenticatedApi } from "../test/render";
 import { session } from "../test/fixtures";
 import { server } from "../test/server";
@@ -283,5 +283,38 @@ describe("execution registration", () => {
     expect(await screen.findByText("Producidas: 1 de 3")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Registrar producción" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Unidades terminadas")).not.toBeInTheDocument();
+  });
+
+  it("finishes only fully produced work and can cancel an open execution", async () => {
+    const user = userEvent.setup();
+    useAuthenticatedApi("admin");
+    const base = {
+      project_id: 4, project_name: "Marmita", description: "", characteristics: [], consumables: [], tools: [],
+      template_estimated_days: 12, estimated_days: 12, materials: [], customer_ids: [8], principal_user_id: "user-a", worker_ids: [],
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    let completed = 0;
+    let cancelled = 0;
+    server.use(
+      http.get(api("/executions"), () => HttpResponse.json({ data: [
+        { ...base, id: 27, units: 2, produced_units: 2, status: completed ? "completed" : "paused" },
+        { ...base, id: 28, units: 1, produced_units: 0, status: cancelled ? "cancelled" : "registered" },
+      ], total: 2, limit: 25, offset: 0 })),
+      http.get(api("/items"), () => HttpResponse.json(itemList())),
+      http.post(api("/executions/27/complete"), () => { completed++; return HttpResponse.json({ ...base, id: 27, units: 2, produced_units: 2, status: "completed" }); }),
+      http.post(api("/executions/28/cancel"), () => { cancelled++; return HttpResponse.json({ ...base, id: 28, units: 1, produced_units: 0, status: "cancelled" }); }),
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      renderApp("/ejecuciones");
+      await user.click(await screen.findByRole("button", { name: "Finalizar fabricación" }));
+      await waitFor(() => expect(completed).toBe(1));
+      const cancelButtons = screen.getAllByRole("button", { name: "Cancelar ejecución" });
+      await user.click(cancelButtons[0]);
+      await waitFor(() => expect(cancelled).toBe(1));
+      expect(confirm).toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
   });
 });

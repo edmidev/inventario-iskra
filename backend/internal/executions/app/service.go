@@ -30,6 +30,7 @@ type Repository interface {
 	Get(context.Context, int64) (domain.Execution, error)
 	List(context.Context, domain.Filter) ([]domain.Execution, int, error)
 	Transition(context.Context, int64, domain.Status, domain.Status) (domain.Execution, error)
+	Close(context.Context, int64, domain.Status) (domain.Execution, error)
 	Produce(context.Context, int64, string, domain.ProduceInput) ([]domain.FinishedUnit, error)
 	ListUnits(context.Context, int64) ([]domain.FinishedUnit, error)
 	ListAssignableUsers(context.Context) ([]domain.AssignableUser, error)
@@ -151,6 +152,14 @@ func (s *Service) Pause(ctx context.Context, id int64) (domain.Execution, error)
 
 func (s *Service) Resume(ctx context.Context, id int64) (domain.Execution, error) {
 	return s.repo.Transition(ctx, id, domain.StatusPaused, domain.StatusInProgress)
+}
+
+func (s *Service) Complete(ctx context.Context, id int64) (domain.Execution, error) {
+	return s.repo.Close(ctx, id, domain.StatusCompleted)
+}
+
+func (s *Service) Cancel(ctx context.Context, id int64) (domain.Execution, error) {
+	return s.repo.Close(ctx, id, domain.StatusCancelled)
 }
 
 func (s *Service) Produce(ctx context.Context, id int64, actorID string, input domain.ProduceInput) ([]domain.FinishedUnit, error) {

@@ -38,6 +38,9 @@ func (routeRepo) List(context.Context, domain.Filter) ([]domain.Execution, int, 
 func (routeRepo) Transition(context.Context, int64, domain.Status, domain.Status) (domain.Execution, error) {
 	return domain.Execution{}, nil
 }
+func (routeRepo) Close(context.Context, int64, domain.Status) (domain.Execution, error) {
+	return domain.Execution{}, nil
+}
 func (routeRepo) Produce(context.Context, int64, string, domain.ProduceInput) ([]domain.FinishedUnit, error) {
 	return []domain.FinishedUnit{}, nil
 }
@@ -140,6 +143,19 @@ func TestProductionRoutesEnforceReadAndWritePermissions(t *testing.T) {
 			routeHandler(tt.permissions).ServeHTTP(res, req)
 			if res.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d; body=%s", res.Code, tt.wantStatus, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestTerminalExecutionRoutesRequireWritePermission(t *testing.T) {
+	for _, action := range []string{"complete", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/executions/1/"+action, nil)
+			res := httptest.NewRecorder()
+			routeHandler([]string{"executions:read"}).ServeHTTP(res, req)
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusForbidden, res.Body.String())
 			}
 		})
 	}
