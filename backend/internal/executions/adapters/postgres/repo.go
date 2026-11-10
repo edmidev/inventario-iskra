@@ -49,7 +49,8 @@ COALESCE((SELECT jsonb_agg(jsonb_build_object(
  WHERE m.execution_id=e.id),'[]'::JSONB)
 ,
 COALESCE((SELECT array_agg(t.item_id::text ORDER BY t.item_id)
- FROM manufacturing_execution_supplemental_tools t WHERE t.execution_id=e.id),ARRAY[]::TEXT[])
+ FROM manufacturing_execution_supplemental_tools t WHERE t.execution_id=e.id),ARRAY[]::TEXT[]),
+(SELECT count(*) FROM finished_product_units u WHERE u.execution_id=e.id)
 FROM manufacturing_executions e`
 
 func scanExecution(row pgx.Row) (domain.Execution, error) {
@@ -58,7 +59,7 @@ func scanExecution(row pgx.Row) (domain.Execution, error) {
 	var status string
 	var materials []byte
 	var supplementalTools []string
-	err := row.Scan(&e.ID, &snapshot, &e.Units, &e.EstimatedDays, &status, &e.PrincipalUserID, &e.CreatedAt, &e.UpdatedAt, &e.CustomerIDs, &e.WorkerIDs, &e.ShortageRequestID, &materials, &supplementalTools)
+	err := row.Scan(&e.ID, &snapshot, &e.Units, &e.EstimatedDays, &status, &e.PrincipalUserID, &e.CreatedAt, &e.UpdatedAt, &e.CustomerIDs, &e.WorkerIDs, &e.ShortageRequestID, &materials, &supplementalTools, &e.ProducedUnits)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Execution{}, domain.ErrNotFound

@@ -818,3 +818,127 @@ func TestCreateRejectsInactiveAssignedUserAndCustomer(t *testing.T) {
 		t.Fatalf("rejected creation persisted %d executions", executions)
 	}
 }
+
+func TestProduceFinishedUnitsIsPartialSerializedAndIdempotent(t *testing.T) {
+	pool, ctx := setupExecutions(t)
+	var userID string
+	if err := pool.QueryRow(ctx, `INSERT INTO users(name,email,password_hash,role) VALUES('Maker','maker-t7@example.com','x','worker') RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	var customerID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO customers(name) VALUES('Customer T7') RETURNING id`).Scan(&customerID); err != nil {
+		t.Fatal(err)
+	}
+	templateRepo := projectpg.New(pool)
+	project := &projectdomain.Project{Input: projectdomain.Input{Name: "Marmita T7", Characteristics: []string{}, Consumables: []projectdomain.Material{}, Tools: []string{}, EstimatedDays: 2}}
+	if err := templateRepo.Create(ctx, project); err != nil {
+		t.Fatal(err)
+	}
+	svc := executionapp.NewService(executionpg.New(pool), templateRepo)
+	execution, err := svc.Create(ctx, executiondomain.CreateInput{ProjectID: project.ID, Units: 3, CustomerIDs: []int64{customerID}, PrincipalUserID: userID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := executiondomain.ProduceInput{RequestID: "00000000-0000-4000-8000-000000000071", Quantity: 2}
+	if _, err := svc.Produce(ctx, execution.ID, userID, request); !errors.Is(err, executiondomain.ErrInvalidState) {
+		t.Fatalf("registered execution produced units: %v", err)
+	}
+	if _, err := svc.Start(ctx, execution.ID); err != nil {
+		t.Fatal(err)
+	}
+	first, err := svc.Produce(ctx, execution.ID, userID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 || first[0].Code != "PRD-000001" || first[1].Code != "PRD-000002" || first[0].ID == first[1].ID {
+		t.Fatalf("produced units = %+v", first)
+	}
+	replayed, err := svc.Produce(ctx, execution.ID, userID, request)
+	if err != nil || len(replayed) != 2 || replayed[0].ID != first[0].ID || replayed[1].ID != first[1].ID {
+		t.Fatalf("production replay = %+v, err=%v", replayed, err)
+	}
+	if _, err := svc.Produce(ctx, execution.ID, userID, executiondomain.ProduceInput{RequestID: request.RequestID, Quantity: 1}); !errors.Is(err, executiondomain.ErrProductionReplay) {
+		t.Fatalf("changed replay = %v", err)
+	}
+	if _, err := svc.Produce(ctx, execution.ID, userID, executiondomain.ProduceInput{RequestID: "00000000-0000-4000-8000-000000000072", Quantity: 2}); !errors.Is(err, executiondomain.ErrProductionLimit) {
+		t.Fatalf("overproduction = %v", err)
+	}
+	current, err := svc.Get(ctx, execution.ID)
+	if err != nil || current.ProducedUnits != 2 {
+		t.Fatalf("produced count = %d, err=%v", current.ProducedUnits, err)
+	}
+	listed, err := svc.ListUnits(ctx, execution.ID)
+	if err != nil || len(listed) != 2 || listed[0].Code != first[0].Code {
+		t.Fatalf("listed units = %+v, err=%v", listed, err)
+	}
+	final, err := svc.Produce(ctx, execution.ID, userID, executiondomain.ProduceInput{RequestID: "00000000-0000-4000-8000-000000000073", Quantity: 1})
+	if err != nil || len(final) != 1 || final[0].Code != "PRD-000003" {
+		t.Fatalf("final unit = %+v, err=%v", final, err)
+	}
+	var batchCount, unitCount int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM manufacturing_production_batches),(SELECT count(*) FROM finished_product_units)`).Scan(&batchCount, &unitCount); err != nil || batchCount != 2 || unitCount != 3 {
+		t.Fatalf("persisted production = batches %d units %d err=%v", batchCount, unitCount, err)
+	}
+	second, err := svc.Create(ctx, executiondomain.CreateInput{ProjectID: project.ID, Units: 2, CustomerIDs: []int64{customerID}, PrincipalUserID: userID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Start(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Produce(ctx, second.ID, userID, request); !errors.Is(err, executiondomain.ErrProductionReplay) {
+		t.Fatalf("cross-execution request replay = %v", err)
+	}
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, requestID := range []string{"00000000-0000-4000-8000-000000000074", "00000000-0000-4000-8000-000000000075"} {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			_, produceErr := svc.Produce(ctx, second.ID, userID, executiondomain.ProduceInput{RequestID: id, Quantity: 2})
+			results <- produceErr
+		}(requestID)
+	}
+	wg.Wait()
+	close(results)
+	success, limited := 0, 0
+	for result := range results {
+		switch {
+		case result == nil:
+			success++
+		case errors.Is(result, executiondomain.ErrProductionLimit):
+			limited++
+		default:
+			t.Fatalf("concurrent production error = %v", result)
+		}
+	}
+	if success != 1 || limited != 1 {
+		t.Fatalf("concurrent production outcomes = %d success, %d limited", success, limited)
+	}
+	secondUnits, err := svc.ListUnits(ctx, second.ID)
+	if err != nil || len(secondUnits) != 2 || secondUnits[0].Code == secondUnits[1].Code {
+		t.Fatalf("concurrent finished units = %+v, err=%v", secondUnits, err)
+	}
+	sqlDB, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 22); err == nil {
+		t.Fatal("finished-product history was removed by rollback")
+	}
+	var retainedUnits int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM finished_product_units`).Scan(&retainedUnits); err != nil || retainedUnits != 5 {
+		t.Fatalf("rejected rollback changed finished-product stock: units=%d err=%v", retainedUnits, err)
+	}
+	if _, err := svc.Pause(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Produce(ctx, second.ID, userID, executiondomain.ProduceInput{RequestID: "00000000-0000-4000-8000-000000000076", Quantity: 1}); !errors.Is(err, executiondomain.ErrInvalidState) {
+		t.Fatalf("paused execution produced units: %v", err)
+	}
+}

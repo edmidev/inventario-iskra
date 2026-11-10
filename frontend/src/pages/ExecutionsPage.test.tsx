@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 import { api, renderApp, useAuthenticatedApi } from "../test/render";
+import { session } from "../test/fixtures";
 import { server } from "../test/server";
 
 const project = { id: 4, name: "Marmita", description: "Acero inoxidable", characteristics: ["Aislada"], consumables: [{ item_id: "item-1", quantity: 1.25 }], tools: ["tool-1"], estimated_days: 12, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
@@ -223,5 +224,64 @@ describe("execution registration", () => {
     await user.selectOptions(screen.getByLabelText("Línea de compra"), "42");
     await user.click(screen.getByRole("button", { name: "Vincular compra" }));
     await waitFor(() => expect(submitted).toEqual({ purchase_order_line_id: 42, quantity: 1.5 }));
+  });
+
+  it("records a partial production batch with a stable retry key and shows serial codes", async () => {
+    const user = userEvent.setup();
+    useAuthenticatedApi("admin");
+    let produced = 1;
+    const execution = {
+      id: 27, project_id: 4, project_name: "Marmita", description: "Acero inoxidable", characteristics: [], consumables: [], tools: [],
+      template_estimated_days: 12, units: 3, produced_units: produced, estimated_days: 12, materials: [],
+      customer_ids: [8], principal_user_id: "user-a", worker_ids: [], status: "in_progress",
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    const firstUnit = { id: 1, code: "PRD-000001", execution_id: 27, produced_at: "2026-01-01T00:00:00Z" };
+    const secondUnit = { id: 2, code: "PRD-000002", execution_id: 27, produced_at: "2026-01-02T00:00:00Z" };
+    const requestIDs: string[] = [];
+    let attempts = 0;
+    server.use(
+      http.get(api("/executions"), () => HttpResponse.json({ data: [{ ...execution, produced_units: produced }], total: 1, limit: 25, offset: 0 })),
+      http.get(api("/items"), () => HttpResponse.json(itemList())),
+      http.get(api("/executions/27/units"), () => HttpResponse.json({ data: produced === 1 ? [firstUnit] : [firstUnit, secondUnit] })),
+      http.post(api("/executions/27/produce"), async ({ request }) => {
+        const body = await request.json() as { request_id: string; quantity: number };
+        requestIDs.push(body.request_id);
+        expect(body.quantity).toBe(1);
+        attempts++;
+        if (attempts === 1) return HttpResponse.error();
+        produced = 2;
+        return HttpResponse.json({ data: [secondUnit] }, { status: 201 });
+      }),
+    );
+    renderApp("/ejecuciones");
+    await user.click(await screen.findByText("Ver productos terminados"));
+    expect(await screen.findByText("PRD-000001")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Unidades terminadas"), "1");
+    await user.click(screen.getByRole("button", { name: "Registrar producción" }));
+    await waitFor(() => expect(attempts).toBe(1));
+    await user.click(screen.getByRole("button", { name: "Registrar producción" }));
+    expect(await screen.findByText("PRD-000002")).toBeInTheDocument();
+    expect(await screen.findByText("Producidas: 2 de 3")).toBeInTheDocument();
+    expect(requestIDs).toHaveLength(2);
+    expect(requestIDs[0]).toBe(requestIDs[1]);
+  });
+
+  it("hides production controls from a read-only execution user", async () => {
+    useAuthenticatedApi("admin");
+    const readOnly = session("admin");
+    readOnly.user.permissions = ["executions:read"];
+    server.use(
+      http.post(api("/auth/refresh"), () => HttpResponse.json(readOnly)),
+      http.get(api("/executions"), () => HttpResponse.json({ data: [{
+        id: 27, project_id: 4, project_name: "Marmita", description: "", characteristics: [], consumables: [], tools: [],
+        template_estimated_days: 12, units: 3, produced_units: 1, estimated_days: 12, materials: [], customer_ids: [8],
+        principal_user_id: "user-a", worker_ids: [], status: "in_progress", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+      }], total: 1, limit: 25, offset: 0 })),
+    );
+    renderApp("/ejecuciones");
+    expect(await screen.findByText("Producidas: 1 de 3")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Registrar producción" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Unidades terminadas")).not.toBeInTheDocument();
   });
 });

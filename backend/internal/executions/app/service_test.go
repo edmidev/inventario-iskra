@@ -66,6 +66,14 @@ func (f *executionRepoFake) Transition(context.Context, int64, domain.Status, do
 	return domain.Execution{}, nil
 }
 
+func (f *executionRepoFake) Produce(context.Context, int64, string, domain.ProduceInput) ([]domain.FinishedUnit, error) {
+	return []domain.FinishedUnit{}, nil
+}
+
+func (f *executionRepoFake) ListUnits(context.Context, int64) ([]domain.FinishedUnit, error) {
+	return []domain.FinishedUnit{}, nil
+}
+
 func (f *executionRepoFake) ListAssignableUsers(context.Context) ([]domain.AssignableUser, error) {
 	return nil, nil
 }

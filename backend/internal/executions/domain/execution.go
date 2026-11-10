@@ -19,6 +19,8 @@ var (
 	ErrMaterialAdditionClosed = errors.New("execution no longer accepts material additions")
 	ErrToolUnavailable        = errors.New("execution tool must reference an inventory asset")
 	ErrToolAdditionClosed     = errors.New("execution no longer accepts tool additions")
+	ErrProductionLimit        = errors.New("production exceeds planned units")
+	ErrProductionReplay       = errors.New("production request id was reused with different terms")
 )
 
 type ValidationError struct{ Fields map[string]string }
@@ -56,6 +58,33 @@ type AddMaterialInput struct {
 type AddToolInput struct {
 	RequestID string `json:"request_id"`
 	ItemID    string `json:"item_id"`
+}
+
+type ProduceInput struct {
+	RequestID string `json:"request_id"`
+	Quantity  int    `json:"quantity"`
+}
+
+func (in ProduceInput) Normalize() (ProduceInput, error) {
+	in.RequestID = strings.ToLower(strings.TrimSpace(in.RequestID))
+	fields := map[string]string{}
+	if !validUUID(in.RequestID) {
+		fields["request_id"] = "must be a valid UUID"
+	}
+	if in.Quantity < 1 {
+		fields["quantity"] = "must be a positive whole number"
+	}
+	if len(fields) > 0 {
+		return ProduceInput{}, &ValidationError{Fields: fields}
+	}
+	return in, nil
+}
+
+type FinishedUnit struct {
+	ID          int64     `json:"id"`
+	Code        string    `json:"code"`
+	ExecutionID int64     `json:"execution_id"`
+	ProducedAt  time.Time `json:"produced_at"`
 }
 
 func (in AddToolInput) Normalize() (AddToolInput, error) {
@@ -249,6 +278,7 @@ type Execution struct {
 	ProjectSnapshot
 	ShortageRequestID   int64                `json:"shortage_request_id,omitempty"`
 	Units               int                  `json:"units"`
+	ProducedUnits       int                  `json:"produced_units"`
 	EstimatedDays       int                  `json:"estimated_days"`
 	Materials           []MaterialAllocation `json:"materials"`
 	AdditionalMaterials []AdditionalMaterial `json:"-"`

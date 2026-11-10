@@ -117,6 +117,16 @@ func TestAddToolInputCanonicalizesUUIDs(t *testing.T) {
 	}
 }
 
+func TestProduceInputRequiresUUIDAndPositiveWholeQuantity(t *testing.T) {
+	if _, err := (ProduceInput{RequestID: "bad", Quantity: 0}).Normalize(); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid production input = %v", err)
+	}
+	input, err := (ProduceInput{RequestID: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", Quantity: 2}).Normalize()
+	if err != nil || input.RequestID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+		t.Fatalf("normalized production input = %+v, err=%v", input, err)
+	}
+}
+
 func TestExecutionSnapshotDoesNotAliasTemplate(t *testing.T) {
 	template := ProjectSnapshot{
 		ProjectID: 4, Name: "Marmita", Description: "Acero inoxidable",

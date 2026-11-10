@@ -9,6 +9,9 @@ const allocationSchema = z.object({
   returned_quantity: z.number(), deficit_quantity: z.number(),
   purchased_pending_quantity: z.number().default(0), unpurchased_quantity: z.number().default(0),
 });
+const finishedUnitSchema = z.object({
+  id: z.number().int(), code: z.string(), execution_id: z.number().int(), produced_at: z.string(),
+});
 export const executionSchema = z.object({
   id: z.number(),
   project_id: z.number(),
@@ -19,6 +22,7 @@ export const executionSchema = z.object({
   tools: z.array(z.string()),
   template_estimated_days: z.number(),
   units: z.number().int(),
+  produced_units: z.number().int().default(0),
   estimated_days: z.number().int(),
   shortage_request_id: z.number().int().positive().optional(),
   materials: z.array(allocationSchema).default([]),
@@ -32,6 +36,7 @@ export const executionSchema = z.object({
 const assignableUserSchema = z.object({ id: z.string(), name: z.string() });
 export type Execution = z.infer<typeof executionSchema>;
 export type MaterialAllocation = z.infer<typeof allocationSchema>;
+export type FinishedUnit = z.infer<typeof finishedUnitSchema>;
 export type ExecutionCreate = {
   project_id: number;
   units: number;
@@ -95,6 +100,25 @@ export function useTransitionExecution(id: number) {
   return useMutation({
     mutationFn: (action: "start" | "pause" | "resume") => request(`/executions/${id}/${action}`, executionSchema, { method: "POST" }),
     onSuccess: () => client.invalidateQueries({ queryKey: executionsKey }),
+  });
+}
+
+export function useExecutionUnits(executionID: number, enabled: boolean) {
+  return useQuery({
+    queryKey: [...executionsKey, executionID, "units"], enabled,
+    queryFn: ({ signal }) => request(`/executions/${executionID}/units`, z.object({ data: z.array(finishedUnitSchema) }), { signal }).then((r) => r.data),
+  });
+}
+
+export function useProduceExecution(executionID: number) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { request_id: string; quantity: number }) =>
+      request(`/executions/${executionID}/produce`, z.object({ data: z.array(finishedUnitSchema) }), { method: "POST", body: input }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: executionsKey });
+      void client.invalidateQueries({ queryKey: [...executionsKey, executionID, "units"] });
+    },
   });
 }
 

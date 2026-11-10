@@ -8,7 +8,7 @@ import { Sheet } from "../components/molecules/Sheet";
 import { useToast } from "../components/molecules/Toast";
 import { useSession } from "../features/auth/session";
 import { useCustomers } from "../features/customers/api/customers";
-import { useAddExecutionMaterial, useAddExecutionTool, useAssignableUsers, useCreateExecution, useExecutions, useLinkExecutionPurchaseLine, useMoveExecutionMaterial, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
+import { useAddExecutionMaterial, useAddExecutionTool, useAssignableUsers, useCreateExecution, useExecutionUnits, useExecutions, useLinkExecutionPurchaseLine, useMoveExecutionMaterial, useProduceExecution, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
 import { usePurchaseOrders } from "../features/purchasing/api/purchaseOrders";
 import { useLocations } from "../features/catalog/api/catalog";
 import { useProjects, useTemplateItems, type Project } from "../features/projects/api/projects";
@@ -216,6 +216,56 @@ function AddExecutionToolForm({ executionID, existingToolIDs }: { executionID: n
   </form>;
 }
 
+function ProductionForm({ execution }: { execution: Execution }) {
+  const [quantity, setQuantity] = useState("");
+  const [requestID, setRequestID] = useState<string | null>(null);
+  const produce = useProduceExecution(execution.id);
+  const toast = useToast();
+  const remaining = execution.units - execution.produced_units;
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const requestId = requestID ?? crypto.randomUUID();
+    if (!requestID) setRequestID(requestId);
+    try {
+      const result = await produce.mutateAsync({ request_id: requestId, quantity: Number(quantity) });
+      toast.success(`${result.data.length} ${result.data.length === 1 ? "producto terminado registrado" : "productos terminados registrados"}.`);
+      setQuantity("");
+      setRequestID(null);
+    } catch (error) {
+      toast.error(describeError(error));
+    }
+  }
+
+  if (remaining < 1) return null;
+  return <form onSubmit={submit} className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+    <label className="flex flex-col gap-1 text-xs font-medium">Unidades terminadas
+      <input required type="number" min="1" max={remaining} step="1" value={quantity} onChange={(event) => { setQuantity(event.target.value); setRequestID(null); }} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm" />
+    </label>
+    <Button type="submit" disabled={produce.isPending || !quantity}>{produce.isPending ? "Registrando…" : "Registrar producción"}</Button>
+  </form>;
+}
+
+function FinishedUnitsPanel({ execution, canWrite }: { execution: Execution; canWrite: boolean }) {
+  const [open, setOpen] = useState(false);
+  const units = useExecutionUnits(execution.id, open);
+  return <section className="rounded-xl bg-sunken p-3 text-sm">
+    <p className="font-semibold">Producidas: {execution.produced_units} de {execution.units}</p>
+    <details className="mt-2" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="cursor-pointer font-medium">Ver productos terminados</summary>
+      {open && <div className="mt-2">
+        {units.isLoading && <p className="text-ink-soft">Cargando códigos…</p>}
+        {units.isError && <p className="text-bad">No se pudieron cargar los productos terminados.</p>}
+        {units.data?.length === 0 && <p className="text-ink-soft">Todavía no hay productos terminados.</p>}
+        {units.data && units.data.length > 0 && <ul className="flex flex-wrap gap-2">{units.data.map((unit) =>
+          <li key={unit.id} className="rounded-lg border border-line bg-surface px-2 py-1 font-mono text-xs">{unit.code}</li>,
+        )}</ul>}
+      </div>}
+    </details>
+    {canWrite && execution.status === "in_progress" && <ProductionForm execution={execution} />}
+  </section>;
+}
+
 function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite: boolean }) {
   return <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -224,6 +274,7 @@ function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite
     </div>
     <p className="text-sm">{execution.units} {execution.units === 1 ? "unidad" : "unidades"} · {execution.estimated_days} días · {execution.customer_ids.length} {execution.customer_ids.length === 1 ? "cliente" : "clientes"}</p>
     <p className="text-sm text-ink-soft">Responsable principal asignado · {execution.worker_ids.length} trabajadores</p>
+    <FinishedUnitsPanel execution={execution} canWrite={canWrite} />
     {execution.shortage_request_id && <p><Badge tone="warn">Solicitud de insumos #{execution.shortage_request_id}</Badge></p>}
     <details className="rounded-xl bg-sunken p-3 text-sm">
       <summary className="cursor-pointer font-semibold">Ver snapshot del proyecto</summary>

@@ -37,10 +37,12 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/", h.list)
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/assignable-users", h.assignableUsers)
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/{id}", h.get)
+			r.With(httpx.RequirePermission(h.perms.Read)).Get("/{id}/units", h.listUnits)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/", h.create)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/start", h.start)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/pause", h.pause)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/resume", h.resume)
+			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/produce", h.produce)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials", h.addMaterial)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/tools", h.addTool)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/purchase-lines", h.linkPurchaseLine)
@@ -112,6 +114,10 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusUnprocessableEntity, "invalid_tool", "supplemental tool must reference an inventory asset")
 	case errors.Is(err, domain.ErrInvalidState):
 		httpx.WriteError(w, http.StatusConflict, "invalid_execution_state", "execution cannot transition from its current state")
+	case errors.Is(err, domain.ErrProductionLimit):
+		httpx.WriteError(w, http.StatusConflict, "production_limit", "production exceeds the planned unit count")
+	case errors.Is(err, domain.ErrProductionReplay):
+		httpx.WriteError(w, http.StatusConflict, "request_id_reused", "request_id was already used for a different production batch")
 	case errors.Is(err, domain.ErrMaterialAdditionClosed):
 		httpx.WriteError(w, http.StatusConflict, "execution_not_active", "materials can only be added while the execution is active")
 	case errors.Is(err, domain.ErrToolAdditionClosed):
@@ -156,6 +162,41 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, execution)
+}
+
+func (h *Handler) listUnits(w http.ResponseWriter, r *http.Request) {
+	id, ok := executionID(w, r)
+	if !ok {
+		return
+	}
+	units, err := h.svc.ListUnits(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": units})
+}
+
+func (h *Handler) produce(w http.ResponseWriter, r *http.Request) {
+	id, ok := executionID(w, r)
+	if !ok {
+		return
+	}
+	principal, ok := httpx.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "authentication required")
+		return
+	}
+	var input domain.ProduceInput
+	if !decode(w, r, &input) {
+		return
+	}
+	units, err := h.svc.Produce(r.Context(), id, principal.UserID, input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"data": units})
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

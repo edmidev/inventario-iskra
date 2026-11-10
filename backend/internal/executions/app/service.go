@@ -30,6 +30,8 @@ type Repository interface {
 	Get(context.Context, int64) (domain.Execution, error)
 	List(context.Context, domain.Filter) ([]domain.Execution, int, error)
 	Transition(context.Context, int64, domain.Status, domain.Status) (domain.Execution, error)
+	Produce(context.Context, int64, string, domain.ProduceInput) ([]domain.FinishedUnit, error)
+	ListUnits(context.Context, int64) ([]domain.FinishedUnit, error)
 	ListAssignableUsers(context.Context) ([]domain.AssignableUser, error)
 }
 
@@ -149,6 +151,24 @@ func (s *Service) Pause(ctx context.Context, id int64) (domain.Execution, error)
 
 func (s *Service) Resume(ctx context.Context, id int64) (domain.Execution, error) {
 	return s.repo.Transition(ctx, id, domain.StatusPaused, domain.StatusInProgress)
+}
+
+func (s *Service) Produce(ctx context.Context, id int64, actorID string, input domain.ProduceInput) ([]domain.FinishedUnit, error) {
+	if id < 1 || strings.TrimSpace(actorID) == "" {
+		return nil, &domain.ValidationError{Fields: map[string]string{"execution_id": "execution and authenticated user are required"}}
+	}
+	normalized, err := input.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.Produce(ctx, id, actorID, normalized)
+}
+
+func (s *Service) ListUnits(ctx context.Context, id int64) ([]domain.FinishedUnit, error) {
+	if id < 1 {
+		return nil, domain.ErrNotFound
+	}
+	return s.repo.ListUnits(ctx, id)
 }
 
 func (s *Service) ListAssignableUsers(ctx context.Context) ([]domain.AssignableUser, error) {
