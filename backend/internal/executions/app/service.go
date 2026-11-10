@@ -33,6 +33,8 @@ type Repository interface {
 	Close(context.Context, int64, domain.Status) (domain.Execution, error)
 	Produce(context.Context, int64, string, domain.ProduceInput) ([]domain.FinishedUnit, error)
 	ListUnits(context.Context, int64) ([]domain.FinishedUnit, error)
+	DeliverFinishedUnits(context.Context, int64, string, domain.DeliveryInput, string) (domain.DeliveryReceipt, error)
+	ListDeliveries(context.Context, int64) ([]domain.DeliveryReceipt, error)
 	ListAssignableUsers(context.Context) ([]domain.AssignableUser, error)
 }
 
@@ -178,6 +180,34 @@ func (s *Service) ListUnits(ctx context.Context, id int64) ([]domain.FinishedUni
 		return nil, domain.ErrNotFound
 	}
 	return s.repo.ListUnits(ctx, id)
+}
+
+func (s *Service) DeliverFinishedUnits(ctx context.Context, executionID int64, actorID string, input domain.DeliveryInput) (domain.DeliveryReceipt, error) {
+	if executionID < 1 || strings.TrimSpace(actorID) == "" {
+		return domain.DeliveryReceipt{}, &domain.ValidationError{Fields: map[string]string{"execution_id": "execution and authenticated user are required"}}
+	}
+	normalized, err := input.Normalize()
+	if err != nil {
+		return domain.DeliveryReceipt{}, err
+	}
+	serialized, err := json.Marshal(struct {
+		ExecutionID int64
+		ActorID     string
+		CustomerID  int64
+		UnitIDs     []int64
+	}{executionID, actorID, normalized.CustomerID, normalized.UnitIDs})
+	if err != nil {
+		return domain.DeliveryReceipt{}, err
+	}
+	fingerprint := sha256.Sum256(serialized)
+	return s.repo.DeliverFinishedUnits(ctx, executionID, actorID, normalized, hex.EncodeToString(fingerprint[:]))
+}
+
+func (s *Service) ListDeliveries(ctx context.Context, executionID int64) ([]domain.DeliveryReceipt, error) {
+	if executionID < 1 {
+		return nil, domain.ErrNotFound
+	}
+	return s.repo.ListDeliveries(ctx, executionID)
 }
 
 func (s *Service) ListAssignableUsers(ctx context.Context) ([]domain.AssignableUser, error) {

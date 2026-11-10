@@ -47,6 +47,12 @@ func (routeRepo) Produce(context.Context, int64, string, domain.ProduceInput) ([
 func (routeRepo) ListUnits(context.Context, int64) ([]domain.FinishedUnit, error) {
 	return []domain.FinishedUnit{}, nil
 }
+func (routeRepo) DeliverFinishedUnits(context.Context, int64, string, domain.DeliveryInput, string) (domain.DeliveryReceipt, error) {
+	return domain.DeliveryReceipt{}, nil
+}
+func (routeRepo) ListDeliveries(context.Context, int64) ([]domain.DeliveryReceipt, error) {
+	return []domain.DeliveryReceipt{}, nil
+}
 func (routeRepo) ListAssignableUsers(context.Context) ([]domain.AssignableUser, error) {
 	return []domain.AssignableUser{{ID: "active-user", Name: "Active User"}}, nil
 }
@@ -156,6 +162,31 @@ func TestTerminalExecutionRoutesRequireWritePermission(t *testing.T) {
 			routeHandler([]string{"executions:read"}).ServeHTTP(res, req)
 			if res.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusForbidden, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestFinishedProductDeliveryRoutesRequirePermissions(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      string
+		permissions []string
+		wantStatus  int
+	}{
+		{name: "list denied", method: http.MethodGet, wantStatus: http.StatusForbidden},
+		{name: "list allowed", method: http.MethodGet, permissions: []string{"executions:read"}, wantStatus: http.StatusOK},
+		{name: "deliver denied", method: http.MethodPost, permissions: []string{"executions:read"}, wantStatus: http.StatusForbidden},
+		{name: "deliver allowed", method: http.MethodPost, permissions: []string{"executions:write"}, wantStatus: http.StatusCreated},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.NewReader(`{"request_id":"00000000-0000-4000-8000-000000000101","customer_id":1,"unit_ids":[1]}`)
+			req := httptest.NewRequest(tt.method, "/executions/1/deliveries", body)
+			res := httptest.NewRecorder()
+			routeHandler(tt.permissions).ServeHTTP(res, req)
+			if res.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", res.Code, tt.wantStatus, res.Body.String())
 			}
 		})
 	}

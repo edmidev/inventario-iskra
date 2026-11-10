@@ -38,6 +38,7 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/assignable-users", h.assignableUsers)
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/{id}", h.get)
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/{id}/units", h.listUnits)
+			r.With(httpx.RequirePermission(h.perms.Read)).Get("/{id}/deliveries", h.listDeliveries)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/", h.create)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/start", h.start)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/pause", h.pause)
@@ -45,6 +46,7 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/complete", h.complete)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/cancel", h.cancel)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/produce", h.produce)
+			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/deliveries", h.deliverUnits)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials", h.addMaterial)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/tools", h.addTool)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/purchase-lines", h.linkPurchaseLine)
@@ -122,6 +124,14 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "production_incomplete", "all planned units must be produced before completion")
 	case errors.Is(err, domain.ErrProductionReplay):
 		httpx.WriteError(w, http.StatusConflict, "request_id_reused", "request_id was already used for a different production batch")
+	case errors.Is(err, domain.ErrDeliveryReplay):
+		httpx.WriteError(w, http.StatusConflict, "request_id_reused", "request_id was already used for a different finished-product delivery")
+	case errors.Is(err, domain.ErrCustomerNotAssigned):
+		httpx.WriteFieldErrors(w, map[string]string{"customer_id": "customer is not assigned to this execution"})
+	case errors.Is(err, domain.ErrUnitUnavailable):
+		httpx.WriteFieldErrors(w, map[string]string{"unit_ids": "finished unit does not belong to this execution"})
+	case errors.Is(err, domain.ErrUnitDelivered):
+		httpx.WriteError(w, http.StatusConflict, "unit_already_delivered", "finished unit was already delivered")
 	case errors.Is(err, domain.ErrMaterialAdditionClosed):
 		httpx.WriteError(w, http.StatusConflict, "execution_not_active", "materials can only be added while the execution is active")
 	case errors.Is(err, domain.ErrToolAdditionClosed):
@@ -179,6 +189,41 @@ func (h *Handler) listUnits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": units})
+}
+
+func (h *Handler) listDeliveries(w http.ResponseWriter, r *http.Request) {
+	id, ok := executionID(w, r)
+	if !ok {
+		return
+	}
+	receipts, err := h.svc.ListDeliveries(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": receipts})
+}
+
+func (h *Handler) deliverUnits(w http.ResponseWriter, r *http.Request) {
+	id, ok := executionID(w, r)
+	if !ok {
+		return
+	}
+	principal, ok := httpx.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "authentication required")
+		return
+	}
+	var input domain.DeliveryInput
+	if !decode(w, r, &input) {
+		return
+	}
+	receipt, err := h.svc.DeliverFinishedUnits(r.Context(), id, principal.UserID, input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, receipt)
 }
 
 func (h *Handler) produce(w http.ResponseWriter, r *http.Request) {

@@ -1030,3 +1030,132 @@ func TestCancellationAndMaterialAdditionDoNotLeaveStaleReservations(t *testing.T
 		t.Fatalf("cancel/addition left a reservation: %+v, err=%v", current, err)
 	}
 }
+
+func TestFinishedUnitDeliveriesAllocateOnlyToExecutionCustomers(t *testing.T) {
+	pool, ctx := setupExecutions(t)
+	var userID string
+	if err := pool.QueryRow(ctx, `INSERT INTO users(name,email,password_hash,role) VALUES('Dispatcher','dispatcher-t7@example.com','x','worker') RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	customers := make([]int64, 3)
+	for i, name := range []string{"Client A", "Client B", "Other client"} {
+		if err := pool.QueryRow(ctx, `INSERT INTO customers(name) VALUES($1) RETURNING id`, name).Scan(&customers[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	templates := projectpg.New(pool)
+	project := &projectdomain.Project{Input: projectdomain.Input{Name: "Marmita delivery", Characteristics: []string{}, Consumables: []projectdomain.Material{}, Tools: []string{}, EstimatedDays: 1}}
+	if err := templates.Create(ctx, project); err != nil {
+		t.Fatal(err)
+	}
+	svc := executionapp.NewService(executionpg.New(pool), templates)
+	execution, err := svc.Create(ctx, executiondomain.CreateInput{ProjectID: project.ID, Units: 3, CustomerIDs: customers[:2], PrincipalUserID: userID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Start(ctx, execution.ID); err != nil {
+		t.Fatal(err)
+	}
+	units, err := svc.Produce(ctx, execution.ID, userID, executiondomain.ProduceInput{RequestID: "00000000-0000-4000-8000-000000000101", Quantity: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInput := executiondomain.DeliveryInput{RequestID: "00000000-0000-4000-8000-000000000102", CustomerID: customers[0], UnitIDs: []int64{units[0].ID}}
+	first, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, firstInput)
+	if err != nil || first.Number != "DEL-000001" || first.CustomerID != customers[0] || len(first.UnitCodes) != 1 || first.UnitCodes[0] != units[0].Code {
+		t.Fatalf("first delivery = %+v, err=%v", first, err)
+	}
+	replayed, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, firstInput)
+	if err != nil || replayed.ID != first.ID || replayed.Number != first.Number {
+		t.Fatalf("delivery replay = %+v, err=%v", replayed, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE customers SET name='Renamed client' WHERE id=$1`, customers[0]); err != nil {
+		t.Fatal(err)
+	}
+	if first.CustomerName != "Client A" {
+		t.Fatalf("receipt lost customer name snapshot: %+v", first)
+	}
+	if _, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, executiondomain.DeliveryInput{RequestID: firstInput.RequestID, CustomerID: customers[1], UnitIDs: firstInput.UnitIDs}); !errors.Is(err, executiondomain.ErrDeliveryReplay) {
+		t.Fatalf("changed delivery replay = %v", err)
+	}
+	if _, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, executiondomain.DeliveryInput{RequestID: "00000000-0000-4000-8000-000000000103", CustomerID: customers[1], UnitIDs: []int64{units[0].ID}}); !errors.Is(err, executiondomain.ErrUnitDelivered) {
+		t.Fatalf("duplicate delivery = %v", err)
+	}
+	if _, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, executiondomain.DeliveryInput{RequestID: "00000000-0000-4000-8000-000000000104", CustomerID: customers[2], UnitIDs: []int64{units[2].ID}}); !errors.Is(err, executiondomain.ErrCustomerNotAssigned) {
+		t.Fatalf("unassigned delivery client = %v", err)
+	}
+	second, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, executiondomain.DeliveryInput{RequestID: "00000000-0000-4000-8000-000000000105", CustomerID: customers[1], UnitIDs: []int64{units[1].ID}})
+	if err != nil || second.CustomerID != customers[1] || second.Number != "DEL-000002" {
+		t.Fatalf("second delivery = %+v, err=%v", second, err)
+	}
+	currentUnits, err := svc.ListUnits(ctx, execution.ID)
+	if err != nil || len(currentUnits) != 3 || currentUnits[0].CustomerID == nil || *currentUnits[0].CustomerID != customers[0] || currentUnits[2].CustomerID != nil {
+		t.Fatalf("unit allocation = %+v, err=%v", currentUnits, err)
+	}
+	if _, err := svc.Cancel(ctx, execution.ID); err != nil {
+		t.Fatal(err)
+	}
+	late, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, executiondomain.DeliveryInput{RequestID: "00000000-0000-4000-8000-000000000106", CustomerID: customers[0], UnitIDs: []int64{units[2].ID}})
+	if err != nil || len(late.UnitCodes) != 1 || late.UnitCodes[0] != units[2].Code {
+		t.Fatalf("finished stock from cancelled execution was lost: %+v, err=%v", late, err)
+	}
+	listed, err := svc.ListDeliveries(ctx, execution.ID)
+	if err != nil || len(listed) != 3 || listed[0].ID != first.ID || listed[0].CustomerName != "Client A" {
+		t.Fatalf("delivery history = %+v, err=%v", listed, err)
+	}
+	secondExecution, err := svc.Create(ctx, executiondomain.CreateInput{ProjectID: project.ID, Units: 1, CustomerIDs: customers[:2], PrincipalUserID: userID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Start(ctx, secondExecution.ID); err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := svc.Produce(ctx, secondExecution.ID, userID, executiondomain.ProduceInput{RequestID: "00000000-0000-4000-8000-000000000107", Quantity: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, executiondomain.DeliveryInput{RequestID: "00000000-0000-4000-8000-000000000108", CustomerID: customers[0], UnitIDs: []int64{foreign[0].ID}}); !errors.Is(err, executiondomain.ErrUnitUnavailable) {
+		t.Fatalf("cross-execution delivery = %v", err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for index, customerID := range customers[:2] {
+		go func(i int, clientID int64) {
+			<-start
+			requestID := fmt.Sprintf("00000000-0000-4000-8000-%012d", 109+i)
+			_, deliveryErr := svc.DeliverFinishedUnits(ctx, secondExecution.ID, userID, executiondomain.DeliveryInput{RequestID: requestID, CustomerID: clientID, UnitIDs: []int64{foreign[0].ID}})
+			results <- deliveryErr
+		}(index, customerID)
+	}
+	close(start)
+	success, duplicate := 0, 0
+	for range 2 {
+		switch result := <-results; {
+		case result == nil:
+			success++
+		case errors.Is(result, executiondomain.ErrUnitDelivered):
+			duplicate++
+		default:
+			t.Fatalf("concurrent delivery error = %v", result)
+		}
+	}
+	if success != 1 || duplicate != 1 {
+		t.Fatalf("concurrent delivery outcomes = %d success, %d duplicate", success, duplicate)
+	}
+	sqlDB, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 23); err == nil {
+		t.Fatal("delivery migration discarded receipt history")
+	}
+	var receiptCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM manufacturing_deliveries`).Scan(&receiptCount); err != nil || receiptCount != 4 {
+		t.Fatalf("rejected rollback changed receipts: count=%d err=%v", receiptCount, err)
+	}
+}

@@ -13,6 +13,11 @@ type unitQueryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
+const selectFinishedUnits = `SELECT u.id,u.code,u.execution_id,u.produced_at,d.id,d.customer_id,d.delivered_at
+FROM finished_product_units u
+LEFT JOIN manufacturing_delivery_units du ON du.unit_id=u.id
+LEFT JOIN manufacturing_deliveries d ON d.id=du.delivery_id`
+
 func queryUnits(ctx context.Context, q unitQueryer, sql string, args ...any) ([]domain.FinishedUnit, error) {
 	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
@@ -22,7 +27,7 @@ func queryUnits(ctx context.Context, q unitQueryer, sql string, args ...any) ([]
 	units := []domain.FinishedUnit{}
 	for rows.Next() {
 		var unit domain.FinishedUnit
-		if err := rows.Scan(&unit.ID, &unit.Code, &unit.ExecutionID, &unit.ProducedAt); err != nil {
+		if err := rows.Scan(&unit.ID, &unit.Code, &unit.ExecutionID, &unit.ProducedAt, &unit.DeliveryID, &unit.CustomerID, &unit.DeliveredAt); err != nil {
 			return nil, err
 		}
 		units = append(units, unit)
@@ -38,7 +43,7 @@ func (r *Repo) ListUnits(ctx context.Context, executionID int64) ([]domain.Finis
 		}
 		return nil, err
 	}
-	return queryUnits(ctx, r.pool, `SELECT id,code,execution_id,produced_at FROM finished_product_units WHERE execution_id=$1 ORDER BY id`, executionID)
+	return queryUnits(ctx, r.pool, selectFinishedUnits+` WHERE u.execution_id=$1 ORDER BY u.id`, executionID)
 }
 
 // Produce serializes production for one execution so concurrent requests cannot
@@ -60,7 +65,7 @@ func (r *Repo) Produce(ctx context.Context, executionID int64, actorID string, i
 		if priorExecutionID != executionID || priorQuantity != input.Quantity || priorActorID != actorID {
 			return nil, domain.ErrProductionReplay
 		}
-		units, err := queryUnits(ctx, tx, `SELECT id,code,execution_id,produced_at FROM finished_product_units WHERE production_request_id=$1::uuid ORDER BY id`, input.RequestID)
+		units, err := queryUnits(ctx, tx, selectFinishedUnits+` WHERE u.production_request_id=$1::uuid ORDER BY u.id`, input.RequestID)
 		if err != nil {
 			return nil, err
 		}
@@ -98,7 +103,7 @@ SELECT $1,$2::uuid FROM generate_series(1,$3)`, executionID, input.RequestID, in
 	if _, err := tx.Exec(ctx, `UPDATE manufacturing_executions SET updated_at=now() WHERE id=$1`, executionID); err != nil {
 		return nil, err
 	}
-	units, err := queryUnits(ctx, tx, `SELECT id,code,execution_id,produced_at FROM finished_product_units WHERE production_request_id=$1::uuid ORDER BY id`, input.RequestID)
+	units, err := queryUnits(ctx, tx, selectFinishedUnits+` WHERE u.production_request_id=$1::uuid ORDER BY u.id`, input.RequestID)
 	if err != nil {
 		return nil, err
 	}

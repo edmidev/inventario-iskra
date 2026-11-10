@@ -168,6 +168,16 @@ func TestExecutionTerminalTransitionsRequireProductionAndPreserveOutput(t *testi
 	}
 }
 
+func TestDeliveryInputRequiresDistinctUnitsAndCanonicalRequest(t *testing.T) {
+	if _, err := (DeliveryInput{RequestID: "bad", CustomerID: 0, UnitIDs: []int64{2, 2}}).Normalize(); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid delivery = %v", err)
+	}
+	input, err := (DeliveryInput{RequestID: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", CustomerID: 7, UnitIDs: []int64{5, 2}}).Normalize()
+	if err != nil || input.RequestID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || input.UnitIDs[0] != 2 || input.UnitIDs[1] != 5 {
+		t.Fatalf("normalized delivery = %+v, err=%v", input, err)
+	}
+}
+
 func TestExecutionSnapshotDoesNotAliasTemplate(t *testing.T) {
 	template := ProjectSnapshot{
 		ProjectID: 4, Name: "Marmita", Description: "Acero inoxidable",

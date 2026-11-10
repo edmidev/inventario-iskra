@@ -78,6 +78,14 @@ func (f *executionRepoFake) ListUnits(context.Context, int64) ([]domain.Finished
 	return []domain.FinishedUnit{}, nil
 }
 
+func (f *executionRepoFake) DeliverFinishedUnits(context.Context, int64, string, domain.DeliveryInput, string) (domain.DeliveryReceipt, error) {
+	return domain.DeliveryReceipt{}, nil
+}
+
+func (f *executionRepoFake) ListDeliveries(context.Context, int64) ([]domain.DeliveryReceipt, error) {
+	return []domain.DeliveryReceipt{}, nil
+}
+
 func (f *executionRepoFake) ListAssignableUsers(context.Context) ([]domain.AssignableUser, error) {
 	return nil, nil
 }

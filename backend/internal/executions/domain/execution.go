@@ -82,10 +82,13 @@ func (in ProduceInput) Normalize() (ProduceInput, error) {
 }
 
 type FinishedUnit struct {
-	ID          int64     `json:"id"`
-	Code        string    `json:"code"`
-	ExecutionID int64     `json:"execution_id"`
-	ProducedAt  time.Time `json:"produced_at"`
+	ID          int64      `json:"id"`
+	Code        string     `json:"code"`
+	ExecutionID int64      `json:"execution_id"`
+	ProducedAt  time.Time  `json:"produced_at"`
+	DeliveryID  *int64     `json:"delivery_id,omitempty"`
+	CustomerID  *int64     `json:"customer_id,omitempty"`
+	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
 }
 
 func (in AddToolInput) Normalize() (AddToolInput, error) {

@@ -11,6 +11,11 @@ const allocationSchema = z.object({
 });
 const finishedUnitSchema = z.object({
   id: z.number().int(), code: z.string(), execution_id: z.number().int(), produced_at: z.string(),
+  delivery_id: z.number().int().optional(), customer_id: z.number().int().optional(), delivered_at: z.string().optional(),
+});
+const deliveryReceiptSchema = z.object({
+  id: z.number().int(), number: z.string(), execution_id: z.number().int(), customer_id: z.number().int(),
+  customer_name: z.string(), actor_id: z.string(), unit_codes: z.array(z.string()), delivered_at: z.string(),
 });
 export const executionSchema = z.object({
   id: z.number(),
@@ -37,6 +42,7 @@ const assignableUserSchema = z.object({ id: z.string(), name: z.string() });
 export type Execution = z.infer<typeof executionSchema>;
 export type MaterialAllocation = z.infer<typeof allocationSchema>;
 export type FinishedUnit = z.infer<typeof finishedUnitSchema>;
+export type DeliveryReceipt = z.infer<typeof deliveryReceiptSchema>;
 export type ExecutionCreate = {
   project_id: number;
   units: number;
@@ -119,6 +125,22 @@ export function useProduceExecution(executionID: number) {
       void client.invalidateQueries({ queryKey: executionsKey });
       void client.invalidateQueries({ queryKey: [...executionsKey, executionID, "units"] });
     },
+  });
+}
+
+export function useExecutionDeliveries(executionID: number, enabled: boolean) {
+  return useQuery({
+    queryKey: [...executionsKey, executionID, "deliveries"], enabled,
+    queryFn: ({ signal }) => request(`/executions/${executionID}/deliveries`, z.object({ data: z.array(deliveryReceiptSchema) }), { signal }).then((r) => r.data),
+  });
+}
+
+export function useDeliverFinishedUnits(executionID: number) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { request_id: string; customer_id: number; unit_ids: number[] }) =>
+      request(`/executions/${executionID}/deliveries`, deliveryReceiptSchema, { method: "POST", body: input }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: executionsKey }),
   });
 }
 

@@ -317,4 +317,55 @@ describe("execution registration", () => {
       confirm.mockRestore();
     }
   });
+
+  it("assigns finished units to a client at delivery and prints a numbered receipt", async () => {
+    const user = userEvent.setup();
+    useAuthenticatedApi("admin");
+    const execution = {
+      id: 27, project_id: 4, project_name: "Marmita", description: "", characteristics: [], consumables: [], tools: [],
+      template_estimated_days: 12, estimated_days: 12, units: 2, produced_units: 2, materials: [], customer_ids: [8, 9],
+      principal_user_id: "user-a", worker_ids: [], status: "completed", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    const firstUnit = { id: 1, code: "PRD-000001", execution_id: 27, produced_at: "2026-01-01T00:00:00Z" };
+    const secondUnit = { id: 2, code: "PRD-000002", execution_id: 27, produced_at: "2026-01-01T00:00:00Z" };
+    const receipt = { id: 1, number: "DEL-000001", execution_id: 27, customer_id: 9, customer_name: "Cliente Sur", actor_id: "user-a", unit_codes: [firstUnit.code], delivered_at: "2026-01-02T12:00:00Z" };
+    let delivered = false;
+    let attempts = 0;
+    const requestIDs: string[] = [];
+    server.use(
+      http.get(api("/executions"), () => HttpResponse.json({ data: [execution], total: 1, limit: 25, offset: 0 })),
+      http.get(api("/executions/27/units"), () => HttpResponse.json({ data: delivered ? [{ ...firstUnit, delivery_id: 1, customer_id: 9, delivered_at: receipt.delivered_at }, secondUnit] : [firstUnit, secondUnit] })),
+      http.get(api("/executions/27/deliveries"), () => HttpResponse.json({ data: delivered ? [receipt] : [] })),
+      http.get(api("/customers"), () => HttpResponse.json({ data: customers, total: 2, limit: 100, offset: 0 })),
+      http.post(api("/executions/27/deliveries"), async ({ request }) => {
+        const body = await request.json() as { request_id: string; customer_id: number; unit_ids: number[] };
+        requestIDs.push(body.request_id);
+        expect(body.customer_id).toBe(9);
+        expect(body.unit_ids).toEqual([1]);
+        attempts++;
+        if (attempts === 1) return HttpResponse.error();
+        delivered = true;
+        return HttpResponse.json(receipt, { status: 201 });
+      }),
+    );
+    const print = vi.spyOn(window, "print").mockImplementation(() => {});
+    try {
+      renderApp("/ejecuciones");
+      await user.click(await screen.findByText("Ver productos terminados"));
+      await user.click(await screen.findByLabelText("Seleccionar PRD-000001"));
+      await user.selectOptions(screen.getByLabelText("Cliente de entrega"), "9");
+      await user.click(screen.getByRole("button", { name: "Entregar productos" }));
+      await waitFor(() => expect(attempts).toBe(1));
+      await user.click(screen.getByRole("button", { name: "Entregar productos" }));
+      await screen.findByRole("button", { name: "Ver comprobante DEL-000001" });
+      expect(requestIDs).toHaveLength(2);
+      expect(requestIDs[0]).toBe(requestIDs[1]);
+      await user.click(screen.getByRole("button", { name: "Ver comprobante DEL-000001" }));
+      await user.click(screen.getByRole("button", { name: "Imprimir comprobante" }));
+      expect(print).toHaveBeenCalledOnce();
+      expect(screen.getAllByText("PRD-000001").length).toBeGreaterThan(0);
+    } finally {
+      print.mockRestore();
+    }
+  });
 });

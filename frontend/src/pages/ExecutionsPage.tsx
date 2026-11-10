@@ -5,10 +5,11 @@ import { Button } from "../components/atoms/Button";
 import { PagedList } from "../components/molecules/PagedList";
 import { SearchInput } from "../components/molecules/SearchInput";
 import { Sheet } from "../components/molecules/Sheet";
+import { PrintArea } from "../components/organisms/PrintArea";
 import { useToast } from "../components/molecules/Toast";
 import { useSession } from "../features/auth/session";
-import { useCustomers } from "../features/customers/api/customers";
-import { useAddExecutionMaterial, useAddExecutionTool, useAssignableUsers, useCreateExecution, useExecutionUnits, useExecutions, useLinkExecutionPurchaseLine, useMoveExecutionMaterial, useProduceExecution, useTransitionExecution, type Execution, type MaterialAllocation } from "../features/executions/api/executions";
+import { useAllCustomers, useCustomers } from "../features/customers/api/customers";
+import { useAddExecutionMaterial, useAddExecutionTool, useAssignableUsers, useCreateExecution, useDeliverFinishedUnits, useExecutionDeliveries, useExecutionUnits, useExecutions, useLinkExecutionPurchaseLine, useMoveExecutionMaterial, useProduceExecution, useTransitionExecution, type DeliveryReceipt, type Execution, type FinishedUnit, type MaterialAllocation } from "../features/executions/api/executions";
 import { usePurchaseOrders } from "../features/purchasing/api/purchaseOrders";
 import { useLocations } from "../features/catalog/api/catalog";
 import { useProjects, useTemplateItems, type Project } from "../features/projects/api/projects";
@@ -254,9 +255,60 @@ function ProductionForm({ execution }: { execution: Execution }) {
   </form>;
 }
 
-function FinishedUnitsPanel({ execution, canWrite }: { execution: Execution; canWrite: boolean }) {
+function DeliveryForm({ execution, units }: { execution: Execution; units: FinishedUnit[] }) {
+  const customers = useAllCustomers();
+  const deliver = useDeliverFinishedUnits(execution.id);
+  const toast = useToast();
+  const [customerID, setCustomerID] = useState("");
+  const [selectedIDs, setSelectedIDs] = useState<number[]>([]);
+  const [requestID, setRequestID] = useState<string | null>(null);
+  const available = units.filter((unit) => !unit.delivery_id);
+  const customerRows = customers.data?.pages.flatMap((page) => page.data) ?? [];
+  const assigned = execution.customer_ids.map((id) => ({ id, name: customerRows.find((customer) => customer.id === id)?.name ?? `Cliente #${id}` }));
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const id = requestID ?? crypto.randomUUID();
+    if (!requestID) setRequestID(id);
+    try {
+      const receipt = await deliver.mutateAsync({ request_id: id, customer_id: Number(customerID), unit_ids: [...selectedIDs].sort((a, b) => a - b) });
+      setSelectedIDs([]);
+      setCustomerID("");
+      setRequestID(null);
+      toast.success(`Entrega ${receipt.number} registrada.`);
+    } catch (error) {
+      toast.error(describeError(error));
+    }
+  }
+
+  if (available.length === 0) return null;
+  return <form onSubmit={submit} className="mt-3 rounded-xl border border-line bg-surface p-3">
+    <p className="font-semibold">Entregar productos terminados</p>
+    <fieldset className="mt-2 grid gap-2">
+      <legend className="text-xs text-ink-soft">Seleccioná los códigos a entregar</legend>
+      {available.map((unit) => <label key={unit.id} className="flex items-center gap-2 text-sm">
+        <input type="checkbox" aria-label={`Seleccionar ${unit.code}`} checked={selectedIDs.includes(unit.id)} onChange={(event) => {
+          setSelectedIDs((current) => event.target.checked ? [...current, unit.id] : current.filter((id) => id !== unit.id));
+          setRequestID(null);
+        }} />{unit.code}
+      </label>)}
+    </fieldset>
+    <label className="mt-3 flex flex-col gap-1 text-xs font-medium">Cliente de entrega
+      <select required value={customerID} onChange={(event) => { setCustomerID(event.target.value); setRequestID(null); }} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm">
+        <option value="">Seleccioná un cliente asignado</option>
+        {assigned.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+      </select>
+    </label>
+    <Button type="submit" className="mt-3" disabled={deliver.isPending || selectedIDs.length === 0 || !customerID}>Entregar productos</Button>
+    {customers.hasNextPage && <Button type="button" className="mt-2" disabled={customers.isFetchingNextPage} onClick={() => void customers.fetchNextPage()}>Cargar más nombres de clientes</Button>}
+    {customers.isError && <p className="mt-2 text-xs text-bad">No se pudieron cargar los nombres; los clientes asignados siguen disponibles por número.</p>}
+  </form>;
+}
+
+function FinishedUnitsPanel({ execution, canWrite, onReceipt }: { execution: Execution; canWrite: boolean; onReceipt: (receipt: DeliveryReceipt) => void }) {
   const [open, setOpen] = useState(false);
   const units = useExecutionUnits(execution.id, open);
+  const deliveries = useExecutionDeliveries(execution.id, open);
   return <section className="rounded-xl bg-sunken p-3 text-sm">
     <p className="font-semibold">Producidas: {execution.produced_units} de {execution.units}</p>
     <details className="mt-2" onToggle={(event) => setOpen(event.currentTarget.open)}>
@@ -266,15 +318,18 @@ function FinishedUnitsPanel({ execution, canWrite }: { execution: Execution; can
         {units.isError && <p className="text-bad">No se pudieron cargar los productos terminados.</p>}
         {units.data?.length === 0 && <p className="text-ink-soft">Todavía no hay productos terminados.</p>}
         {units.data && units.data.length > 0 && <ul className="flex flex-wrap gap-2">{units.data.map((unit) =>
-          <li key={unit.id} className="rounded-lg border border-line bg-surface px-2 py-1 font-mono text-xs">{unit.code}</li>,
+          <li key={unit.id} className="rounded-lg border border-line bg-surface px-2 py-1 font-mono text-xs">{unit.code} · {unit.delivery_id ? "Entregado" : "Disponible"}</li>,
         )}</ul>}
+        {canWrite && units.data && <DeliveryForm execution={execution} units={units.data} />}
+        {deliveries.isError && <p className="mt-2 text-bad">No se pudieron cargar los comprobantes de entrega.</p>}
+        {deliveries.data && deliveries.data.length > 0 && <div className="mt-3"><p className="font-semibold">Entregas registradas</p><ul>{deliveries.data.map((receipt) => <li key={receipt.id} className="mt-2"><Button type="button" onClick={() => onReceipt(receipt)}>Ver comprobante {receipt.number}</Button></li>)}</ul></div>}
       </div>}
     </details>
     {canWrite && execution.status === "in_progress" && <ProductionForm execution={execution} />}
   </section>;
 }
 
-function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite: boolean }) {
+function ExecutionCard({ execution, canWrite, onReceipt }: { execution: Execution; canWrite: boolean; onReceipt: (receipt: DeliveryReceipt) => void }) {
   return <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
     <div className="flex flex-wrap items-start justify-between gap-2">
       <div><h2 className="font-semibold">{execution.project_name}</h2><p className="text-sm text-ink-soft">Ejecución #{execution.id}</p></div>
@@ -282,7 +337,7 @@ function ExecutionCard({ execution, canWrite }: { execution: Execution; canWrite
     </div>
     <p className="text-sm">{execution.units} {execution.units === 1 ? "unidad" : "unidades"} · {execution.estimated_days} días · {execution.customer_ids.length} {execution.customer_ids.length === 1 ? "cliente" : "clientes"}</p>
     <p className="text-sm text-ink-soft">Responsable principal asignado · {execution.worker_ids.length} trabajadores</p>
-    <FinishedUnitsPanel execution={execution} canWrite={canWrite} />
+    <FinishedUnitsPanel execution={execution} canWrite={canWrite} onReceipt={onReceipt} />
     {execution.shortage_request_id && <p><Badge tone="warn">Solicitud de insumos #{execution.shortage_request_id}</Badge></p>}
     <details className="rounded-xl bg-sunken p-3 text-sm">
       <summary className="cursor-pointer font-semibold">Ver snapshot del proyecto</summary>
@@ -465,6 +520,7 @@ export function ExecutionsPage() {
   const q = params.get("q") ?? "";
   const executions = useExecutions(q);
   const [creating, setCreating] = useState(false);
+  const [receipt, setReceipt] = useState<DeliveryReceipt | null>(null);
   const rows = executions.data?.pages.flatMap((page) => page.data) ?? [];
   return <div className="flex flex-col gap-4">
     <Link to="/mas" className="min-h-11 font-semibold text-accent">Más</Link>
@@ -476,8 +532,25 @@ export function ExecutionsPage() {
       setParams(next, { replace: true });
     }} />
     <PagedList label="Ejecuciones" status={executions.status} errorMessage={executions.error ? describeError(executions.error) : undefined} isEmpty={rows.length === 0} emptyTitle="Sin ejecuciones" emptyDescription="Registra una ejecución a partir de una plantilla de proyecto." hasMore={executions.hasNextPage} isFetchingMore={executions.isFetchingNextPage} onLoadMore={() => void executions.fetchNextPage()} onRetry={() => void executions.refetch()}>
-      {rows.map((execution) => <ExecutionCard key={execution.id} execution={execution} canWrite={canWrite} />)}
+      {rows.map((execution) => <ExecutionCard key={execution.id} execution={execution} canWrite={canWrite} onReceipt={setReceipt} />)}
     </PagedList>
     {canCreate && creating && <CreateExecutionSheet open onOpenChange={setCreating} />}
+    {receipt && <>
+      <Sheet open onOpenChange={(open) => { if (!open) setReceipt(null); }} title={`Comprobante ${receipt.number}`} description="Entrega de productos terminados">
+        <DeliveryReceiptContent receipt={receipt} />
+        <Button type="button" className="mt-4" variant="primary" onClick={() => window.print()}>Imprimir comprobante</Button>
+      </Sheet>
+      <PrintArea><DeliveryReceiptContent receipt={receipt} /></PrintArea>
+    </>}
   </div>;
+}
+
+function DeliveryReceiptContent({ receipt }: { receipt: DeliveryReceipt }) {
+  return <article className="space-y-3 text-sm">
+    <header className="border-b border-line pb-3"><p className="text-xs uppercase tracking-wide text-ink-soft">Comprobante de entrega</p><h2 className="text-xl font-bold">{receipt.number}</h2></header>
+    <p><strong>Fecha:</strong> {new Date(receipt.delivered_at).toLocaleString("es-VE", { timeZone: "America/Caracas" })}</p>
+    <p><strong>Cliente:</strong> {receipt.customer_name}</p>
+    <p><strong>Ejecución:</strong> #{receipt.execution_id}</p>
+    <div><strong>Productos entregados ({receipt.unit_codes.length}):</strong><ul className="mt-2 list-inside list-disc font-mono">{receipt.unit_codes.map((code) => <li key={code}>{code}</li>)}</ul></div>
+  </article>;
 }
