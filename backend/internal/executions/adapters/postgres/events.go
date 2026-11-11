@@ -11,6 +11,12 @@ import (
 
 const selectEvent = `SELECT id,execution_id,event_type,message,COALESCE(actor_id::text,''),actor_name,occurred_at FROM manufacturing_execution_events`
 
+func insertAutomaticEvent(ctx context.Context, tx pgx.Tx, executionID int64, actorID, eventType, message string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO manufacturing_execution_events(execution_id,event_type,message,actor_id,actor_name)
+VALUES($1,$2,$3,$4::uuid,(SELECT name FROM users WHERE id=$4::uuid))`, executionID, eventType, message, actorID)
+	return err
+}
+
 func scanEvent(row pgx.Row) (domain.ExecutionEvent, error) {
 	var event domain.ExecutionEvent
 	err := row.Scan(&event.ID, &event.ExecutionID, &event.Type, &event.Message, &event.ActorID, &event.ActorName, &event.OccurredAt)

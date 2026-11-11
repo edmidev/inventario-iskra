@@ -858,6 +858,10 @@ func TestProduceFinishedUnitsIsPartialSerializedAndIdempotent(t *testing.T) {
 	if err != nil || len(replayed) != 2 || replayed[0].ID != first[0].ID || replayed[1].ID != first[1].ID {
 		t.Fatalf("production replay = %+v, err=%v", replayed, err)
 	}
+	events, err := svc.ListEvents(ctx, execution.ID)
+	if err != nil || len(events) != 1 || events[0].Type != "production" || events[0].ActorID != userID || events[0].ActorName != "Maker" {
+		t.Fatalf("production events = %+v, err=%v", events, err)
+	}
 	if _, err := svc.Produce(ctx, execution.ID, userID, executiondomain.ProduceInput{RequestID: request.RequestID, Quantity: 1}); !errors.Is(err, executiondomain.ErrProductionReplay) {
 		t.Fatalf("changed replay = %v", err)
 	}
@@ -1072,6 +1076,10 @@ func TestFinishedUnitDeliveriesAllocateOnlyToExecutionCustomers(t *testing.T) {
 	replayed, err := svc.DeliverFinishedUnits(ctx, execution.ID, userID, firstInput)
 	if err != nil || replayed.ID != first.ID || replayed.Number != first.Number {
 		t.Fatalf("delivery replay = %+v, err=%v", replayed, err)
+	}
+	events, err := svc.ListEvents(ctx, execution.ID)
+	if err != nil || len(events) != 2 || events[1].Type != "delivery" || events[1].ActorID != userID || events[1].ActorName != "Dispatcher" {
+		t.Fatalf("delivery events = %+v, err=%v", events, err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE customers SET name='Renamed client' WHERE id=$1`, customers[0]); err != nil {
 		t.Fatal(err)

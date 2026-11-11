@@ -359,7 +359,7 @@ function ExecutionTimeline({ executionID, canWrite }: { executionID: number; can
       {events.isError && <p className="text-bad">No se pudo cargar la bitácora.</p>}
       {events.data?.length === 0 && <p className="text-ink-soft">Todavía no hay eventos.</p>}
       {events.data && events.data.length > 0 && <ol className="space-y-2">{events.data.map((event) => <li key={event.id} className="rounded-lg border border-line bg-surface p-3">
-        <div className="flex items-center justify-between gap-2"><Badge tone={event.type === "negative" ? "bad" : event.type === "positive" ? "ok" : "neutral"}>{event.type === "negative" ? "Incidencia negativa" : event.type === "positive" ? "Incidencia positiva" : event.type}</Badge><time className="text-xs text-ink-soft">{new Date(event.occurred_at).toLocaleString("es-VE", { timeZone: "America/Caracas" })}</time></div>
+        <div className="flex items-center justify-between gap-2"><Badge tone={event.type === "negative" ? "bad" : event.type === "positive" ? "ok" : "neutral"}>{event.type === "negative" ? "Incidencia negativa" : event.type === "positive" ? "Incidencia positiva" : event.type === "production" ? "Producción" : event.type === "delivery" ? "Entrega" : event.type}</Badge><time className="text-xs text-ink-soft">{new Date(event.occurred_at).toLocaleString("es-VE", { timeZone: "America/Caracas" })}</time></div>
         <p className="mt-2">{event.message}</p><p className="mt-1 text-xs text-ink-soft">{event.actor_name}</p>
       </li>)}</ol>}
       {canWrite && <form onSubmit={submit} className="grid gap-2 rounded-lg border border-line bg-surface p-3">

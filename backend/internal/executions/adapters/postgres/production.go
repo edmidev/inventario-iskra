@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/edgar/inventario/backend/internal/executions/domain"
 	"github.com/edgar/inventario/backend/internal/platform/db"
@@ -132,6 +133,9 @@ func (r *Repo) Produce(ctx context.Context, executionID int64, actorID string, i
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO finished_product_units(execution_id,production_request_id)
 SELECT $1,$2::uuid FROM generate_series(1,$3)`, executionID, input.RequestID, input.Quantity); err != nil {
+		return nil, err
+	}
+	if err := insertAutomaticEvent(ctx, tx, executionID, actorID, "production", fmt.Sprintf("Se registraron %d unidades terminadas.", input.Quantity)); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE manufacturing_executions SET updated_at=now() WHERE id=$1`, executionID); err != nil {

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/edgar/inventario/backend/internal/executions/domain"
 	"github.com/edgar/inventario/backend/internal/platform/db"
@@ -114,6 +115,9 @@ VALUES($1::uuid,$2,$3,$4,$5::uuid,$6) RETURNING id`, input.RequestID, executionI
 	}
 	receipt, err := scanDelivery(tx.QueryRow(ctx, selectDelivery+` WHERE d.id=$1`, receiptID))
 	if err != nil {
+		return domain.DeliveryReceipt{}, err
+	}
+	if err := insertAutomaticEvent(ctx, tx, executionID, actorID, "delivery", fmt.Sprintf("Se entregaron %d unidades mediante el comprobante %s.", len(input.UnitIDs), receipt.Number)); err != nil {
 		return domain.DeliveryReceipt{}, err
 	}
 	return receipt, commit()
