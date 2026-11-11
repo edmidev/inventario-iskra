@@ -1,51 +1,56 @@
 import { Badge } from "../components/atoms/Badge";
 import { Button } from "../components/atoms/Button";
-import { Icon } from "../components/atoms/Icon";
+import { Icon, type IconName } from "../components/atoms/Icon";
 import { Link } from "react-router-dom";
 import { usePermissions, useSession } from "../features/auth/session";
 import { roleLabels } from "../features/users/userForm";
 
 const operations = [
-  { to: "/stock-bajo", label: "Stock bajo", hint: "Consumibles por reponer" },
-  { to: "/prestamos", label: "Préstamos", hint: "Material prestado y vencido" },
-  { to: "/mantenimiento", label: "Mantenimiento", hint: "Fallas abiertas y mantenimientos por vencer" },
-  { to: "/proveedores", label: "Proveedores", hint: "Contactos y proveedores activos" },
-];
-
-const administration = [
-  { permission: "canManageUsers", to: "/admin/usuarios", label: "Usuarios", hint: "Altas, roles y contraseñas" },
-  { permission: "canManageCatalogs", to: "/admin/categorias", label: "Categorías", hint: "Nombres y prefijos de código" },
-  { permission: "canManageCatalogs", to: "/admin/ubicaciones", label: "Ubicaciones", hint: "Bodegas, contenedores y personas" },
-  { permission: "canManageRoles", to: "/admin/roles", label: "Roles y permisos", hint: "Accesos por función del taller" },
+  { to: "/stock-bajo", label: "Stock bajo", hint: "Consumibles por reponer", icon: "box" },
+  { to: "/prestamos", label: "Préstamos", hint: "Material prestado y vencido", icon: "share" },
+  { to: "/mantenimiento", label: "Mantenimiento", hint: "Fallas y mantenimientos", icon: "flash" },
+  { to: "/proveedores", label: "Proveedores", hint: "Contactos y proveedores activos", icon: "truck" },
 ] as const;
 
-function LinkList({ label, entries }: { label: string; entries: { to: string; label: string; hint: string }[] }) {
+const administration = [
+  { permission: "canManageUsers", to: "/admin/usuarios", label: "Usuarios", hint: "Altas, roles y contraseñas", icon: "users" },
+  { permission: "canManageCatalogs", to: "/admin/categorias", label: "Categorías", hint: "Nombres y prefijos de código", icon: "tag" },
+  { permission: "canManageCatalogs", to: "/admin/ubicaciones", label: "Ubicaciones", hint: "Bodegas, contenedores y personas", icon: "pin" },
+  { permission: "canManageRoles", to: "/admin/roles", label: "Roles y permisos", hint: "Accesos por función del taller", icon: "key" },
+] as const;
+
+type MenuEntry = { to: string; label: string; hint: string; icon: IconName };
+
+function LinkGrid({ label, entries }: { label: string; entries: readonly MenuEntry[] }) {
   return (
-    <nav aria-label={label} className="flex flex-col overflow-hidden rounded-card border border-line bg-surface">
-      {entries.map((entry) => (
-        <Link
-          key={entry.to}
-          to={entry.to}
-          className="flex min-h-14 items-center justify-between gap-3 border-b border-line px-4 last:border-b-0 hover:bg-sunken"
-        >
-          <span>
-            <span className="block font-semibold">{entry.label}</span>
-            <span className="block text-sm text-ink-soft">{entry.hint}</span>
-          </span>
-          <Icon name="chevron" className="size-4 text-ink-soft" />
-        </Link>
-      ))}
-    </nav>
+    <section className="flex flex-col gap-2">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-soft">{label}</h2>
+      <nav aria-label={label} className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        {entries.map((entry) => (
+          <Link
+            key={entry.to}
+            to={entry.to}
+            className="flex min-h-36 flex-col items-start gap-3 rounded-card border border-line bg-surface p-4 text-left shadow-sm transition-colors hover:bg-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            <span className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-sunken text-accent"><Icon name={entry.icon} className="size-7" /></span>
+            <span>
+              <span className="block font-semibold">{entry.label}</span>
+              <span className="mt-1 block text-xs text-ink-soft">{entry.hint}</span>
+            </span>
+          </Link>
+        ))}
+      </nav>
+    </section>
   );
 }
 
 export function MorePage() {
   const permissions = usePermissions();
-  const manufacturingLinks = [
-    ...(permissions.canReadProjects ? [{ to: "/proyectos", label: "Proyectos", hint: "Plantillas de fabricación" }] : []),
-    ...(permissions.canReadCustomers ? [{ to: "/clientes", label: "Clientes", hint: "Datos y contactos" }] : []),
-    ...(permissions.canReadExecutions ? [{ to: "/ejecuciones", label: "Ejecuciones", hint: "Trabajos registrados en el taller" }] : []),
-    ...(permissions.canReadExecutions ? [{ to: "/productos-terminados", label: "Productos terminados", hint: "Unidades disponibles y entregadas" }] : []),
+  const manufacturingLinks: MenuEntry[] = [
+    ...(permissions.canReadProjects ? [{ to: "/proyectos", label: "Proyectos", hint: "Plantillas de fabricación", icon: "copy" as const }] : []),
+    ...(permissions.canReadCustomers ? [{ to: "/clientes", label: "Clientes", hint: "Datos y contactos", icon: "users" as const }] : []),
+    ...(permissions.canReadExecutions ? [{ to: "/ejecuciones", label: "Ejecuciones", hint: "Trabajos registrados en el taller", icon: "check" as const }] : []),
+    ...(permissions.canReadExecutions ? [{ to: "/productos-terminados", label: "Productos terminados", hint: "Unidades disponibles y entregadas", icon: "box" as const }] : []),
   ];
   const administrationLinks = administration.filter((entry) => permissions[entry.permission]);
   const { state, signOut } = useSession();
@@ -53,14 +58,9 @@ export function MorePage() {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold">Más</h1>
-      {permissions.canRead && <LinkList label="Operaciones" entries={operations} />}
-      {manufacturingLinks.length > 0 && <LinkList label="Fabricación" entries={manufacturingLinks} />}
-      {administrationLinks.length > 0 && (
-        <>
-          <h2 className="-mb-2 text-sm font-semibold text-ink-soft uppercase">Administración</h2>
-          <LinkList label="Administración" entries={administrationLinks} />
-        </>
-      )}
+      {permissions.canRead && <LinkGrid label="Operaciones" entries={operations} />}
+      {manufacturingLinks.length > 0 && <LinkGrid label="Fabricación" entries={manufacturingLinks} />}
+      {administrationLinks.length > 0 && <LinkGrid label="Administración" entries={administrationLinks} />}
       {user && (
         <section aria-label="Cuenta" className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
           <div>
