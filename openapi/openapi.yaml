@@ -6,6 +6,298 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /customers:
+    get:
+      operationId: listCustomers
+      summary: List customers
+      description: Requires customers:read. Supports q, limit and offset.
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: Paginated customers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, limit, offset]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Customer" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createCustomer
+      summary: Create customer
+      description: Requires customers:write.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CustomerInput" }
+      responses:
+        "201":
+          description: Created customer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /customers/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getCustomer
+      summary: Read customer
+      description: Requires customers:read.
+      responses:
+        "200":
+          description: Customer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateCustomer
+      summary: Update customer
+      description: Requires customers:write. Updates supplied fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CustomerPatch" }
+      responses:
+        "200":
+          description: Updated customer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteCustomer
+      summary: Soft-delete customer
+      description: Requires customers:write; historical rows are retained.
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects:
+    get:
+      operationId: listProjects
+      summary: List projects
+      description: Requires projects:read. Supports q, limit and offset.
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: Paginated projects
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, limit, offset]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Project" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createProject
+      summary: Create project
+      description: Requires projects:write.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectInput" }
+      responses:
+        "201":
+          description: Created project
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /projects/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getProject
+      summary: Read project
+      description: Requires projects:read.
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: updateProject
+      summary: Update project
+      description: Requires projects:write. Replaces the whole editable template.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectInput" }
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteProject
+      summary: Soft-delete project
+      description: Requires projects:write; historical rows are retained.
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /executions:
+    get:
+      operationId: listExecutions
+      summary: List manufacturing executions
+      description: Requires executions:read. Supports status, q, limit and offset.
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ExecutionStatus" } }
+        - { name: q, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: Paginated executions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, limit, offset]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Execution" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createExecution
+      summary: Register a manufacturing execution
+      description: Requires executions:write. Copies an immutable project snapshot and permits starting before inventory is complete.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExecutionCreate" }
+      responses:
+        "201":
+          description: Registered execution
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Execution" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /executions/assignable-users:
+    get:
+      operationId: listExecutionAssignableUsers
+      summary: List active users assignable to an execution
+      description: Requires executions:read. Returns only active user IDs and names.
+      responses:
+        "200":
+          description: Active assignees
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/AssignableUser" }
+        "403": { $ref: "#/components/responses/Error" }
+  /executions/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getExecution
+      summary: Read a manufacturing execution snapshot
+      description: Requires executions:read.
+      responses:
+        "200":
+          description: Execution detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Execution" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /executions/{id}/start:
+    post:
+      operationId: startExecution
+      summary: Start an execution
+      description: Requires executions:write. Starting does not require complete inventory availability.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+      responses:
+        "200": { description: Started execution, content: { application/json: { schema: { $ref: "#/components/schemas/Execution" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /executions/{id}/pause:
+    post:
+      operationId: pauseExecution
+      summary: Pause an execution
+      description: Requires executions:write.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+      responses:
+        "200": { description: Paused execution, content: { application/json: { schema: { $ref: "#/components/schemas/Execution" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /executions/{id}/resume:
+    post:
+      operationId: resumeExecution
+      summary: Resume an execution
+      description: Requires executions:write.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+      responses:
+        "200": { description: Resumed execution, content: { application/json: { schema: { $ref: "#/components/schemas/Execution" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /roles:
     get:
       operationId: listRolePermissions
@@ -1129,10 +1421,10 @@ paths:
                               code: { type: string }
                               description: { type: string }
                               unit: { type: string }
-                              stock_current: { type: integer }
-                              stock_min: { type: integer }
-                              pending_ordered: { type: integer }
-                              suggested_qty: { type: integer, minimum: 1 }
+                              stock_current: { type: number, multipleOf: 0.001 }
+                              stock_min: { type: number, multipleOf: 0.001 }
+                              pending_ordered: { type: number, multipleOf: 0.001 }
+                              suggested_qty: { type: number, multipleOf: 0.001, minimum: 0.001 }
                               last_unit_cost_minor: { type: integer, format: int64, nullable: true }
                               last_currency: { type: string, enum: [USD, VES], nullable: true }
         "401": { $ref: "#/components/responses/Error" }
@@ -1219,6 +1511,105 @@ components:
       in: query
       schema: { type: integer, minimum: 0, default: 0 }
   schemas:
+    CustomerPatch:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        identification: { type: string }
+        contact: { type: string }
+        notes: { type: string }
+        active: { type: boolean }
+    CustomerInput:
+      allOf:
+        - { $ref: "#/components/schemas/CustomerPatch" }
+        - type: object
+          required: [name]
+    Customer:
+      allOf:
+        - { $ref: "#/components/schemas/CustomerInput" }
+        - type: object
+          required: [id, created_at, updated_at]
+          properties:
+            id: { type: integer, format: int64 }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    ProjectInput:
+      type: object
+      required: [name, estimated_days]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 4000 }
+        characteristics:
+          type: array
+          items: { type: string, minLength: 1, maxLength: 500 }
+        estimated_days: { type: integer, minimum: 1, maximum: 36500 }
+        consumables:
+          type: array
+          items:
+            type: object
+            required: [item_id, quantity]
+            properties:
+              item_id: { type: string, format: uuid }
+              quantity: { type: number, multipleOf: 0.001, minimum: 0.001 }
+        tools:
+          type: array
+          uniqueItems: true
+          description: Exact asset IDs; informational, without exclusive reservations.
+          items: { type: string, format: uuid }
+    Project:
+      allOf:
+        - { $ref: "#/components/schemas/ProjectInput" }
+        - type: object
+          required: [id, created_at, updated_at]
+          properties:
+            id: { type: integer, format: int64 }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    ExecutionCreate:
+      type: object
+      required: [project_id, units, customer_ids, principal_user_id]
+      properties:
+        project_id: { type: integer, format: int64, minimum: 1 }
+        units: { type: integer, minimum: 1 }
+        estimated_days: { type: integer, minimum: 1, maximum: 36500, description: Defaults to the project's current estimate. }
+        customer_ids: { type: array, minItems: 1, uniqueItems: true, items: { type: integer, format: int64, minimum: 1 } }
+        principal_user_id: { type: string, format: uuid }
+        worker_ids: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
+    Execution:
+      type: object
+      required: [id, project_id, project_name, description, characteristics, consumables, tools, template_estimated_days, units, estimated_days, customer_ids, principal_user_id, worker_ids, status, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        project_name: { type: string }
+        description: { type: string }
+        characteristics: { type: array, items: { type: string } }
+        consumables: { type: array, items: { $ref: "#/components/schemas/ExecutionMaterialSnapshot" } }
+        tools: { type: array, items: { type: string, format: uuid } }
+        template_estimated_days: { type: integer }
+        units: { type: integer }
+        estimated_days: { type: integer }
+        customer_ids: { type: array, items: { type: integer, format: int64 } }
+        principal_user_id: { type: string, format: uuid }
+        worker_ids: { type: array, items: { type: string, format: uuid } }
+        status: { $ref: "#/components/schemas/ExecutionStatus" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ExecutionMaterialSnapshot:
+      type: object
+      required: [item_id, quantity_per_unit]
+      properties:
+        item_id: { type: string, format: uuid }
+        quantity_per_unit: { type: number, multipleOf: 0.001, minimum: 0.001 }
+    ExecutionStatus:
+      type: string
+      enum: [registered, in_progress, paused, completed, cancelled]
+    AssignableUser:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
     RoleConfiguration:
       type: object
       required: [role, permissions]
@@ -1280,7 +1671,7 @@ components:
         category_id: { type: integer, format: int64 }
         kind: { $ref: "#/components/schemas/ItemKind" }
         unit: { type: string, maxLength: 30, description: Required for consumables, not allowed for assets. }
-        stock_min: { type: integer, minimum: 0 }
+        stock_min: { type: number, multipleOf: 0.001, minimum: 0 }
         attributes: { type: object, additionalProperties: true }
         notes: { type: string, maxLength: 4000 }
     PurchaseOrderLineInput:
@@ -1292,7 +1683,7 @@ components:
       properties:
         item_id: { type: string, format: uuid, description: An existing consumable. }
         new_item: { $ref: "#/components/schemas/PurchaseOrderNewItem" }
-        quantity: { type: integer, minimum: 1, maximum: 100000, description: Assets (`new_item.kind=asset`) up to 100. }
+        quantity: { type: number, multipleOf: 0.001, minimum: 0.001, maximum: 100000, description: Assets (`new_item.kind=asset`) up to 100. }
         unit_cost_minor: { type: integer, format: int64, minimum: 0, description: Unit cost in minor units (cents or céntimos). }
     PurchaseOrderLine:
       type: object
@@ -1308,8 +1699,8 @@ components:
           allOf: [{ $ref: "#/components/schemas/PurchaseOrderNewItem" }]
           nullable: true
         description: { type: string, description: Snapshot taken when the line was saved. }
-        quantity: { type: integer }
-        received_qty: { type: integer }
+        quantity: { type: number, multipleOf: 0.001 }
+        received_qty: { type: number, multipleOf: 0.001 }
         unit_cost_minor: { type: integer, format: int64 }
     PurchaseOrderCreate:
       type: object
@@ -1346,13 +1737,13 @@ components:
       properties:
         item_id: { type: string, format: uuid }
         code: { type: string, description: Catalog code of the item. }
-        quantity: { type: integer, description: 1 for each created asset; the received quantity for a consumable. }
+        quantity: { type: number, multipleOf: 0.001, description: 1 for each created asset; the received quantity for a consumable. }
     ReceiptLine:
       type: object
       required: [line_id, quantity, items]
       properties:
         line_id: { type: integer, format: int64 }
-        quantity: { type: integer }
+        quantity: { type: number, multipleOf: 0.001 }
         items:
           type: array
           items: { $ref: "#/components/schemas/ReceiptItem" }
@@ -1409,7 +1800,7 @@ components:
             required: [line_id, quantity]
             properties:
               line_id: { type: integer, format: int64 }
-              quantity: { type: integer, minimum: 1 }
+              quantity: { type: number, multipleOf: 0.001, minimum: 0.001 }
     ReceiveResult:
       type: object
       required: [receipt, order]
@@ -1449,8 +1840,8 @@ components:
         status: { $ref: "#/components/schemas/ItemStatus" }
         availability: { $ref: "#/components/schemas/Availability" }
         unit: { type: string, nullable: true }
-        stock_current: { type: integer, description: "Total quantity. For consumables it always equals the sum of `stocks`." }
-        stock_min: { type: integer }
+        stock_current: { type: number, multipleOf: 0.001, description: "Total quantity. For consumables it always equals the sum of `stocks`." }
+        stock_min: { type: number, multipleOf: 0.001 }
         stocks:
           type: array
           description: Consumables only (empty for assets and for consumables with no stock). Quantity per location with stock, ordered by location name.
@@ -1473,13 +1864,13 @@ components:
       properties:
         location_id: { type: integer, format: int64 }
         location_name: { type: string }
-        quantity: { type: integer, minimum: 1 }
+        quantity: { type: number, multipleOf: 0.001, minimum: 0.001 }
     ItemStockInput:
       type: object
       required: [location_id, quantity]
       properties:
         location_id: { type: integer, format: int64, description: An existing location; each location at most once. }
-        quantity: { type: integer, minimum: 1 }
+        quantity: { type: number, multipleOf: 0.001, minimum: 0.001 }
     ItemCustody:
       type: object
       description: Present only while the item is on loan.
@@ -1500,12 +1891,12 @@ components:
         kind: { $ref: "#/components/schemas/ItemKind" }
         status: { $ref: "#/components/schemas/ItemStatus" }
         unit: { type: string, maxLength: 30, description: Required for consumables; not allowed for assets. }
-        stock_current: { type: integer, minimum: 0, description: "Legacy opening balance (consumables), placed at `location_id` or, without one, in the default location \"Sin ubicación\". Cannot be combined with `stocks`." }
+        stock_current: { type: number, multipleOf: 0.001, minimum: 0, description: "Legacy opening balance (consumables), placed at `location_id` or, without one, in the default location \"Sin ubicación\". Cannot be combined with `stocks`." }
         stocks:
           type: array
           description: "Multi-location opening balance (consumables), one `opening` movement per row. Cannot be combined with `stock_current` or `location_id`; not allowed for assets."
           items: { $ref: "#/components/schemas/ItemStockInput" }
-        stock_min: { type: integer, minimum: 0 }
+        stock_min: { type: number, multipleOf: 0.001, minimum: 0 }
         location_id: { type: integer, format: int64, nullable: true, description: "An asset's location; for a consumable only the location of the legacy `stock_current` balance (it is not stored on the item)." }
         last_maintenance_at: { type: string, format: date-time, nullable: true }
         maintenance_interval_days: { type: integer, minimum: 1, maximum: 3650, nullable: true }
@@ -1518,7 +1909,7 @@ components:
         category_id: { type: integer, format: int64 }
         status: { $ref: "#/components/schemas/ItemStatus" }
         unit: { type: string, maxLength: 30 }
-        stock_min: { type: integer, minimum: 0 }
+        stock_min: { type: number, multipleOf: 0.001, minimum: 0 }
         location_id: { type: integer, format: int64, nullable: true, description: Assets only; a non-null value on a consumable is 422 `not_applicable`. }
         maintenance_interval_days: { type: integer, minimum: 1, maximum: 3650, nullable: true }
         attributes: { type: object, additionalProperties: true }
@@ -1555,7 +1946,7 @@ components:
       required: [type]
       properties:
         type: { type: string, enum: [in, out, adjust, transfer] }
-        qty: { type: integer, description: "Amount for in/out; absolute counted quantity at the location for adjust; quantity to move for a consumable transfer; omit or 0 for an asset transfer." }
+        qty: { type: number, multipleOf: 0.001, description: "Amount for in/out; absolute counted quantity at the location for adjust; quantity to move for a consumable transfer; omit or 0 for an asset transfer." }
         location_id: { type: integer, format: int64, description: "Consumable in/out/adjust: the location it applies to. Inferred when omitted (see the endpoint description; 422 `location_required` when ambiguous). Not allowed for transfer." }
         from_location_id: { type: integer, format: int64, description: Consumable transfer only. Source location; inferred when the item has a single stocked location. }
         to_location_id: { type: integer, format: int64, description: Required for transfer; not allowed otherwise. }
@@ -1567,13 +1958,13 @@ components:
         id: { type: integer, format: int64 }
         item_id: { type: string, format: uuid }
         type: { $ref: "#/components/schemas/MovementType" }
-        qty: { type: integer, description: Signed delta applied to the item's total stock; 0 for transfers. }
-        stock_before: { type: integer, description: Item total before the movement. }
-        stock_after: { type: integer, description: Item total after the movement. }
+        qty: { type: number, multipleOf: 0.001, description: Signed delta applied to the item's total stock; 0 for transfers. }
+        stock_before: { type: number, multipleOf: 0.001, description: Item total before the movement. }
+        stock_after: { type: number, multipleOf: 0.001, description: Item total after the movement. }
         location_id: { type: integer, format: int64, nullable: true, description: "Consumable in/out/adjust/opening: the location affected. Null for transfers and for legacy rows whose location is unknown." }
         from_location_id: { type: integer, format: int64, nullable: true }
         to_location_id: { type: integer, format: int64, nullable: true }
-        moved_qty: { type: integer, description: Quantity moved by a consumable transfer; 0 otherwise. }
+        moved_qty: { type: number, multipleOf: 0.001, description: Quantity moved by a consumable transfer; 0 otherwise. }
         user_id: { type: string, format: uuid, nullable: true, description: Null for system rows (migration backfill). }
         user_name: { type: string, nullable: true }
         note: { type: string }
@@ -1583,7 +1974,7 @@ components:
       required: [movement, stock_current, location_id, stocks]
       properties:
         movement: { $ref: "#/components/schemas/Movement" }
-        stock_current: { type: integer, description: Item total stock after the movement. }
+        stock_current: { type: number, multipleOf: 0.001, description: Item total stock after the movement. }
         location_id: { type: integer, format: int64, nullable: true, description: An asset's location after the movement; null for consumables. }
         stocks:
           type: array
@@ -1597,8 +1988,8 @@ components:
         code: { type: string }
         description: { type: string }
         unit: { type: string }
-        stock_current: { type: integer }
-        stock_min: { type: integer }
+        stock_current: { type: number, multipleOf: 0.001 }
+        stock_min: { type: number, multipleOf: 0.001 }
         shortage: { type: integer, description: stock_current - stock_min; lower is more severe. }
         location_id: { type: integer, format: int64, nullable: true, description: Set only when all the stock sits in one location. }
         location_name: { type: string, nullable: true, description: Set only when all the stock sits in one location. }
@@ -1782,9 +2173,9 @@ components:
                   code: { type: string }
                   description: { type: string }
                   unit: { type: string }
-                  stock_current: { type: integer }
-                  stock_min: { type: integer }
-                  pending_ordered: { type: integer, description: Quantity still to arrive on purchase orders in `ordered` or `partially_received`. }
+                  stock_current: { type: number, multipleOf: 0.001 }
+                  stock_min: { type: number, multipleOf: 0.001 }
+                  pending_ordered: { type: number, multipleOf: 0.001, description: Quantity still to arrive on purchase orders in `ordered` or `partially_received`. }
                   location_name: { type: string, nullable: true, description: Set only when all the stock sits in one location. }
                   stocks:
                     type: array

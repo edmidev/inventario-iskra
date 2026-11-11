@@ -58,13 +58,27 @@ Auth is a short-lived access JWT (sent as `Authorization: Bearer`) plus a rotati
 
 The last active admin cannot be deactivated or demoted. Endpoints are documented in `openapi/openapi.yaml`. Other modules reuse `httpx.Authenticate` and `httpx.RequirePermission`.
 
+## Manufacturing templates and customers
+
+Administrators can open **More → Projects / Customers**. Customers hold a name, identification, contact, notes and active status. Reusable project templates hold a name, description, text characteristics, estimated calendar days, per-unit consumable quantities and exact inventory tool references. Tools are informational, not exclusive reservations. Templates can be edited or soft-deleted.
+
+API: `GET|POST /customers`, `GET|PATCH|DELETE /customers/{id}`, `GET|POST /projects`, `GET|PUT|DELETE /projects/{id}`. Project PUT replaces the editable template. Lists accept `q`, `limit` and `offset`. Dedicated `customers:read/write` and `projects:read/write` grants are configurable; migration 00015 gives the new grants only to administrators. Other roles need explicit assignment. Material pickers additionally use existing inventory read access.
+
+The execution API and **More → Executions** screen register one or several customers, an active principal user and any number of active worker users. Each execution stores an independent project snapshot, an integer unit count and an editable duration. `POST /executions/{id}/start` permits a partial start; stock reservation and shortage procurement are not part of this stage. Registered, in-progress and paused states are available. Production, delivery, procurement and the weekly timeline remain pending. `executions:read/write` grants are configurable; migration 00016 adds them only to administrators.
+
+## Decimal inventory quantities
+
+Consumable quantities support up to three decimal places across catalog opening balances, stock movements, purchases, receipts, dashboard and spreadsheet import. JSON numbers remain in human units (`1.125`, not `1125`); assets remain whole units. No automatic unit conversion is performed. Purchase subtotals round half up per line to integer minor currency units before summing.
+
+Migration 00013 converts stored quantities and balance-trigger variables without changing historical visible units. It rejects rollback when fractional quantities exist, instead of truncating history. Deploy the decimal-aware API and frontend together: old integer readers are not safe once fractions are recorded. Back up production before migration and verify balances on a restored copy; do not force a lossy downgrade.
+
 ## Dynamic role permissions
 
 Administrators configure grants at `/admin/roles` (More → Roles and permissions). The API exposes `GET /roles`, `GET /permissions` and `PUT /roles/{role}/permissions`; all require `roles:manage`. The last endpoint replaces the full permission list, and an empty list clears a non-admin role.
 
 The migration preserves existing admin/operator/viewer access and seeds `workshop_chief`, `supervisor`, `inventory_chief` and `worker` without grants. Login, refresh and `/auth/me` return effective permissions. Every authenticated request reloads active identity and persisted grants, so old access tokens cannot retain revoked privileges. Administrator `users:manage` and `roles:manage` grants cannot be removed. The legacy importer also checks persisted write grants.
 
-Deploy the permission-aware API and frontend together; older binaries still authorize through static role defaults. Reverting to them is not a safe authorization rollback after permissions have changed. No historical user is automatically reassigned. The remaining manufacturing flows and decimal inventory activation are tracked in `odd/tasks/manufacturing-projects.md` and are not yet implemented.
+Deploy the permission-aware API and frontend together; older binaries still authorize through static role defaults. Reverting to them is not a safe authorization rollback after permissions have changed. No historical user is automatically reassigned. Remaining reservation, procurement, production, delivery, timeline, and execution UI flows are tracked in `odd/tasks/manufacturing-projects.md`.
 
 ## Catalog
 
