@@ -151,8 +151,23 @@ func ResolveActor(ctx context.Context, pool *pgxpool.Pool, email string) (import
 	if u.Role != identitydomain.RoleAdmin && u.Role != identitydomain.RoleOperator {
 		return importer.Actor{}, fmt.Errorf("user %s has role %s; the import needs an admin or operator", norm, u.Role)
 	}
-	perms := make([]string, 0, 5)
-	for _, p := range u.Role.Permissions() {
+	grants, err := identitypg.New(pool).RolePermissions(ctx, u.Role)
+	if err != nil {
+		return importer.Actor{}, fmt.Errorf("look up user permissions: %w", err)
+	}
+	has := func(want identitydomain.Permission) bool {
+		for _, p := range grants {
+			if p == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(identitydomain.PermWriteItems) || !has(identitydomain.PermWrite) {
+		return importer.Actor{}, fmt.Errorf("user %s lacks required import permissions", norm)
+	}
+	perms := make([]string, 0, len(grants))
+	for _, p := range grants {
 		perms = append(perms, string(p))
 	}
 	return importer.Actor{UserID: u.ID, Role: string(u.Role), Permissions: perms}, nil

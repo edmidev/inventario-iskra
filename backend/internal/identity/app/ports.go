@@ -24,6 +24,8 @@ type RefreshToken struct {
 
 // UserRepository persists users.
 type UserRepository interface {
+	RolePermissions(ctx context.Context, role domain.Role) ([]domain.Permission, error)
+	SetRolePermissions(ctx context.Context, role domain.Role, permissions []domain.Permission) error
 	// Create stores u, filling ID and timestamps. Returns domain.ErrEmailTaken
 	// when the email is already registered.
 	Create(ctx context.Context, u *domain.User) error
@@ -64,8 +66,9 @@ type PasswordHasher interface {
 
 // AccessClaims is what an access token proves about its bearer.
 type AccessClaims struct {
-	UserID string
-	Role   domain.Role
+	UserID      string
+	Role        domain.Role
+	Permissions []domain.Permission
 }
 
 // TokenIssuer creates and verifies short-lived access tokens.

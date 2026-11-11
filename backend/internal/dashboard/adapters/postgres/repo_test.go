@@ -273,7 +273,7 @@ func TestLowStockTopIsMostSevereFirstAndCapped(t *testing.T) {
 		}
 	}
 	first := sum.LowStock.Top[0]
-	if first.LocationName != nil || first.Unit != "unit" || first.StockMin != 3 || first.StockCurrent != 0 {
+	if first.LocationName != nil || first.Unit != "unit" || first.StockMin != 3*1000 || first.StockCurrent != 0*1000 {
 		t.Errorf("first = %+v", first)
 	}
 	if second := sum.LowStock.Top[1]; second.LocationName == nil || *second.LocationName != "Sin ubicación" {
@@ -299,11 +299,11 @@ func TestLowStockBreakdownListsEveryLocationAndHidesTheSingleName(t *testing.T) 
 	if len(top) != 2 || top[0].Description != "Pernos" || top[1].Description != "Tornillos" { // ratios 0.35, 0.83
 		t.Fatalf("top = %+v", top)
 	}
-	if top[0].LocationName == nil || *top[0].LocationName != "Taller" || len(top[0].Stocks) != 1 || top[0].Stocks[0].Quantity != 7 {
+	if top[0].LocationName == nil || *top[0].LocationName != "Taller" || len(top[0].Stocks) != 1 || top[0].Stocks[0].Quantity != 7*1000 {
 		t.Errorf("single-location item: %+v", top[0])
 	}
 	if top[1].LocationName != nil || len(top[1].Stocks) != 2 || top[1].Stocks[0].LocationName != "Bodega" ||
-		top[1].Stocks[1].LocationName != "Taller" || top[1].StockCurrent != 10 {
+		top[1].Stocks[1].LocationName != "Taller" || top[1].StockCurrent != 10*1000 {
 		t.Errorf("multi-location item: %+v", top[1])
 	}
 }
@@ -413,7 +413,7 @@ func TestPendingOrderedCountsOnlyOpenOrders(t *testing.T) {
 	s.order(sup, "cancelled", "USD", &at, item, 50, 0, 100)
 
 	top := s.summary().LowStock.Top
-	if len(top) != 1 || top[0].PendingOrdered != 15 {
+	if len(top) != 1 || top[0].PendingOrdered != 15*1000 {
 		t.Fatalf("pending_ordered = %+v, want 15 (10 + 5 left)", top)
 	}
 }
@@ -449,7 +449,7 @@ func TestReorderCandidatesUseLatestLiveSupplier(t *testing.T) {
 	}
 	b := by[both]
 	if b.SupplierName == nil || *b.SupplierName != "Beta" || b.LastUnitCostMinor == nil || *b.LastUnitCostMinor != 250 ||
-		b.LastCurrency == nil || *b.LastCurrency != "USD" || b.PendingOrdered != 5 {
+		b.LastCurrency == nil || *b.LastCurrency != "USD" || b.PendingOrdered != 5*1000 {
 		t.Errorf("both = %+v, want latest order (Beta, 250 USD, pending 5)", b)
 	}
 	if n := by[never]; n.SupplierID != nil || n.LastUnitCostMinor != nil || n.LastCurrency != nil {

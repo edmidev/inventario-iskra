@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"strconv"
 	"strings"
 	"time"
@@ -382,7 +383,7 @@ func (r *Items) Create(ctx context.Context, it *domain.Item) error {
 // default location for rows without one, and returns them with location
 // names, ordered by name.
 func insertStocks(ctx context.Context, tx pgx.Tx, itemID string, stocks []domain.ItemStock) ([]domain.ItemStock, error) {
-	merged := map[int64]int{}
+	merged := map[int64]qtyval.Quantity{}
 	for _, st := range stocks {
 		id := st.LocationID
 		if id == 0 {

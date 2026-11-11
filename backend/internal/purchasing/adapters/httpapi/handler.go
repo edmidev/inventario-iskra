@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -64,34 +65,34 @@ func (h *Handler) Register(r chi.Router) {
 // ---- DTOs ----
 
 type newItemDTO struct {
-	Description string         `json:"description"`
-	CategoryID  int64          `json:"category_id"`
-	Kind        string         `json:"kind"`
-	Unit        string         `json:"unit,omitempty"`
-	StockMin    int            `json:"stock_min,omitempty"`
-	Attributes  map[string]any `json:"attributes,omitempty"`
-	Notes       string         `json:"notes,omitempty"`
+	Description string          `json:"description"`
+	CategoryID  int64           `json:"category_id"`
+	Kind        string          `json:"kind"`
+	Unit        string          `json:"unit,omitempty"`
+	StockMin    qtyval.Quantity `json:"stock_min,omitempty"`
+	Attributes  map[string]any  `json:"attributes,omitempty"`
+	Notes       string          `json:"notes,omitempty"`
 }
 
 type lineDTO struct {
-	ID            int64       `json:"id"`
-	ItemID        *string     `json:"item_id"`
-	NewItem       *newItemDTO `json:"new_item"`
-	Description   string      `json:"description"`
-	Quantity      int         `json:"quantity"`
-	ReceivedQty   int         `json:"received_qty"`
-	UnitCostMinor int64       `json:"unit_cost_minor"`
+	ID            int64           `json:"id"`
+	ItemID        *string         `json:"item_id"`
+	NewItem       *newItemDTO     `json:"new_item"`
+	Description   string          `json:"description"`
+	Quantity      qtyval.Quantity `json:"quantity"`
+	ReceivedQty   qtyval.Quantity `json:"received_qty"`
+	UnitCostMinor int64           `json:"unit_cost_minor"`
 }
 
 type receiptItemDTO struct {
-	ItemID   string `json:"item_id"`
-	Code     string `json:"code,omitempty"`
-	Quantity int    `json:"quantity"`
+	ItemID   string          `json:"item_id"`
+	Code     string          `json:"code,omitempty"`
+	Quantity qtyval.Quantity `json:"quantity"`
 }
 
 type receiptLineDTO struct {
 	LineID   int64            `json:"line_id"`
-	Quantity int              `json:"quantity"`
+	Quantity qtyval.Quantity  `json:"quantity"`
 	Items    []receiptItemDTO `json:"items"`
 }
 
@@ -187,10 +188,10 @@ func toDTO(o domain.Order, withReceipts bool) orderDTO {
 // ---- request decoding ----
 
 type lineReq struct {
-	ItemID        string      `json:"item_id"`
-	NewItem       *newItemDTO `json:"new_item"`
-	Quantity      int         `json:"quantity"`
-	UnitCostMinor int64       `json:"unit_cost_minor"`
+	ItemID        string          `json:"item_id"`
+	NewItem       *newItemDTO     `json:"new_item"`
+	Quantity      qtyval.Quantity `json:"quantity"`
+	UnitCostMinor int64           `json:"unit_cost_minor"`
 	// Read-only fields of the line DTO, accepted and ignored so an order
 	// fetched with GET can be edited and sent back.
 	ID          json.RawMessage `json:"id"`
@@ -455,8 +456,8 @@ func (h *Handler) receive(w http.ResponseWriter, r *http.Request) {
 		Note       string `json:"note"`
 		ClientKey  string `json:"client_key"`
 		Lines      []struct {
-			LineID   int64 `json:"line_id"`
-			Quantity int   `json:"quantity"`
+			LineID   int64           `json:"line_id"`
+			Quantity qtyval.Quantity `json:"quantity"`
 		} `json:"lines"`
 	}
 	if !decode(w, r, &in) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"testing"
 	"time"
 
@@ -62,7 +63,7 @@ func (c *fakeCatalog) LocationExists(_ context.Context, id int64) (bool, error) 
 type stockCall struct {
 	ItemID, UserID, Note string
 	Loc                  int64
-	Qty                  int
+	Qty                  qtyval.Quantity
 }
 
 type fakeStock struct {
@@ -70,7 +71,7 @@ type fakeStock struct {
 	fail  error
 }
 
-func (s *fakeStock) ReceiveIn(_ context.Context, itemID, userID string, loc int64, qty int, note string) error {
+func (s *fakeStock) ReceiveIn(_ context.Context, itemID, userID string, loc int64, qty qtyval.Quantity, note string) error {
 	if s.fail != nil {
 		return s.fail
 	}
@@ -116,19 +117,19 @@ var ctx = context.Background()
 func laptops(n int) domain.LineInput {
 	return domain.LineInput{
 		NewItem:  &domain.NewItem{Description: "Laptop", CategoryID: 1, Kind: domain.KindAsset},
-		Quantity: n, UnitCostMinor: 90000,
+		Quantity: qtyval.Quantity(n) * 1000, UnitCostMinor: 90000,
 	}
 }
 
 func inkNew(n int) domain.LineInput {
 	return domain.LineInput{
 		NewItem:  &domain.NewItem{Description: "Tinta", CategoryID: 1, Kind: domain.KindConsumable, Unit: "u"},
-		Quantity: n, UnitCostMinor: 1200,
+		Quantity: qtyval.Quantity(n) * 1000, UnitCostMinor: 1200,
 	}
 }
 
 func paper(n int) domain.LineInput {
-	return domain.LineInput{ItemID: "cons-1", Quantity: n, UnitCostMinor: 450}
+	return domain.LineInput{ItemID: "cons-1", Quantity: qtyval.Quantity(n) * 1000, UnitCostMinor: 450}
 }
 
 func (e env) order(t *testing.T, lines ...domain.LineInput) domain.Order {
@@ -183,10 +184,10 @@ func TestCreateValidation(t *testing.T) {
 	}{
 		{"unknown supplier", domain.Input{SupplierID: 99, Currency: domain.USD}, "", "supplier_id"},
 		{"inactive supplier", domain.Input{SupplierID: 2, Currency: domain.USD}, domain.CodeSupplierInactive, "supplier_id"},
-		{"existing asset item", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{{ItemID: "asset-1", Quantity: 1}}}, "", "lines[0].item_id"},
-		{"unknown item", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{{ItemID: "nope", Quantity: 1}}}, "", "lines[0].item_id"},
+		{"existing asset item", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{{ItemID: "asset-1", Quantity: 1 * 1000}}}, "", "lines[0].item_id"},
+		{"unknown item", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{{ItemID: "nope", Quantity: 1 * 1000}}}, "", "lines[0].item_id"},
 		{"invalid new_item surfaces early", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{
-			{NewItem: &domain.NewItem{Description: "x", Kind: "asset", CategoryID: 0}, Quantity: 1}}}, "", "lines[0].new_item.category_id"},
+			{NewItem: &domain.NewItem{Description: "x", Kind: "asset", CategoryID: 0}, Quantity: 1 * 1000}}}, "", "lines[0].new_item.category_id"},
 		{"asset over the cap", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{laptops(101)}}, "", "lines[0].quantity"},
 	}
 	for _, tc := range tests {
@@ -202,7 +203,7 @@ func TestCreateValidation(t *testing.T) {
 		})
 	}
 	if _, f := fieldsOf(t, func() error {
-		_, err := e.svc.Create(ctx, "", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{{ItemID: "asset-1", Quantity: 1}}})
+		_, err := e.svc.Create(ctx, "", domain.Input{SupplierID: 1, Currency: domain.USD, Lines: []domain.LineInput{{ItemID: "asset-1", Quantity: 1 * 1000}}})
 		return err
 	}()); f["lines[0].item_id"] != "existing_item_must_be_consumable" {
 		t.Fatalf("message: %v", f)
@@ -222,7 +223,7 @@ func TestUpdateOnlyInDraftAndReplacesLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.Currency != domain.VES || *o.ExchangeRate != 40.5 || o.Notes != "urgente" || len(o.Lines) != 2 || o.Lines[0].Quantity != 7 {
+	if o.Currency != domain.VES || *o.ExchangeRate != 40.5 || o.Notes != "urgente" || len(o.Lines) != 2 || o.Lines[0].Quantity != 7*1000 {
 		t.Fatalf("patched: %+v", o)
 	}
 	// Without lines the set is untouched; null clears the rate.
@@ -250,7 +251,7 @@ func TestUpdateRevalidatesSupplierAndLines(t *testing.T) {
 	if _, err := e.svc.Update(ctx, o.ID, app.Patch{SupplierID: &inactive}); !errors.Is(err, domain.ErrInvalidInput) {
 		t.Fatalf("inactive supplier on update: %v", err)
 	}
-	if _, err := e.svc.Update(ctx, o.ID, app.Patch{Lines: []domain.LineInput{{ItemID: "asset-1", Quantity: 1}}}); !errors.Is(err, domain.ErrInvalidInput) {
+	if _, err := e.svc.Update(ctx, o.ID, app.Patch{Lines: []domain.LineInput{{ItemID: "asset-1", Quantity: 1 * 1000}}}); !errors.Is(err, domain.ErrInvalidInput) {
 		t.Fatalf("asset item on update: %v", err)
 	}
 	got, _ := e.svc.Get(ctx, o.ID)
@@ -304,7 +305,7 @@ func TestCancel(t *testing.T) {
 		t.Fatalf("cancel twice: %v", err)
 	}
 	p := e.placed(t, paper(5))
-	if _, err := e.svc.Receive(ctx, p.ID, "u-1", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: p.Lines[0].ID, Quantity: 1}}}); err != nil {
+	if _, err := e.svc.Receive(ctx, p.ID, "u-1", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: p.Lines[0].ID, Quantity: 1 * 1000}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.svc.Cancel(ctx, p.ID); !errors.Is(err, domain.ErrInvalidState) {
@@ -320,7 +321,7 @@ func TestReceiveAssetLineCreatesOneItemPerUnitWithDistinctCodes(t *testing.T) {
 	e := newEnv()
 	o := e.placed(t, laptops(3))
 	res, err := e.svc.Receive(ctx, o.ID, "u-1", domain.ReceiveRequest{
-		LocationID: 1, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: 3}}})
+		LocationID: 1, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: 3 * 1000}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +332,7 @@ func TestReceiveAssetLineCreatesOneItemPerUnitWithDistinctCodes(t *testing.T) {
 	codes := map[string]bool{}
 	for _, it := range items {
 		codes[it.Code] = true
-		if it.Quantity != 1 {
+		if it.Quantity != 1*1000 {
 			t.Fatalf("asset item quantity %d", it.Quantity)
 		}
 	}
@@ -350,7 +351,7 @@ func TestPartialReceiptOfAssetsCreatesOnlyReceivedCount(t *testing.T) {
 	e := newEnv()
 	o := e.placed(t, laptops(3))
 	req := func(q int) domain.ReceiveRequest {
-		return domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: q}}}
+		return domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: qtyval.Quantity(q) * 1000}}}
 	}
 	r1, err := e.svc.Receive(ctx, o.ID, "u-1", req(1))
 	if err != nil || r1.Order.Status != domain.StatusPartiallyReceived || len(e.cat.created) != 1 {
@@ -368,7 +369,9 @@ func TestPartialReceiptOfAssetsCreatesOnlyReceivedCount(t *testing.T) {
 func TestNewConsumableIsCreatedOnceAndStockedEachReceipt(t *testing.T) {
 	e := newEnv()
 	o := e.placed(t, inkNew(10), paper(4))
-	line := func(i, q int) domain.ReceiveLine { return domain.ReceiveLine{LineID: o.Lines[i].ID, Quantity: q} }
+	line := func(i, q int) domain.ReceiveLine {
+		return domain.ReceiveLine{LineID: o.Lines[i].ID, Quantity: qtyval.Quantity(q) * 1000}
+	}
 
 	r1, err := e.svc.Receive(ctx, o.ID, "u-9", domain.ReceiveRequest{LocationID: 1, Note: "camión 1", Lines: []domain.ReceiveLine{line(0, 6), line(1, 4)}})
 	if err != nil || r1.Order.Status != domain.StatusPartiallyReceived {
@@ -385,9 +388,9 @@ func TestNewConsumableIsCreatedOnceAndStockedEachReceipt(t *testing.T) {
 		t.Fatalf("second partial receipt created another item: %d", len(e.cat.created))
 	}
 	want := []stockCall{
-		{"new-1", "u-9", "Purchase order #1: camión 1", 1, 6},
-		{"cons-1", "u-9", "Purchase order #1: camión 1", 1, 4},
-		{"new-1", "u-9", "Purchase order #1", 1, 4},
+		{"new-1", "u-9", "Purchase order #1: camión 1", 1, 6000},
+		{"cons-1", "u-9", "Purchase order #1: camión 1", 1, 4000},
+		{"new-1", "u-9", "Purchase order #1", 1, 4000},
 	}
 	if len(e.stock.calls) != len(want) {
 		t.Fatalf("stock calls: %+v", e.stock.calls)
@@ -403,7 +406,7 @@ func TestReceiveRejections(t *testing.T) {
 	e := newEnv()
 	d := e.order(t, paper(5))
 	rec := func(o domain.Order, loc int64, q int) (app.ReceiveResult, error) {
-		return e.svc.Receive(ctx, o.ID, "u", domain.ReceiveRequest{LocationID: loc, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: q}}})
+		return e.svc.Receive(ctx, o.ID, "u", domain.ReceiveRequest{LocationID: loc, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: qtyval.Quantity(q) * 1000}}})
 	}
 	if _, err := rec(d, 1, 1); !errors.Is(err, domain.ErrInvalidState) {
 		t.Fatalf("receive a draft: %v", err)
@@ -428,18 +431,18 @@ func TestReceiveFailureLeavesTheOrderUntouched(t *testing.T) {
 	o := e.placed(t, laptops(3))
 	e.cat.failOnNth = 2
 	_, err := e.svc.Receive(ctx, o.ID, "u", domain.ReceiveRequest{
-		LocationID: 1, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: 3}}})
+		LocationID: 1, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: 3 * 1000}}})
 	if err == nil {
 		t.Fatal("want failure")
 	}
 	got, _ := e.svc.Get(ctx, o.ID)
-	if got.Status != domain.StatusOrdered || got.Lines[0].ReceivedQty != 0 || len(got.Receipts) != 0 || got.Lines[0].ItemID != "" {
+	if got.Status != domain.StatusOrdered || got.Lines[0].ReceivedQty != 0*1000 || len(got.Receipts) != 0 || got.Lines[0].ItemID != "" {
 		t.Fatalf("order changed by a failed receipt: %+v", got)
 	}
 
 	e.stock.fail = errors.New("stock down")
 	p := e.placed(t, paper(2))
-	if _, err := e.svc.Receive(ctx, p.ID, "u", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: p.Lines[0].ID, Quantity: 2}}}); err == nil {
+	if _, err := e.svc.Receive(ctx, p.ID, "u", domain.ReceiveRequest{LocationID: 1, Lines: []domain.ReceiveLine{{LineID: p.Lines[0].ID, Quantity: 2 * 1000}}}); err == nil {
 		t.Fatal("want stock failure")
 	}
 	got, _ = e.svc.Get(ctx, p.ID)
@@ -451,7 +454,7 @@ func TestReceiveFailureLeavesTheOrderUntouched(t *testing.T) {
 func TestReceiveIsIdempotentPerClientKey(t *testing.T) {
 	e := newEnv()
 	o := e.placed(t, laptops(2), paper(5))
-	req := domain.ReceiveRequest{ClientKey: "k1", LocationID: 1, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: 2}}}
+	req := domain.ReceiveRequest{ClientKey: "k1", LocationID: 1, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: 2 * 1000}}}
 	first, err := e.svc.Receive(ctx, o.ID, "u", req)
 	if err != nil || first.Replayed {
 		t.Fatalf("first: %v %+v", err, first)
@@ -466,7 +469,7 @@ func TestReceiveIsIdempotentPerClientKey(t *testing.T) {
 	}
 	// A different key is a different delivery; an empty key never dedupes.
 	req.ClientKey = "k2"
-	req.Lines = []domain.ReceiveLine{{LineID: o.Lines[1].ID, Quantity: 1}}
+	req.Lines = []domain.ReceiveLine{{LineID: o.Lines[1].ID, Quantity: 1 * 1000}}
 	if r, err := e.svc.Receive(ctx, o.ID, "u", req); err != nil || r.Replayed {
 		t.Fatalf("new key: %v %+v", err, r)
 	}

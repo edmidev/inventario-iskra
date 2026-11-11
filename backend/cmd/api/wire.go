@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"time"
 
 	catalogapi "github.com/edgar/inventario/backend/internal/catalog/adapters/httpapi"
@@ -15,6 +16,7 @@ import (
 	dashboardapi "github.com/edgar/inventario/backend/internal/dashboard/adapters/httpapi"
 	dashboardpg "github.com/edgar/inventario/backend/internal/dashboard/adapters/postgres"
 	dashboardapp "github.com/edgar/inventario/backend/internal/dashboard/app"
+	executionpg "github.com/edgar/inventario/backend/internal/executions/adapters/postgres"
 	"github.com/edgar/inventario/backend/internal/identity/adapters"
 	"github.com/edgar/inventario/backend/internal/identity/adapters/httpapi"
 	"github.com/edgar/inventario/backend/internal/identity/adapters/postgres"
@@ -169,6 +171,7 @@ func newPurchasingService(pool *pgxpool.Pool) *purchasingapp.Service {
 		purchasingStock{svc: stockapp.NewService(stockpg.New(pool))},
 		purchasingSuppliers{svc: suppliersapp.NewService(supplierspg.New(pool))},
 		nil,
+		executionpg.New(pool),
 	)
 }
 
@@ -256,7 +259,7 @@ func (c purchasingCatalog) LocationExists(ctx context.Context, id int64) (bool, 
 // purchasingStock adapts the stock service to purchasing's StockReceiver.
 type purchasingStock struct{ svc *stockapp.Service }
 
-func (s purchasingStock) ReceiveIn(ctx context.Context, itemID, userID string, locationID int64, qty int, note string) error {
+func (s purchasingStock) ReceiveIn(ctx context.Context, itemID, userID string, locationID int64, qty qtyval.Quantity, note string) error {
 	_, err := s.svc.Record(ctx, itemID, userID, stockdomain.Request{
 		Type: stockdomain.TypeIn, Qty: qty, LocationID: &locationID, Note: note,
 	})

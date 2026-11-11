@@ -9,3 +9,8 @@ export const navItems: { to: string; label: string; icon: IconName; mobile?: boo
   { to: "/ordenes-compra", label: "Órdenes de compra", icon: "cart" },
   { to: "/mas", label: "Más", icon: "menu" },
 ];
+
+/** Only account/navigation remains visible when inventory read access is absent. */
+export function visibleNavItems(canRead: boolean) {
+  return navItems.filter((item) => canRead || item.to === "/mas");
+}

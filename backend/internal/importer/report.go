@@ -3,6 +3,7 @@ package importer
 import (
 	"encoding/json"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"io"
 	"path/filepath"
 	"sort"
@@ -374,7 +375,7 @@ func (p *Plan) splitStats() splitStats {
 
 // stockAt returns the planned quantity of a consumable at a location and
 // whether it has a stock row there.
-func (it PlannedItem) stockAt(loc string) (int, bool) {
+func (it PlannedItem) stockAt(loc string) (qtyval.Quantity, bool) {
 	for _, r := range it.Stocks {
 		if Fold(r.Location) == Fold(loc) {
 			return r.Quantity, true
@@ -413,7 +414,10 @@ func renderStockSplit(b *strings.Builder, plan *Plan) {
 		}
 	}
 	b.WriteString("\n### Stock per location (after the import)\n\n")
-	type tot struct{ assets, items, units int }
+	type tot struct {
+		assets, items int
+		units         qtyval.Quantity
+	}
 	totals := map[string]*tot{}
 	var order []string
 	get := func(loc string) *tot {

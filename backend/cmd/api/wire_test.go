@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"os"
 	"testing"
 
@@ -46,7 +47,7 @@ func setupReal(t *testing.T) (realEnv, context.Context) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE suppliers, items, code_sequences, locations, categories, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE manufacturing_execution_workers, manufacturing_execution_customers, manufacturing_executions, project_templates, customers, suppliers, items, code_sequences, locations, categories, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	e := realEnv{pool: pool, catalog: newCatalogService(pool)}
@@ -105,9 +106,9 @@ func TestReceivingThroughRealCatalogAndStock(t *testing.T) {
 	o, err := svc.Create(ctx, e.userID, purchasingdomain.Input{
 		SupplierID: e.supplier, Currency: purchasingdomain.VES,
 		Lines: []purchasingdomain.LineInput{
-			{NewItem: &purchasingdomain.NewItem{Description: "Laptop", CategoryID: e.lapCat, Kind: "asset", Attributes: map[string]any{"ram": "16GB"}}, Quantity: 3, UnitCostMinor: 90000},
-			{ItemID: existing.ID, Quantity: 10, UnitCostMinor: 450},
-			{NewItem: &purchasingdomain.NewItem{Description: "Tinta", CategoryID: e.conCat, Kind: "consumable", Unit: "u", StockMin: 2}, Quantity: 8, UnitCostMinor: 1200},
+			{NewItem: &purchasingdomain.NewItem{Description: "Laptop", CategoryID: e.lapCat, Kind: "asset", Attributes: map[string]any{"ram": "16GB"}}, Quantity: 3 * 1000, UnitCostMinor: 90000},
+			{ItemID: existing.ID, Quantity: 10 * 1000, UnitCostMinor: 450},
+			{NewItem: &purchasingdomain.NewItem{Description: "Tinta", CategoryID: e.conCat, Kind: "consumable", Unit: "u", StockMin: 2 * 1000}, Quantity: 8 * 1000, UnitCostMinor: 1200},
 		},
 	})
 	if err != nil {
@@ -117,7 +118,7 @@ func TestReceivingThroughRealCatalogAndStock(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := func(i, q int) purchasingdomain.ReceiveLine {
-		return purchasingdomain.ReceiveLine{LineID: o.Lines[i].ID, Quantity: q}
+		return purchasingdomain.ReceiveLine{LineID: o.Lines[i].ID, Quantity: qtyval.Quantity(q) * 1000}
 	}
 
 	// First delivery: two laptops, part of the paper and the ink.
@@ -159,14 +160,14 @@ func TestReceivingThroughRealCatalogAndStock(t *testing.T) {
 
 	// Consumables show in stock at the receipt location, through `in` movements.
 	paper, err := e.catalog.GetItem(ctx, existing.ID)
-	if err != nil || paper.StockCurrent != 10 || len(paper.Stocks) != 1 || paper.Stocks[0].LocationID != e.loc {
+	if err != nil || paper.StockCurrent != 10*1000 || len(paper.Stocks) != 1 || paper.Stocks[0].LocationID != e.loc {
 		t.Fatalf("paper: %+v %v", paper, err)
 	}
 	if n := len(e.codes(t, "Tinta")); n != 1 {
 		t.Fatalf("Tinta items: %d", n)
 	}
 	ink, err := e.catalog.GetItem(ctx, r2.Order.Lines[2].ItemID)
-	if err != nil || ink.StockCurrent != 8 || ink.StockMin != 2 || ink.Code != "ISK-CON-002" {
+	if err != nil || ink.StockCurrent != 8*1000 || ink.StockMin != 2*1000 || ink.Code != "ISK-CON-002" {
 		t.Fatalf("ink: %+v %v", ink, err)
 	}
 	var movements int
@@ -194,8 +195,8 @@ func TestRealRollbackLeavesNoItemsAndNoStock(t *testing.T) {
 	o, err := svc.Create(ctx, e.userID, purchasingdomain.Input{
 		SupplierID: e.supplier, Currency: purchasingdomain.USD,
 		Lines: []purchasingdomain.LineInput{
-			{NewItem: &purchasingdomain.NewItem{Description: "Laptop", CategoryID: e.lapCat, Kind: "asset"}, Quantity: 2, UnitCostMinor: 1},
-			{NewItem: &purchasingdomain.NewItem{Description: "Cable", CategoryID: doomed.ID, Kind: "consumable", Unit: "u"}, Quantity: 5, UnitCostMinor: 1},
+			{NewItem: &purchasingdomain.NewItem{Description: "Laptop", CategoryID: e.lapCat, Kind: "asset"}, Quantity: 2 * 1000, UnitCostMinor: 1},
+			{NewItem: &purchasingdomain.NewItem{Description: "Cable", CategoryID: doomed.ID, Kind: "consumable", Unit: "u"}, Quantity: 5 * 1000, UnitCostMinor: 1},
 		},
 	})
 	if err != nil {
@@ -211,7 +212,7 @@ func TestRealRollbackLeavesNoItemsAndNoStock(t *testing.T) {
 	}
 	_, err = svc.Receive(ctx, o.ID, e.userID, purchasingdomain.ReceiveRequest{
 		LocationID: e.loc, Lines: []purchasingdomain.ReceiveLine{
-			{LineID: o.Lines[0].ID, Quantity: 2}, {LineID: o.Lines[1].ID, Quantity: 5}}})
+			{LineID: o.Lines[0].ID, Quantity: 2 * 1000}, {LineID: o.Lines[1].ID, Quantity: 5 * 1000}}})
 	if !errors.Is(err, purchasingdomain.ErrInvalidInput) {
 		t.Fatalf("want a validation error, got %v", err)
 	}
@@ -223,7 +224,7 @@ func TestRealRollbackLeavesNoItemsAndNoStock(t *testing.T) {
 		t.Fatalf("items=%d movements=%d receipts=%d after rollback", items, moves, receipts)
 	}
 	got, _ := svc.Get(ctx, o.ID)
-	if got.Status != purchasingdomain.StatusOrdered || got.Lines[0].ReceivedQty != 0 {
+	if got.Status != purchasingdomain.StatusOrdered || got.Lines[0].ReceivedQty != 0*1000 {
 		t.Fatalf("order changed: %+v", got)
 	}
 }

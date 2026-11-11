@@ -4,6 +4,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -284,36 +285,36 @@ func (h *Handler) deleteLocation(w http.ResponseWriter, r *http.Request) {
 // ---- items ----
 
 type itemDTO struct {
-	ID                      string         `json:"id"`
-	Code                    string         `json:"code"`
-	Description             string         `json:"description"`
-	CategoryID              int64          `json:"category_id"`
-	Kind                    string         `json:"kind"`
-	Status                  string         `json:"status"`
-	Availability            string         `json:"availability"`
-	Unit                    *string        `json:"unit"`
-	StockCurrent            int            `json:"stock_current"`
-	StockMin                int            `json:"stock_min"`
-	Stocks                  []stockDTO     `json:"stocks"`
-	LowStock                bool           `json:"low_stock"`
-	OnLoan                  bool           `json:"on_loan"`
-	Custody                 *custodyDTO    `json:"custody,omitempty"`
-	LocationID              *int64         `json:"location_id"`
-	LastMaintenanceAt       *time.Time     `json:"last_maintenance_at"`
-	MaintenanceIntervalDays *int           `json:"maintenance_interval_days"`
-	MaintenanceDueAt        *time.Time     `json:"maintenance_due_at"`
-	MaintenanceOverdue      bool           `json:"maintenance_overdue"`
-	Attributes              map[string]any `json:"attributes"`
-	Notes                   string         `json:"notes"`
-	CreatedAt               time.Time      `json:"created_at"`
-	UpdatedAt               time.Time      `json:"updated_at"`
+	ID                      string          `json:"id"`
+	Code                    string          `json:"code"`
+	Description             string          `json:"description"`
+	CategoryID              int64           `json:"category_id"`
+	Kind                    string          `json:"kind"`
+	Status                  string          `json:"status"`
+	Availability            string          `json:"availability"`
+	Unit                    *string         `json:"unit"`
+	StockCurrent            qtyval.Quantity `json:"stock_current"`
+	StockMin                qtyval.Quantity `json:"stock_min"`
+	Stocks                  []stockDTO      `json:"stocks"`
+	LowStock                bool            `json:"low_stock"`
+	OnLoan                  bool            `json:"on_loan"`
+	Custody                 *custodyDTO     `json:"custody,omitempty"`
+	LocationID              *int64          `json:"location_id"`
+	LastMaintenanceAt       *time.Time      `json:"last_maintenance_at"`
+	MaintenanceIntervalDays *int            `json:"maintenance_interval_days"`
+	MaintenanceDueAt        *time.Time      `json:"maintenance_due_at"`
+	MaintenanceOverdue      bool            `json:"maintenance_overdue"`
+	Attributes              map[string]any  `json:"attributes"`
+	Notes                   string          `json:"notes"`
+	CreatedAt               time.Time       `json:"created_at"`
+	UpdatedAt               time.Time       `json:"updated_at"`
 }
 
 // stockDTO is a consumable's quantity at one location.
 type stockDTO struct {
-	LocationID   int64  `json:"location_id"`
-	LocationName string `json:"location_name"`
-	Quantity     int    `json:"quantity"`
+	LocationID   int64           `json:"location_id"`
+	LocationName string          `json:"location_name"`
+	Quantity     qtyval.Quantity `json:"quantity"`
 }
 
 // custodyDTO is the active loan embedded in an item response.
@@ -477,18 +478,18 @@ func (h *Handler) getItemByCode(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createItem(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Code         string  `json:"code"`
-		Description  string  `json:"description"`
-		CategoryID   int64   `json:"category_id"`
-		Kind         string  `json:"kind"`
-		Status       string  `json:"status"`
-		Unit         *string `json:"unit"`
-		StockCurrent *int    `json:"stock_current"`
-		StockMin     int     `json:"stock_min"`
-		LocationID   *int64  `json:"location_id"`
+		Code         string           `json:"code"`
+		Description  string           `json:"description"`
+		CategoryID   int64            `json:"category_id"`
+		Kind         string           `json:"kind"`
+		Status       string           `json:"status"`
+		Unit         *string          `json:"unit"`
+		StockCurrent *qtyval.Quantity `json:"stock_current"`
+		StockMin     qtyval.Quantity  `json:"stock_min"`
+		LocationID   *int64           `json:"location_id"`
 		Stocks       []struct {
-			LocationID int64 `json:"location_id"`
-			Quantity   int   `json:"quantity"`
+			LocationID int64           `json:"location_id"`
+			Quantity   qtyval.Quantity `json:"quantity"`
 		} `json:"stocks"`
 		LastMaintenanceAt       *time.Time     `json:"last_maintenance_at"`
 		MaintenanceIntervalDays *int           `json:"maintenance_interval_days"`
@@ -538,15 +539,15 @@ func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 		CategoryID              *int64                 `json:"category_id"`
 		Status                  *string                `json:"status"`
 		Unit                    *string                `json:"unit"`
-		StockMin                *int                   `json:"stock_min"`
+		StockMin                *qtyval.Quantity       `json:"stock_min"`
 		LocationID              domain.Nullable[int64] `json:"location_id"`
 		MaintenanceIntervalDays domain.Nullable[int]   `json:"maintenance_interval_days"`
 		Attributes              map[string]any         `json:"attributes"`
 		Notes                   *string                `json:"notes"`
 		// Accepted only to reject changes with a precise message.
-		Code         *string `json:"code"`
-		Kind         *string `json:"kind"`
-		StockCurrent *int    `json:"stock_current"`
+		Code         *string          `json:"code"`
+		Kind         *string          `json:"kind"`
+		StockCurrent *qtyval.Quantity `json:"stock_current"`
 	}
 	if !decode(w, r, &in) {
 		return

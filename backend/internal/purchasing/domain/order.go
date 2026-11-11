@@ -5,6 +5,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"sort"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ const (
 	// MaxAssetUnitsPerLine caps how many assets one line may create on receipt.
 	MaxAssetUnitsPerLine = 100
 	MaxLines             = 200
-	MaxQuantity          = 100_000
+	MaxQuantity          = 100_000_000
 	// MaxUnitCostMinor is 1e9 currency units in minor units; with MaxQuantity
 	// and MaxLines it keeps an order total far from int64 overflow.
 	MaxUnitCostMinor  = 100_000_000_000
@@ -133,13 +134,13 @@ func (e *InvalidStateError) Is(target error) bool { return target == ErrInvalidS
 // received. The catalog validates it in full (through a port); the domain only
 // needs its kind to apply the asset rules.
 type NewItem struct {
-	Description string         `json:"description"`
-	CategoryID  int64          `json:"category_id"`
-	Kind        string         `json:"kind"`
-	Unit        string         `json:"unit,omitempty"`
-	StockMin    int            `json:"stock_min,omitempty"`
-	Attributes  map[string]any `json:"attributes,omitempty"`
-	Notes       string         `json:"notes,omitempty"`
+	Description string          `json:"description"`
+	CategoryID  int64           `json:"category_id"`
+	Kind        string          `json:"kind"`
+	Unit        string          `json:"unit,omitempty"`
+	StockMin    qtyval.Quantity `json:"stock_min,omitempty"`
+	Attributes  map[string]any  `json:"attributes,omitempty"`
+	Notes       string          `json:"notes,omitempty"`
 }
 
 // Line is one ordered position.
@@ -151,13 +152,13 @@ type Line struct {
 	ItemID        string
 	NewItem       *NewItem
 	Description   string // snapshot taken when the line was saved
-	Quantity      int
-	ReceivedQty   int
+	Quantity      qtyval.Quantity
+	ReceivedQty   qtyval.Quantity
 	UnitCostMinor int64
 }
 
 // Remaining is the quantity still to receive.
-func (l Line) Remaining() int { return l.Quantity - l.ReceivedQty }
+func (l Line) Remaining() qtyval.Quantity { return l.Quantity - l.ReceivedQty }
 
 // IsAsset reports whether receiving the line creates one asset per unit.
 func (l Line) IsAsset() bool { return l.NewItem != nil && l.NewItem.Kind == KindAsset }
@@ -166,13 +167,13 @@ func (l Line) IsAsset() bool { return l.NewItem != nil && l.NewItem.Kind == Kind
 type ReceiptItem struct {
 	ItemID   string
 	Code     string // read-side convenience; not stored by purchasing
-	Quantity int
+	Quantity qtyval.Quantity
 }
 
 // ReceiptLine is the part of one order line a receipt covers.
 type ReceiptLine struct {
 	LineID   int64
-	Quantity int
+	Quantity qtyval.Quantity
 	Items    []ReceiptItem
 }
 
@@ -214,7 +215,8 @@ type Order struct {
 func (o Order) Total() int64 {
 	var t int64
 	for _, l := range o.Lines {
-		t += int64(l.Quantity) * l.UnitCostMinor
+		subtotal, _ := l.Quantity.Cost(l.UnitCostMinor) // validated line limits guarantee no overflow
+		t += subtotal
 	}
 	return t
 }
@@ -247,7 +249,7 @@ type LineInput struct {
 	ItemID        string
 	NewItem       *NewItem
 	Description   string // snapshot; the app fills it before building the order
-	Quantity      int
+	Quantity      qtyval.Quantity
 	UnitCostMinor int64
 }
 
@@ -310,8 +312,8 @@ func normalizeLine(i int, l LineInput) (LineInput, map[string]string) {
 	case l.ItemID == "" && l.NewItem == nil:
 		fe[p+"item_id"] = "provide item_id or new_item"
 	}
-	if l.Quantity < 1 || l.Quantity > MaxQuantity {
-		fe[p+"quantity"] = "must be between 1 and 100000"
+	if l.Quantity <= 0 || l.Quantity > MaxQuantity {
+		fe[p+"quantity"] = "must be greater than 0 and at most 100000, up to three decimals"
 	}
 	if l.UnitCostMinor < 0 || l.UnitCostMinor > MaxUnitCostMinor {
 		fe[p+"unit_cost_minor"] = "must be between 0 and 100000000000 (minor units)"
@@ -326,7 +328,7 @@ func normalizeLine(i int, l LineInput) (LineInput, map[string]string) {
 		}
 		switch c.Kind {
 		case KindAsset:
-			if l.Quantity > MaxAssetUnitsPerLine {
+			if !l.Quantity.Whole() || l.Quantity > MaxAssetUnitsPerLine*1000 {
 				fe[p+"quantity"] = fmt.Sprintf("asset lines create one item per unit: up to %d", MaxAssetUnitsPerLine)
 			}
 		case KindConsumable:

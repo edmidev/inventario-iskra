@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -78,7 +79,7 @@ type sqlStock struct {
 	fail atomic.Bool
 }
 
-func (s *sqlStock) ReceiveIn(ctx context.Context, itemID, userID string, loc int64, qty int, note string) error {
+func (s *sqlStock) ReceiveIn(ctx context.Context, itemID, userID string, loc int64, qty qtyval.Quantity, note string) error {
 	if s.fail.Load() {
 		return errors.New("injected stock failure")
 	}
@@ -87,7 +88,7 @@ func (s *sqlStock) ReceiveIn(ctx context.Context, itemID, userID string, loc int
 		return err
 	}
 	defer rollback()
-	var before int
+	var before qtyval.Quantity
 	if err := tx.QueryRow(ctx, `SELECT stock_current FROM items WHERE id = $1::uuid FOR UPDATE`, itemID).Scan(&before); err != nil {
 		return err
 	}
@@ -185,15 +186,15 @@ func setup(t *testing.T) fixture {
 }
 
 func laptops(n int) domain.LineInput {
-	return domain.LineInput{NewItem: &domain.NewItem{Description: "Laptop", CategoryID: 1, Kind: domain.KindAsset}, Quantity: n, UnitCostMinor: 90000}
+	return domain.LineInput{NewItem: &domain.NewItem{Description: "Laptop", CategoryID: 1, Kind: domain.KindAsset}, Quantity: qtyval.Quantity(n) * 1000, UnitCostMinor: 90000}
 }
 
 func ink(n int) domain.LineInput {
-	return domain.LineInput{NewItem: &domain.NewItem{Description: "Tinta", CategoryID: 1, Kind: domain.KindConsumable, Unit: "u"}, Quantity: n, UnitCostMinor: 1200}
+	return domain.LineInput{NewItem: &domain.NewItem{Description: "Tinta", CategoryID: 1, Kind: domain.KindConsumable, Unit: "u"}, Quantity: qtyval.Quantity(n) * 1000, UnitCostMinor: 1200}
 }
 
 func (f fixture) paper(n int) domain.LineInput {
-	return domain.LineInput{ItemID: f.consID, Quantity: n, UnitCostMinor: 450}
+	return domain.LineInput{ItemID: f.consID, Quantity: qtyval.Quantity(n) * 1000, UnitCostMinor: 450}
 }
 
 func (f fixture) placed(t *testing.T, lines ...domain.LineInput) domain.Order {
@@ -213,7 +214,7 @@ func (f fixture) receive(o domain.Order, key string, parts ...int) (app.ReceiveR
 	req := domain.ReceiveRequest{LocationID: f.loc, ClientKey: key}
 	for i, q := range parts {
 		if q > 0 {
-			req.Lines = append(req.Lines, domain.ReceiveLine{LineID: o.Lines[i].ID, Quantity: q})
+			req.Lines = append(req.Lines, domain.ReceiveLine{LineID: o.Lines[i].ID, Quantity: qtyval.Quantity(q) * 1000})
 		}
 	}
 	return f.svc.Receive(context.Background(), o.ID, f.userID, req)
@@ -534,14 +535,14 @@ func TestItemReferencesAreChecked(t *testing.T) {
 	f := setup(t)
 	ctx := context.Background()
 	_, err := f.svc.Create(ctx, "", domain.Input{SupplierID: f.supplier, Currency: domain.USD, Lines: []domain.LineInput{
-		{ItemID: f.assetID, Quantity: 1}, {ItemID: "not-a-uuid", Quantity: 1}}})
+		{ItemID: f.assetID, Quantity: 1 * 1000}, {ItemID: "not-a-uuid", Quantity: 1 * 1000}}})
 	var ve *domain.ValidationError
 	if !errors.As(err, &ve) || ve.Fields["lines[0].item_id"] != "existing_item_must_be_consumable" || ve.Fields["lines[1].item_id"] == "" {
 		t.Fatalf("item checks: %v", err)
 	}
 	// An unknown location is rejected before anything is created.
 	o := f.placed(t, laptops(1))
-	_, err = f.svc.Receive(ctx, o.ID, f.userID, domain.ReceiveRequest{LocationID: 9999, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: 1}}})
+	_, err = f.svc.Receive(ctx, o.ID, f.userID, domain.ReceiveRequest{LocationID: 9999, Lines: []domain.ReceiveLine{{LineID: o.Lines[0].ID, Quantity: 1 * 1000}}})
 	if !errors.As(err, &ve) || ve.Fields["location_id"] == "" {
 		t.Fatalf("unknown location: %v", err)
 	}

@@ -3,6 +3,7 @@ package memory
 
 import (
 	"context"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"sort"
 	"strings"
 	"sync"
@@ -25,13 +26,13 @@ type Item struct {
 	Description  string
 	Kind         domain.Kind
 	Unit         string
-	StockCurrent int
-	StockMin     int
+	StockCurrent qtyval.Quantity
+	StockMin     qtyval.Quantity
 	// LocationID is an asset's location. For a consumable seeded with stock
 	// and no Stocks it is shorthand for one stock row at that location.
 	LocationID *int64
 	// Stocks is a consumable's per-location quantity by location id.
-	Stocks  map[int64]int
+	Stocks  map[int64]qtyval.Quantity
 	Deleted bool
 	OnLoan  bool // active custody assignment
 }
@@ -58,7 +59,7 @@ func (s *Store) SeedItem(it Item) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := it
-	cp.Stocks = map[int64]int{}
+	cp.Stocks = map[int64]qtyval.Quantity{}
 	for k, v := range it.Stocks {
 		cp.Stocks[k] = v
 	}
@@ -67,7 +68,7 @@ func (s *Store) SeedItem(it Item) {
 			cp.Stocks[*cp.LocationID] = cp.StockCurrent
 		}
 		cp.LocationID = nil
-		total := 0
+		var total qtyval.Quantity
 		for _, q := range cp.Stocks {
 			total += q
 		}
@@ -97,7 +98,7 @@ func (s *Store) Item(id string) Item {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := *s.items[id]
-	cp.Stocks = map[int64]int{}
+	cp.Stocks = map[int64]qtyval.Quantity{}
 	for k, v := range s.items[id].Stocks {
 		cp.Stocks[k] = v
 	}

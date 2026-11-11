@@ -5,6 +5,7 @@
 package importer
 
 import (
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"regexp"
 	"strconv"
 	"strings"
@@ -95,23 +96,23 @@ func SplitCode(cell string) (code, rest string, ok bool) {
 	return strings.ToUpper(m[1]), Clean(m[2]), true
 }
 
-// parseQuantity reads a whole non-negative number from a raw cell.
-func parseQuantity(raw string) (n int, present bool, err error) {
+// parseQuantity reads an exact non-negative quantity with at most three decimals.
+func parseQuantity(raw string) (n qtyval.Quantity, present bool, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 0, false, nil
 	}
-	f, perr := strconv.ParseFloat(strings.ReplaceAll(raw, ",", "."), 64)
-	if perr != nil || f != float64(int64(f)) || f < 0 || f > 1_000_000_000 {
+	f, perr := qtyval.Parse(strings.ReplaceAll(raw, ",", "."))
+	if perr != nil || f < 0 || f > 1_000_000_000_000 {
 		return 0, true, errBadQuantity(raw)
 	}
-	return int(f), true, nil
+	return f, true, nil
 }
 
 type errBadQuantity string
 
 func (e errBadQuantity) Error() string {
-	return "quantity " + strconv.Quote(string(e)) + " is not a whole number between 0 and 1000000000"
+	return "quantity " + strconv.Quote(string(e)) + " must be between 0 and 1000000000 with at most three decimals"
 }
 
 // excelEpoch is the day zero of the 1900 date system (after Excel's phantom

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"math/rand"
 	"sync"
 	"testing"
@@ -83,26 +84,26 @@ func TestMultiLocationOpeningBalanceWritesOneMovementPerRow(t *testing.T) {
 	f := setup(t)
 	ctx := httpx.WithPrincipal(t.Context(), httpx.Principal{UserID: f.userID})
 	it, err := f.catalog.CreateItem(ctx, catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{
-		Description: "Tornillos", CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"), StockMin: 3,
-		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 5}, {LocationID: f.locB, Quantity: 5}}}})
+		Description: "Tornillos", CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"), StockMin: 3 * 1000,
+		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 5 * 1000}, {LocationID: f.locB, Quantity: 5 * 1000}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if it.StockCurrent != 10 || it.LocationID != nil || len(it.Stocks) != 2 || it.Stocks[0].LocationName != "Bodega" {
+	if it.StockCurrent != 10*1000 || it.LocationID != nil || len(it.Stocks) != 2 || it.Stocks[0].LocationName != "Bodega" {
 		t.Fatalf("created item: %+v", it)
 	}
 	if got := f.stocksOf(t, it.ID); got[f.locA] != 5 || got[f.locB] != 5 || len(got) != 2 {
 		t.Errorf("rows: %v", got)
 	}
 	ms, total, _, err := f.stock.History(t.Context(), it.ID, "", 25, 0)
-	if err != nil || total != 2 || ms[0].Type != domain.TypeOpening || ms[0].StockBefore != 5 || ms[0].StockAfter != 10 || ms[1].StockBefore != 0 {
+	if err != nil || total != 2 || ms[0].Type != domain.TypeOpening || ms[0].StockBefore != 5*1000 || ms[0].StockAfter != 10*1000 || ms[1].StockBefore != 0*1000 {
 		t.Fatalf("history: %+v total=%d err=%v", ms, total, err)
 	}
 	assertInvariants(t, f)
 
 	// The legacy form with no location lands in "Sin ubicación".
 	legacy := f.consumable(t, "Cinta", 4, 0, nil)
-	if len(legacy.Stocks) != 1 || legacy.Stocks[0].LocationName != "Sin ubicación" || legacy.StockCurrent != 4 {
+	if len(legacy.Stocks) != 1 || legacy.Stocks[0].LocationName != "Sin ubicación" || legacy.StockCurrent != 4*1000 {
 		t.Errorf("legacy create: %+v", legacy)
 	}
 	assertInvariants(t, f)
@@ -112,7 +113,7 @@ func TestMultiLocationOpeningBalanceWritesOneMovementPerRow(t *testing.T) {
 	_ = f.pool.QueryRow(t.Context(), `SELECT count(*) FROM items`).Scan(&n)
 	_, err = f.catalog.CreateItem(ctx, catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{
 		Description: "Roto", CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"),
-		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 1}, {LocationID: 9999, Quantity: 1}}}})
+		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 1 * 1000}, {LocationID: 9999, Quantity: 1 * 1000}}}})
 	if !errors.Is(err, catalogdomain.ErrInvalidInput) {
 		t.Fatalf("dangling location: %v", err)
 	}
@@ -128,42 +129,42 @@ func TestRecordPerLocationEndToEnd(t *testing.T) {
 	ctx := t.Context()
 	locC := f.location(t, "Maleta")
 	it, err := f.catalog.CreateItem(httpx.WithPrincipal(ctx, httpx.Principal{UserID: f.userID}), catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{
-		Description: "Tornillos", CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"), StockMin: 4,
-		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 5}, {LocationID: f.locB, Quantity: 5}}}})
+		Description: "Tornillos", CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"), StockMin: 4 * 1000,
+		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 5 * 1000}, {LocationID: f.locB, Quantity: 5 * 1000}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Ambiguous without a location.
-	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 1}); !errors.Is(err, domain.ErrLocationRequired) {
+	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 1 * 1000}); !errors.Is(err, domain.ErrLocationRequired) {
 		t.Fatalf("ambiguous: %v", err)
 	}
 	// Out never goes below zero at a location, even though the total covers it.
-	_, err = f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 6, LocationID: &f.locA})
+	_, err = f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 6 * 1000, LocationID: &f.locA})
 	var ie *domain.InsufficientStockError
-	if !errors.As(err, &ie) || ie.Available != 5 || ie.LocationName != "Bodega" {
+	if !errors.As(err, &ie) || ie.Available != 5*1000 || ie.LocationName != "Bodega" {
 		t.Fatalf("over-out: %v", err)
 	}
 	// Drain a location: its row disappears.
-	r, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 5, LocationID: &f.locA})
-	if err != nil || r.StockCurrent != 5 || len(r.Stocks) != 1 || r.Stocks[0].LocationID != f.locB {
+	r, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 5 * 1000, LocationID: &f.locA})
+	if err != nil || r.StockCurrent != 5*1000 || len(r.Stocks) != 1 || r.Stocks[0].LocationID != f.locB {
 		t.Fatalf("drain: %+v %v", r, err)
 	}
 	// Now there is exactly one row: legacy requests infer it.
-	if r, err = f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeIn, Qty: 2}); err != nil || *r.Movement.LocationID != f.locB {
+	if r, err = f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeIn, Qty: 2 * 1000}); err != nil || *r.Movement.LocationID != f.locB {
 		t.Fatalf("inferred in: %+v %v", r, err)
 	}
 	// Partial transfer to a third location, then adjust it.
-	if r, err = f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: 3, ToLocationID: &locC}); err != nil || r.StockCurrent != 7 {
+	if r, err = f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: 3 * 1000, ToLocationID: &locC}); err != nil || r.StockCurrent != 7*1000 {
 		t.Fatalf("transfer: %+v %v", r, err)
 	}
-	if r, err = f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeAdjust, Qty: 1, LocationID: &locC, Note: "recount"}); err != nil || r.StockCurrent != 5 {
+	if r, err = f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeAdjust, Qty: 1 * 1000, LocationID: &locC, Note: "recount"}); err != nil || r.StockCurrent != 5*1000 {
 		t.Fatalf("adjust: %+v %v", r, err)
 	}
 	if got := f.stocksOf(t, it.ID); len(got) != 2 || got[f.locB] != 4 || got[locC] != 1 {
 		t.Errorf("rows: %v", got)
 	}
 	// Unknown location is a field error, not a 500.
-	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeIn, Qty: 1, LocationID: ptr(int64(9999))}); !errors.Is(err, domain.ErrInvalidInput) {
+	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeIn, Qty: 1 * 1000, LocationID: ptr(int64(9999))}); !errors.Is(err, domain.ErrInvalidInput) {
 		t.Errorf("unknown location: %v", err)
 	}
 	// Totals, alerts and the ledger all agree.
@@ -171,11 +172,11 @@ func TestRecordPerLocationEndToEnd(t *testing.T) {
 	if err != nil || len(as) != 0 {
 		t.Errorf("alerts at stock 5 > min 4: %+v %v", as, err)
 	}
-	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 1, LocationID: &locC}); err != nil {
+	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 1 * 1000, LocationID: &locC}); err != nil {
 		t.Fatal(err)
 	}
 	as, _, _, _ = f.stock.Alerts(ctx, 25, 0)
-	if len(as) != 1 || as[0].StockCurrent != 4 || len(as[0].Stocks) != 1 || as[0].Stocks[0].LocationName != "Taller" {
+	if len(as) != 1 || as[0].StockCurrent != 4*1000 || len(as[0].Stocks) != 1 || as[0].Stocks[0].LocationName != "Taller" {
 		t.Errorf("alert breakdown: %+v", as)
 	}
 	assertInvariants(t, f)
@@ -229,7 +230,7 @@ func TestLocationDeleteGuard(t *testing.T) {
 		t.Errorf("location holding stock: %v", err)
 	}
 	// Even after the stock leaves, the history keeps the location alive.
-	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: 5, FromLocationID: &withStock, ToLocationID: &f.locA}); err != nil {
+	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: 5 * 1000, FromLocationID: &withStock, ToLocationID: &f.locA}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.catalog.DeleteLocation(ctx, withStock); !errors.Is(err, catalogdomain.ErrLocationInUse) {
@@ -275,7 +276,7 @@ func TestConcurrentOutAtOneLocationNeverOversellsAnother(t *testing.T) {
 	ctx := t.Context()
 	it, err := f.catalog.CreateItem(httpx.WithPrincipal(ctx, httpx.Principal{UserID: f.userID}), catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{
 		Description: "Tornillos", CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"),
-		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 20}, {LocationID: f.locB, Quantity: 30}}}})
+		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 20 * 1000}, {LocationID: f.locB, Quantity: 30 * 1000}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +288,7 @@ func TestConcurrentOutAtOneLocationNeverOversellsAnother(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 1, LocationID: &f.locA})
+			_, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 1 * 1000, LocationID: &f.locA})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -316,7 +317,7 @@ func TestOppositeParallelTransfersConserveTheTotalAndDoNotDeadlock(t *testing.T)
 	defer cancel()
 	it, err := f.catalog.CreateItem(httpx.WithPrincipal(ctx, httpx.Principal{UserID: f.userID}), catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{
 		Description: "Tornillos", CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"),
-		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 10}, {LocationID: f.locB, Quantity: 10}}}})
+		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 10 * 1000}, {LocationID: f.locB, Quantity: 10 * 1000}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +330,7 @@ func TestOppositeParallelTransfersConserveTheTotalAndDoNotDeadlock(t *testing.T)
 			if i%2 == 1 {
 				from, to = to, from
 			}
-			if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: 1 + i%3, FromLocationID: &from, ToLocationID: &to}); err != nil &&
+			if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: qtyval.Quantity(1+i%3) * 1000, FromLocationID: &from, ToLocationID: &to}); err != nil &&
 				!errors.Is(err, domain.ErrInsufficientStock) {
 				t.Errorf("transfer %d: %v", i, err)
 			}
@@ -357,7 +358,7 @@ func TestRandomMixKeepsEveryInvariant(t *testing.T) {
 	for i := range 3 {
 		it, err := f.catalog.CreateItem(httpx.WithPrincipal(ctx, httpx.Principal{UserID: f.userID}), catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{
 			Description: fmt.Sprintf("Item %d", i), CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"),
-			Stocks: []catalogdomain.StockInput{{LocationID: locs[i], Quantity: 12}, {LocationID: locs[(i+1)%3], Quantity: 7}}}})
+			Stocks: []catalogdomain.StockInput{{LocationID: locs[i], Quantity: 12 * 1000}, {LocationID: locs[(i+1)%3], Quantity: 7 * 1000}}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -380,14 +381,14 @@ func TestRandomMixKeepsEveryInvariant(t *testing.T) {
 					l := locs[rng.Intn(len(locs))]
 					return &l
 				}
-				req := domain.Request{Qty: 1 + rng.Intn(6), LocationID: pick()}
+				req := domain.Request{Qty: qtyval.Quantity(1+rng.Intn(6)) * 1000, LocationID: pick()}
 				switch rng.Intn(4) {
 				case 0:
 					req.Type = domain.TypeIn
 				case 1:
 					req.Type = domain.TypeOut
 				case 2:
-					req.Type, req.Qty, req.Note = domain.TypeAdjust, rng.Intn(15), "recount"
+					req.Type, req.Qty, req.Note = domain.TypeAdjust, qtyval.Quantity(rng.Intn(15))*1000, "recount"
 				default:
 					req.Type, req.LocationID = domain.TypeTransfer, nil
 					req.FromLocationID, req.ToLocationID = pick(), pick()
@@ -525,10 +526,10 @@ func TestMigration00007BackfillsFromTheSingleLocationSchema(t *testing.T) {
 
 	// The backfilled data is fully usable by the new rules.
 	ctx := t.Context()
-	if _, err := f.stock.Record(ctx, d, f.userID, domain.Request{Type: domain.TypeOut, Qty: 3}); err != nil {
+	if _, err := f.stock.Record(ctx, d, f.userID, domain.Request{Type: domain.TypeOut, Qty: 3 * 1000}); err != nil {
 		t.Errorf("out on a backfilled item (location inferred): %v", err)
 	}
-	if _, err := f.stock.Record(ctx, b, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: 1, ToLocationID: &f.locA}); err != nil {
+	if _, err := f.stock.Record(ctx, b, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: 1 * 1000, ToLocationID: &f.locA}); err != nil {
 		t.Errorf("transfer out of the default location: %v", err)
 	}
 	assertInvariants(t, f)
@@ -560,11 +561,11 @@ func TestMigration00007RollsBackToASingleLocation(t *testing.T) {
 	locC := f.location(t, "Maleta")
 	it, err := f.catalog.CreateItem(httpx.WithPrincipal(t.Context(), httpx.Principal{UserID: f.userID}), catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{
 		Description: "Tornillos", CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"),
-		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 3}, {LocationID: locC, Quantity: 9}}}})
+		Stocks: []catalogdomain.StockInput{{LocationID: f.locA, Quantity: 3 * 1000}, {LocationID: locC, Quantity: 9 * 1000}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.stock.Record(t.Context(), it.ID, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: 1, FromLocationID: &f.locA, ToLocationID: &f.locB}); err != nil {
+	if _, err := f.stock.Record(t.Context(), it.ID, f.userID, domain.Request{Type: domain.TypeTransfer, Qty: 1 * 1000, FromLocationID: &f.locA, ToLocationID: &f.locB}); err != nil {
 		t.Fatal(err)
 	}
 	sqlDB, err := sql.Open("pgx", f.url)

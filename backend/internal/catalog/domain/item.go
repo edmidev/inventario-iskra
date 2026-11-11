@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"regexp"
 	"strings"
 	"time"
@@ -43,7 +44,7 @@ const (
 	MaxCodeLen        = 64
 	MaxAttributesSize = 8 * 1024 // bytes of marshalled JSON
 	MaxIntervalDays   = 3650
-	MaxStock          = 1_000_000_000
+	MaxStock          = 1_000_000_000_000
 )
 
 var codeRe = regexp.MustCompile(`^ISK-[A-Z0-9]+(-[A-Z0-9]+)*$`)
@@ -70,8 +71,8 @@ type Item struct {
 	Kind         Kind
 	Status       Status
 	Unit         *string
-	StockCurrent int
-	StockMin     int
+	StockCurrent qtyval.Quantity
+	StockMin     qtyval.Quantity
 	// LocationID is an asset's location. Consumables have none: their stock
 	// lives per location in Stocks.
 	LocationID              *int64
@@ -97,7 +98,7 @@ type Item struct {
 type ItemStock struct {
 	LocationID   int64
 	LocationName string
-	Quantity     int
+	Quantity     qtyval.Quantity
 }
 
 // LoanInfo is the read-only view of an active custody assignment.
@@ -193,8 +194,8 @@ type NewItemInput struct {
 	Kind         Kind
 	Status       Status // empty means functional
 	Unit         *string
-	StockCurrent *int // opening balance, consumables only
-	StockMin     int
+	StockCurrent *qtyval.Quantity // opening balance, consumables only
+	StockMin     qtyval.Quantity
 	// LocationID is an asset's location. For consumables it is only the
 	// location of the legacy single-location opening balance (StockCurrent).
 	LocationID *int64
@@ -210,7 +211,7 @@ type NewItemInput struct {
 // StockInput is one opening-balance row: a quantity at a location.
 type StockInput struct {
 	LocationID int64
-	Quantity   int
+	Quantity   qtyval.Quantity
 }
 
 // NewItem validates the input against the kind rules and builds an Item
@@ -238,13 +239,13 @@ func NewItem(in NewItemInput) (Item, error) {
 		if in.Unit != nil && strings.TrimSpace(*in.Unit) != "" {
 			fe.add("unit", "assets have no unit")
 		}
-		if in.StockCurrent != nil && *in.StockCurrent != 1 {
+		if in.StockCurrent != nil && *in.StockCurrent != 1000 {
 			fe.add("stock_current", "assets always have stock 1")
 		}
 		if in.StockMin != 0 {
 			fe.add("stock_min", "assets have no minimum stock")
 		}
-		it.Unit, it.StockCurrent, it.StockMin = nil, 1, 0
+		it.Unit, it.StockCurrent, it.StockMin = nil, 1000, 0
 	case KindConsumable:
 		it.Unit = normalizeUnit(fe, in.Unit)
 		it.LocationID = nil
@@ -282,10 +283,10 @@ func NewItem(in NewItemInput) (Item, error) {
 
 // openingStocks validates a multi-location opening balance and returns its
 // rows and their total.
-func openingStocks(fe fieldErrors, in []StockInput) ([]ItemStock, int) {
+func openingStocks(fe fieldErrors, in []StockInput) ([]ItemStock, qtyval.Quantity) {
 	out := make([]ItemStock, 0, len(in))
 	seen := map[int64]bool{}
-	total := 0
+	var total qtyval.Quantity
 	for i, s := range in {
 		key := fmt.Sprintf("stocks[%d]", i)
 		switch {
@@ -295,7 +296,7 @@ func openingStocks(fe fieldErrors, in []StockInput) ([]ItemStock, int) {
 			fe.add(key+".location_id", "repeated location")
 		}
 		if s.Quantity <= 0 || s.Quantity > MaxStock {
-			fe.add(key+".quantity", "must be between 1 and 1000000000")
+			fe.add(key+".quantity", "must be greater than 0 and at most 1000000000, up to three decimals")
 		}
 		seen[s.LocationID] = true
 		total += s.Quantity
@@ -366,7 +367,7 @@ type ItemPatch struct {
 	CategoryID              *int64
 	Status                  *Status
 	Unit                    *string
-	StockMin                *int
+	StockMin                *qtyval.Quantity
 	LocationID              Nullable[int64]
 	MaintenanceIntervalDays Nullable[int]
 	Attributes              map[string]any // replaces the whole object when non-nil
@@ -374,7 +375,7 @@ type ItemPatch struct {
 
 	Code         *string
 	Kind         *Kind
-	StockCurrent *int
+	StockCurrent *qtyval.Quantity
 }
 
 // Apply validates the patch and returns the updated item; i is not modified.

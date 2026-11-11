@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { roleSchema } from "../../lib/api/schemas";
 
-export const roleLabels = { admin: "Administrador", operator: "Operador", viewer: "Solo lectura" } as const;
+export const roleLabels = { admin: "Administrador", operator: "Operador", viewer: "Solo lectura", workshop_chief: "Jefe de taller", supervisor: "Supervisor", inventory_chief: "Jefe de inventario", worker: "Trabajador" } as const;
 export const roleOptions = roleSchema.options.map((value) => ({ value, label: roleLabels[value] }));
 
 export const MIN_PASSWORD = 10;

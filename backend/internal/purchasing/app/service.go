@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"strings"
 	"time"
 
@@ -15,16 +16,21 @@ type Service struct {
 	repo      Repository
 	items     ItemCatalog
 	stock     StockReceiver
+	allocator PurchaseAllocator
 	suppliers Suppliers
 	now       func() time.Time
 }
 
 // NewService wires the repository and the ports. now may be nil.
-func NewService(r Repository, items ItemCatalog, stock StockReceiver, sups Suppliers, now func() time.Time) *Service {
+func NewService(r Repository, items ItemCatalog, stock StockReceiver, sups Suppliers, now func() time.Time, allocators ...PurchaseAllocator) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{repo: r, items: items, stock: stock, suppliers: sups, now: now}
+	s := &Service{repo: r, items: items, stock: stock, suppliers: sups, now: now}
+	if len(allocators) > 0 {
+		s.allocator = allocators[0]
+	}
+	return s
 }
 
 // Create validates and stores a draft order.
@@ -187,11 +193,34 @@ func (s *Service) Receive(ctx context.Context, id int64, userID string, req doma
 		if plan.Note != "" {
 			note += ": " + plan.Note
 		}
+		if s.allocator != nil {
+			itemIDs := make([]string, 0, len(plan.Lines))
+			for i := range plan.Lines {
+				if itemID := o.Lines[idx[i]].ItemID; itemID != "" {
+					itemIDs = append(itemIDs, itemID)
+				}
+			}
+			if err := s.allocator.LockReceiptItems(ctx, itemIDs); err != nil {
+				return fmt.Errorf("lock receipt items: %w", err)
+			}
+		}
 		for i, rl := range plan.Lines {
 			line := &o.Lines[idx[i]]
+			var reservation PurchaseReservation
+			if s.allocator != nil && line.ItemID != "" {
+				reservation, err = s.allocator.PrepareReceipt(ctx, line.ID, line.ItemID, line.ReceivedQty)
+				if err != nil {
+					return fmt.Errorf("prepare line %d allocation: %w", line.ID, err)
+				}
+			}
 			items, err := s.bringIn(ctx, line, rl.Quantity, plan.LocationID, userID, note)
 			if err != nil {
 				return fmt.Errorf("line %d: %w", line.ID, err)
+			}
+			if s.allocator != nil && reservation.ExecutionID != 0 {
+				if err := s.allocator.AllocateReceipt(ctx, reservation, rl.Quantity); err != nil {
+					return fmt.Errorf("allocate line %d receipt: %w", line.ID, err)
+				}
 			}
 			rc.Lines = append(rc.Lines, domain.ReceiptLine{LineID: line.ID, Quantity: rl.Quantity, Items: items})
 		}
@@ -208,10 +237,10 @@ func (s *Service) Receive(ctx context.Context, id int64, userID string, req doma
 }
 
 // bringIn creates the items and the stock movement for qty units of line.
-func (s *Service) bringIn(ctx context.Context, line *domain.Line, qty int, loc int64, userID, note string) ([]domain.ReceiptItem, error) {
+func (s *Service) bringIn(ctx context.Context, line *domain.Line, qty qtyval.Quantity, loc int64, userID, note string) ([]domain.ReceiptItem, error) {
 	if line.IsAsset() {
-		out := make([]domain.ReceiptItem, 0, qty)
-		for n := 0; n < qty; n++ {
+		out := make([]domain.ReceiptItem, 0, int(qty)/1000)
+		for n := 0; n < int(qty)/1000; n++ {
 			it, err := s.items.CreateItem(ctx, *line.NewItem, loc)
 			if err != nil {
 				return nil, fmt.Errorf("create asset %d of %d: %w", n+1, qty, err)
@@ -219,7 +248,7 @@ func (s *Service) bringIn(ctx context.Context, line *domain.Line, qty int, loc i
 			if line.ItemID == "" {
 				line.ItemID = it.ID
 			}
-			out = append(out, domain.ReceiptItem{ItemID: it.ID, Code: it.Code, Quantity: 1})
+			out = append(out, domain.ReceiptItem{ItemID: it.ID, Code: it.Code, Quantity: 1000})
 		}
 		return out, nil
 	}

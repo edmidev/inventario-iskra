@@ -2,16 +2,17 @@ import { Outlet } from "react-router-dom";
 import { Icon } from "../atoms/Icon";
 import { NavItem } from "../atoms/NavItem";
 import { BottomNav } from "../molecules/BottomNav";
-import { navItems } from "../molecules/navItems";
-import { useSession } from "../../features/auth/session";
+import { visibleNavItems } from "../molecules/navItems";
+import { usePermissions, useSession } from "../../features/auth/session";
 
 function Sidebar() {
   const { state, signOut } = useSession();
+  const { canRead } = usePermissions();
   return (
     <aside className="fixed inset-y-0 left-0 hidden w-60 flex-col gap-4 border-r border-line bg-surface p-4 md:flex">
       <p className="px-3 pt-2 text-xl font-bold">Inventario</p>
       <nav aria-label="Navegación principal" className="flex flex-col gap-1">
-        {navItems.map(({ mobile: _mobile, ...item }) => (
+        {visibleNavItems(canRead).map(({ mobile: _mobile, ...item }) => (
           <NavItem key={item.to} {...item} variant="side" />
         ))}
       </nav>

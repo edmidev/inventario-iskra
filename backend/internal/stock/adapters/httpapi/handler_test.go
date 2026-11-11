@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,8 +32,8 @@ func newEnv(t *testing.T) env {
 	st.SeedLocation(1, "Warehouse")
 	st.SeedLocation(2, "Workshop")
 	st.SeedUser("u-operator", "Olga Operator")
-	st.SeedItem(memory.Item{ID: "c1", Code: "ISK-CON-001", Description: "Gloves", Kind: domain.KindConsumable, Unit: "pair", StockCurrent: 5, StockMin: 5, LocationID: p64(1)})
-	st.SeedItem(memory.Item{ID: "a1", Code: "ISK-HER-001", Description: "Drill", Kind: domain.KindAsset, StockCurrent: 1, LocationID: p64(1)})
+	st.SeedItem(memory.Item{ID: "c1", Code: "ISK-CON-001", Description: "Gloves", Kind: domain.KindConsumable, Unit: "pair", StockCurrent: 5 * 1000, StockMin: 5 * 1000, LocationID: p64(1)})
+	st.SeedItem(memory.Item{ID: "a1", Code: "ISK-HER-001", Description: "Drill", Kind: domain.KindAsset, StockCurrent: 1 * 1000, LocationID: p64(1)})
 	verify := func(token string) (httpx.Principal, error) {
 		role := identity.Role(token) // tokens are role names in these tests
 		if !role.Valid() {
@@ -248,8 +249,8 @@ func TestHistoryEnvelopeFilterAndPaging(t *testing.T) {
 
 func TestAlertsEndpoint(t *testing.T) {
 	e := newEnv(t)
-	e.st.SeedItem(memory.Item{ID: "c2", Code: "ISK-CON-002", Description: "Tape", Kind: domain.KindConsumable, Unit: "roll", StockCurrent: 0, StockMin: 4})
-	e.st.SeedItem(memory.Item{ID: "c3", Code: "ISK-CON-003", Description: "Fine", Kind: domain.KindConsumable, Unit: "u", StockCurrent: 9, StockMin: 4})
+	e.st.SeedItem(memory.Item{ID: "c2", Code: "ISK-CON-002", Description: "Tape", Kind: domain.KindConsumable, Unit: "roll", StockCurrent: 0 * 1000, StockMin: 4 * 1000})
+	e.st.SeedItem(memory.Item{ID: "c3", Code: "ISK-CON-003", Description: "Fine", Kind: domain.KindConsumable, Unit: "u", StockCurrent: 9 * 1000, StockMin: 4 * 1000})
 	got := e.do(t, "GET", "/stock/alerts", "viewer", nil)
 	data := got.Body["data"].([]any)
 	if got.Status != 200 || got.Body["total"] != 2.0 || len(data) != 2 {
@@ -267,7 +268,7 @@ func TestAlertsEndpoint(t *testing.T) {
 
 func TestTransferOfAssetOnLoanIs409(t *testing.T) {
 	e := newEnv(t)
-	e.st.SeedItem(memory.Item{ID: "a-loan", Code: "ISK-HER-002", Description: "Saw", Kind: domain.KindAsset, StockCurrent: 1, LocationID: p64(1), OnLoan: true})
+	e.st.SeedItem(memory.Item{ID: "a-loan", Code: "ISK-HER-002", Description: "Saw", Kind: domain.KindAsset, StockCurrent: 1 * 1000, LocationID: p64(1), OnLoan: true})
 	got := e.do(t, "POST", "/items/a-loan/movements", "operator", m{"type": "transfer", "to_location_id": 2})
 	if got.Status != 409 || got.errCode() != "item_on_loan" {
 		t.Errorf("%d %v", got.Status, got.Body)
@@ -281,7 +282,7 @@ func TestTransferOfAssetOnLoanIs409(t *testing.T) {
 // workshop 4) with a minimum of 5.
 func seedMulti(e env) {
 	e.st.SeedItem(memory.Item{ID: "m1", Code: "ISK-CON-050", Description: "Screws", Kind: domain.KindConsumable, Unit: "u",
-		StockMin: 5, Stocks: map[int64]int{1: 6, 2: 4}})
+		StockMin: 5 * 1000, Stocks: map[int64]qtyval.Quantity{1: 6000, 2: 4000}})
 }
 
 func TestOutPerLocationAndInsufficientStockNamesTheLocation(t *testing.T) {
@@ -399,5 +400,17 @@ func TestAlertsReturnTheBreakdown(t *testing.T) {
 	stocks := alert["stocks"].([]any)
 	if len(stocks) != 1 || stocks[0].(map[string]any)["location_name"] != "Warehouse" || stocks[0].(map[string]any)["quantity"] != 5.0 {
 		t.Errorf("breakdown: %v", stocks)
+	}
+}
+
+func TestFractionalMovementHTTPAndPrecisionRejection(t *testing.T) {
+	e := newEnv(t)
+	got := e.do(t, "POST", "/items/c1/movements", "operator", m{"type": "in", "qty": 0.125})
+	if got.Status != 201 || got.Body["stock_current"] != 5.125 {
+		t.Fatalf("fractional HTTP %+v", got)
+	}
+	rejected := e.do(t, "POST", "/items/c1/movements", "operator", m{"type": "in", "qty": 0.0001})
+	if rejected.Status != 400 {
+		t.Fatalf("precision %+v", rejected)
 	}
 }

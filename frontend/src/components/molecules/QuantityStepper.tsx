@@ -1,3 +1,4 @@
+import { quantityAfter } from "../../lib/quantity";
 import clsx from "clsx";
 import { Button } from "../atoms/Button";
 import { Icon } from "../atoms/Icon";
@@ -9,6 +10,8 @@ interface QuantityStepperProps {
   value: string;
   onChange: (value: string) => void;
   min?: number;
+  /** Preserve fractions and allow thousandths; defaults to whole units. */
+  decimal?: boolean;
   /** Upper limit (e.g. what a location holds); typing above it clamps. */
   max?: number;
   unit?: string | null;
@@ -21,9 +24,9 @@ interface QuantityStepperProps {
 const clamp = (n: number, min: number, max = Infinity) => Math.min(max, Math.max(min, Number.isFinite(n) ? Math.trunc(n) : min));
 
 /** Large +/- buttons around a numeric field, sized for thumbs, plus optional quick amounts. */
-export function QuantityStepper({ id, value, onChange, min = 0, max, unit, quick = [], invalid, ...aria }: QuantityStepperProps) {
+export function QuantityStepper({ id, value, onChange, decimal = false, min = 0, max, unit, quick = [], invalid, ...aria }: QuantityStepperProps) {
   const current = value.trim() === "" ? min : Number(value);
-  const step = (delta: number) => onChange(String(clamp(current + delta, min, max)));
+  const step = (delta: number) => onChange(String(decimal ? Math.min(max ?? Infinity, Math.max(min, quantityAfter(current, delta))) : clamp(current + delta, min, max)));
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
@@ -34,10 +37,10 @@ export function QuantityStepper({ id, value, onChange, min = 0, max, unit, quick
           <Input
             id={id}
             type="number"
-            inputMode="numeric"
+            inputMode={decimal ? "decimal" : "numeric"}
             min={min}
             max={max}
-            step={1}
+            step={decimal ? 0.001 : 1}
             value={value}
             invalid={invalid}
             onChange={(event) => {

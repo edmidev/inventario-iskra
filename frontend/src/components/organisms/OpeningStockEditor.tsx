@@ -1,3 +1,4 @@
+import { parseQuantity, quantityAfter } from "../../lib/quantity";
 import { Controller, useFieldArray, useWatch, type Control, type FieldErrors, type UseFormRegister } from "react-hook-form";
 import { Button } from "../atoms/Button";
 import { Icon } from "../atoms/Icon";
@@ -20,7 +21,7 @@ export function OpeningStockEditor({ control, register, errors, locations }: Ope
   const rows = useFieldArray({ control, name: "stocks" });
   const watched = useWatch({ control, name: "stocks" });
   const unit = useWatch({ control, name: "unit" }).trim();
-  const total = watched.reduce((sum, row) => sum + (/^\d+$/.test(row.quantity.trim()) ? Number(row.quantity) : 0), 0);
+  const total = watched.reduce((sum, row) => quantityAfter(sum, parseQuantity(row.quantity) ?? 0), 0);
   const groupError = errors.stocks?.message ?? errors.stocks?.root?.message;
   const taken = (index: number) => new Set(watched.filter((_, i) => i !== index).map((row) => row.location_id).filter(Boolean));
 
@@ -59,9 +60,9 @@ export function OpeningStockEditor({ control, register, errors, locations }: Ope
             </div>
             <div className="relative">
               <Input
-                type="number"
-                inputMode="numeric"
-                min={1}
+                type="number" step={0.001}
+                inputMode="decimal"
+                min={0.001}
                 aria-label={`Cantidad del stock ${index + 1}`}
                 invalid={Boolean(rowErrors?.quantity)}
                 className={unit ? "pr-16" : undefined}

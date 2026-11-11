@@ -27,6 +27,15 @@ const LocationsAdminPage = lazy(() => import("./pages/LocationsAdminPage").then(
 const ScanPage = lazy(() => import("./pages/ScanPage").then((m) => ({ default: m.ScanPage })));
 const ResolveCodePage = lazy(() => import("./pages/ResolveCodePage").then((m) => ({ default: m.ResolveCodePage })));
 
+const RolesPage = lazy(() => import("./pages/RolesPage").then((m) => ({ default: m.RolesPage })));
+
+const CustomersPage = lazy(() => import("./pages/CustomersPage").then((m) => ({ default: m.CustomersPage })));
+const CustomerFormPage = lazy(() => import("./pages/CustomerFormPage").then((m) => ({ default: m.CustomerFormPage })));
+const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
+const ProjectDetailPage = lazy(() => import("./pages/ProjectDetailPage").then((m) => ({ default: m.ProjectDetailPage })));
+const ExecutionsPage = lazy(() => import("./pages/ExecutionsPage").then((m) => ({ default: m.ExecutionsPage })));
+const FinishedStockPage = lazy(() => import("./pages/FinishedStockPage").then((m) => ({ default: m.FinishedStockPage })));
+
 export function App() {
   return (
     <>
@@ -37,6 +46,7 @@ export function App() {
           <Route element={<RequireAuth />}>
             <Route element={<AppShell />}>
               <Route index element={<Navigate to="/inicio" replace />} />
+              <Route element={<RequireRole check={(p) => p.canRead} />}>
               <Route path="inicio" element={<DashboardPage />} />
               <Route path="materiales" element={<ItemsPage />} />
               <Route path="materiales/codigo/:code" element={<ResolveCodePage />} />
@@ -52,10 +62,25 @@ export function App() {
               <Route path="ordenes-compra/sugerencias" element={<ReorderSuggestionsPage />} />
               <Route path="ordenes-compra/:id" element={<PurchaseOrderDetailPage />} />
               <Route path="escanear" element={<ScanPage />} />
+              </Route>
+              <Route element={<RequireRole check={(p) => p.canReadCustomers} />}>
+                <Route path="clientes" element={<CustomersPage />} />
+                <Route path="clientes/nuevo" element={<CustomerFormPage />} />
+                <Route path="clientes/:id/editar" element={<CustomerFormPage />} />
+              </Route>
+              <Route element={<RequireRole check={(p) => p.canReadProjects} />}>
+                <Route path="proyectos" element={<ProjectsPage />} />
+                <Route path="proyectos/:id" element={<ProjectDetailPage />} />
+              </Route>
+              <Route element={<RequireRole check={(p) => p.canReadExecutions} />}>
+                <Route path="ejecuciones" element={<ExecutionsPage />} />
+                <Route path="productos-terminados" element={<FinishedStockPage />} />
+              </Route>
               <Route path="mas" element={<MorePage />} />
               <Route path="cuenta" element={<AccountPage />} />
-              <Route path="admin" element={<RequireRole check={(p) => p.isAdmin} />}>
-                <Route path="usuarios" element={<UsersPage />} />
+              <Route path="admin/usuarios" element={<RequireRole check={(p) => p.canManageUsers} />}><Route index element={<UsersPage />} /></Route>
+              <Route path="admin/roles" element={<RequireRole check={(p) => p.canManageRoles} />}><Route index element={<RolesPage />} /></Route>
+              <Route path="admin" element={<RequireRole check={(p) => p.canManageCatalogs} />}>
                 <Route path="categorias" element={<CategoriesAdminPage />} />
                 <Route path="ubicaciones" element={<LocationsAdminPage />} />
               </Route>

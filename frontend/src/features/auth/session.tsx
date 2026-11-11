@@ -76,24 +76,39 @@ export function useSession(): SessionContextValue {
 
 export interface Permissions {
   role: Role | null;
-  /** operator and admin: create, edit and delete items. */
+  canRead: boolean;
+  canReadProjects: boolean;
+  canReadCustomers: boolean;
+  canReadExecutions: boolean;
+  canWriteExecutions: boolean;
   canWriteItems: boolean;
-  /** operator and admin: stock movements, loans and maintenance flows. */
   canOperate: boolean;
-  /** admin only: catalogs, users and custom item codes. */
+  canManageUsers: boolean;
+  canManageRoles: boolean;
+  canManageCatalogs: boolean;
+  /** Compatibility flag for existing custom-code controls, governed by catalogs:manage. */
   isAdmin: boolean;
 }
 
-export function permissionsFor(role: Role | null): Permissions {
+export function permissionsFor(user: Pick<User, "role" | "permissions"> | null): Permissions {
+  const has = (permission: string) => user?.permissions.includes(permission) ?? false;
   return {
-    role,
-    canWriteItems: role === "operator" || role === "admin",
-    canOperate: role === "operator" || role === "admin",
-    isAdmin: role === "admin",
+    role: user?.role ?? null,
+    canRead: has("inventory:read"),
+    canReadProjects: has("projects:read"),
+    canReadCustomers: has("customers:read"),
+    canReadExecutions: has("executions:read"),
+    canWriteExecutions: has("executions:write"),
+    canWriteItems: has("items:write"),
+    canOperate: has("operations:write"),
+    canManageUsers: has("users:manage"),
+    canManageRoles: has("roles:manage"),
+    canManageCatalogs: has("catalogs:manage"),
+    isAdmin: has("catalogs:manage"),
   };
 }
 
 export function usePermissions(): Permissions {
   const { state } = useSession();
-  return permissionsFor(state.user?.role ?? null);
+  return permissionsFor(state.user);
 }

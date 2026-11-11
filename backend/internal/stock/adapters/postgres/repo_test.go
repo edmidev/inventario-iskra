@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"os"
 	"sync"
 	"testing"
@@ -97,7 +98,7 @@ func (f fixture) consumable(t *testing.T, desc string, stock, min int, loc *int6
 	ctx := httpx.WithPrincipal(t.Context(), httpx.Principal{UserID: f.userID})
 	it, err := f.catalog.CreateItem(ctx, catalogapp.CreateItemInput{NewItemInput: catalogdomain.NewItemInput{
 		Description: desc, CategoryID: f.catID, Kind: catalogdomain.KindConsumable, Unit: ptr("u"),
-		StockCurrent: &stock, StockMin: min, LocationID: loc}})
+		StockCurrent: func() *qtyval.Quantity { q := qtyval.Quantity(stock) * 1000; return &q }(), StockMin: qtyval.Quantity(min) * 1000, LocationID: loc}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestCreateWithStockRecordsOpeningMovementAtomically(t *testing.T) {
 		t.Fatalf("history: %+v total=%d err=%v", ms, total, err)
 	}
 	m := ms[0]
-	if m.Type != domain.TypeOpening || m.Qty != 5 || m.StockBefore != 0 || m.StockAfter != 5 ||
+	if m.Type != domain.TypeOpening || m.Qty != 5*1000 || m.StockBefore != 0*1000 || m.StockAfter != 5*1000 ||
 		m.LocationID == nil || *m.LocationID != f.locA || m.UserName == nil || *m.UserName != "Ana Operator" {
 		t.Errorf("opening movement: %+v", m)
 	}
@@ -175,17 +176,17 @@ func TestRecordKeepsStockAndLedgerInStep(t *testing.T) {
 		req   domain.Request
 		stock int
 	}{
-		{domain.Request{Type: domain.TypeOut, Qty: 2}, 3},
-		{domain.Request{Type: domain.TypeAdjust, Qty: 8, Note: "recount"}, 8},
-		{domain.Request{Type: domain.TypeIn, Qty: 1}, 9},
-		{domain.Request{Type: domain.TypeTransfer, Qty: 4, FromLocationID: &f.locA, ToLocationID: &f.locB}, 9},
+		{domain.Request{Type: domain.TypeOut, Qty: 2 * 1000}, 3},
+		{domain.Request{Type: domain.TypeAdjust, Qty: 8 * 1000, Note: "recount"}, 8},
+		{domain.Request{Type: domain.TypeIn, Qty: 1 * 1000}, 9},
+		{domain.Request{Type: domain.TypeTransfer, Qty: 4 * 1000, FromLocationID: &f.locA, ToLocationID: &f.locB}, 9},
 	}
 	for _, s := range steps {
 		r, err := f.stock.Record(ctx, it.ID, f.userID, s.req)
 		if err != nil {
 			t.Fatalf("%s: %v", s.req.Type, err)
 		}
-		if r.StockCurrent != s.stock || f.stockOf(t, it.ID) != s.stock {
+		if r.StockCurrent != qtyval.Quantity(s.stock)*1000 || f.stockOf(t, it.ID) != s.stock {
 			t.Errorf("%s: stock result=%d db=%d, want %d", s.req.Type, r.StockCurrent, f.stockOf(t, it.ID), s.stock)
 		}
 	}
@@ -201,10 +202,10 @@ func TestRecordKeepsStockAndLedgerInStep(t *testing.T) {
 	if err != nil || total != 5 {
 		t.Fatalf("history total=%d err=%v", total, err)
 	}
-	if ms[0].Type != domain.TypeTransfer || *ms[0].FromLocationID != f.locA || *ms[0].ToLocationID != f.locB || ms[0].Qty != 0 || ms[0].MovedQty != 4 || ms[0].LocationID != nil {
+	if ms[0].Type != domain.TypeTransfer || *ms[0].FromLocationID != f.locA || *ms[0].ToLocationID != f.locB || ms[0].Qty != 0*1000 || ms[0].MovedQty != 4*1000 || ms[0].LocationID != nil {
 		t.Errorf("newest = %+v", ms[0])
 	}
-	if ms[1].Type != domain.TypeIn || ms[2].Type != domain.TypeAdjust || ms[2].Qty != 5 || ms[3].Type != domain.TypeOut || ms[4].Type != domain.TypeOpening {
+	if ms[1].Type != domain.TypeIn || ms[2].Type != domain.TypeAdjust || ms[2].Qty != 5*1000 || ms[3].Type != domain.TypeOut || ms[4].Type != domain.TypeOpening {
 		t.Errorf("order/deltas wrong: %+v", ms)
 	}
 	// Filter and paging.
@@ -222,25 +223,25 @@ func TestRecordRejectionsAndDeletedItems(t *testing.T) {
 	it := f.consumable(t, "Guantes", 3, 0, nil)
 	asset := f.asset(t, "Taladro", &f.locA)
 
-	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 4}); !errors.Is(err, domain.ErrInsufficientStock) {
+	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 4 * 1000}); !errors.Is(err, domain.ErrInsufficientStock) {
 		t.Errorf("oversell: %v", err)
 	}
-	if _, err := f.stock.Record(ctx, asset.ID, f.userID, domain.Request{Type: domain.TypeIn, Qty: 1}); !errors.Is(err, domain.ErrNotApplicable) {
+	if _, err := f.stock.Record(ctx, asset.ID, f.userID, domain.Request{Type: domain.TypeIn, Qty: 1 * 1000}); !errors.Is(err, domain.ErrNotApplicable) {
 		t.Errorf("asset in: %v", err)
 	}
 	if _, err := f.stock.Record(ctx, asset.ID, f.userID, domain.Request{Type: domain.TypeTransfer, ToLocationID: ptr(int64(9999))}); !errors.Is(err, domain.ErrInvalidInput) {
 		t.Errorf("dangling location: %v", err)
 	}
-	if r, err := f.stock.Record(ctx, asset.ID, f.userID, domain.Request{Type: domain.TypeTransfer, ToLocationID: &f.locB}); err != nil || r.StockCurrent != 1 {
+	if r, err := f.stock.Record(ctx, asset.ID, f.userID, domain.Request{Type: domain.TypeTransfer, ToLocationID: &f.locB}); err != nil || r.StockCurrent != 1*1000 {
 		t.Errorf("asset transfer: %+v %v", r, err)
 	}
-	if _, err := f.stock.Record(ctx, "not-a-uuid", f.userID, domain.Request{Type: domain.TypeIn, Qty: 1}); !errors.Is(err, domain.ErrItemNotFound) {
+	if _, err := f.stock.Record(ctx, "not-a-uuid", f.userID, domain.Request{Type: domain.TypeIn, Qty: 1 * 1000}); !errors.Is(err, domain.ErrItemNotFound) {
 		t.Errorf("bad id: %v", err)
 	}
 	if err := f.catalog.DeleteItem(ctx, it.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeIn, Qty: 1}); !errors.Is(err, domain.ErrItemNotFound) {
+	if _, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeIn, Qty: 1 * 1000}); !errors.Is(err, domain.ErrItemNotFound) {
 		t.Errorf("deleted item movement: %v", err)
 	}
 	if _, _, _, err := f.stock.History(ctx, it.ID, "", 25, 0); !errors.Is(err, domain.ErrItemNotFound) {
@@ -289,7 +290,7 @@ func TestConcurrentOutNeverOversellsAndLedgerReconciles(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 1})
+			_, err := f.stock.Record(ctx, it.ID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 1 * 1000})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -359,7 +360,7 @@ func TestAlertsOrderedBySeverityAndPaged(t *testing.T) {
 		t.Errorf("alert fields: %+v / %+v", as[0], as[1])
 	}
 	// Taking stock out moves an item up the list.
-	if _, err := f.stock.Record(ctx, as[2].ItemID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 4}); err != nil {
+	if _, err := f.stock.Record(ctx, as[2].ItemID, f.userID, domain.Request{Type: domain.TypeOut, Qty: 4 * 1000}); err != nil {
 		t.Fatal(err)
 	}
 	as, _, _, _ = f.stock.Alerts(ctx, 1, 0)

@@ -14,9 +14,13 @@ type Role string
 
 // Supported roles.
 const (
-	RoleAdmin    Role = "admin"
-	RoleOperator Role = "operator"
-	RoleViewer   Role = "viewer"
+	RoleAdmin          Role = "admin"
+	RoleOperator       Role = "operator"
+	RoleViewer         Role = "viewer"
+	RoleWorkshopChief  Role = "workshop_chief"
+	RoleSupervisor     Role = "supervisor"
+	RoleInventoryChief Role = "inventory_chief"
+	RoleWorker         Role = "worker"
 )
 
 // Permission is a coarse capability checked by HTTP middleware.
@@ -34,12 +38,15 @@ const (
 	PermManageCatalogs Permission = "catalogs:manage"
 	// PermManageUsers allows user administration.
 	PermManageUsers Permission = "users:manage"
+	// PermManageRoles allows permission configuration.
+	PermManageRoles Permission = "roles:manage"
 )
 
 var rolePermissions = map[Role][]Permission{
-	RoleViewer:   {PermRead},
-	RoleOperator: {PermRead, PermWrite, PermWriteItems},
-	RoleAdmin:    {PermRead, PermWrite, PermWriteItems, PermManageCatalogs, PermManageUsers},
+	RoleViewer:        {PermRead},
+	RoleOperator:      {PermRead, PermWrite, PermWriteItems},
+	RoleAdmin:         {PermRead, PermWrite, PermWriteItems, PermManageCatalogs, PermManageUsers, PermManageRoles, PermReadCustomers, PermWriteCustomers, PermReadProjects, PermWriteProjects, PermReadExecutions, PermWriteExecutions},
+	RoleWorkshopChief: {}, RoleSupervisor: {}, RoleInventoryChief: {}, RoleWorker: {},
 }
 
 // Valid reports whether r is a known role.
@@ -48,7 +55,8 @@ func (r Role) Valid() bool {
 	return ok
 }
 
-// Has reports whether the role grants permission p.
+// Has reports whether the role has a default bootstrap grant.
+// Runtime authorization must use persisted effective permissions.
 func (r Role) Has(p Permission) bool {
 	for _, granted := range rolePermissions[r] {
 		if granted == p {
@@ -58,7 +66,7 @@ func (r Role) Has(p Permission) bool {
 	return false
 }
 
-// Permissions returns a copy of the permissions granted to r.
+// Permissions returns bootstrap defaults, not effective authorization grants.
 func (r Role) Permissions() []Permission {
 	return append([]Permission(nil), rolePermissions[r]...)
 }
@@ -88,6 +96,7 @@ type User struct {
 	Email        string
 	PasswordHash string
 	Role         Role
+	Permissions  []Permission
 	Active       bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time

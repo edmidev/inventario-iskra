@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"testing"
 
 	"github.com/edgar/inventario/backend/internal/dashboard/domain"
@@ -15,7 +16,7 @@ func TestSuggestedQty(t *testing.T) {
 		{0, 5, 4, 6},
 	}
 	for _, c := range cases {
-		if got := domain.SuggestedQty(c.cur, c.min, c.pending); got != c.want {
+		if got := domain.SuggestedQty(qtyval.Quantity(c.cur)*1000, qtyval.Quantity(c.min)*1000, qtyval.Quantity(c.pending)*1000); got != qtyval.Quantity(c.want)*1000 {
 			t.Errorf("SuggestedQty(%d,%d,%d) = %d, want %d", c.cur, c.min, c.pending, got, c.want)
 		}
 	}
@@ -26,11 +27,11 @@ func str(v string) *string { return &v }
 
 func TestBuildReorderGroups(t *testing.T) {
 	cands := []domain.ReorderCandidate{
-		{ItemID: "a", Code: "A", StockCurrent: 1, StockMin: 5, SupplierID: i64(2), SupplierName: str("zeta")},
-		{ItemID: "b", Code: "B", StockCurrent: 1, StockMin: 5},
-		{ItemID: "c", Code: "C", StockCurrent: 1, StockMin: 5, SupplierID: i64(1), SupplierName: str("Alfa")},
-		{ItemID: "d", Code: "D", StockCurrent: 1, StockMin: 5, PendingOrdered: 9}, // covered: omitted
-		{ItemID: "e", Code: "E", StockCurrent: 0, StockMin: 3, SupplierID: i64(2), SupplierName: str("zeta")},
+		{ItemID: "a", Code: "A", StockCurrent: 1 * 1000, StockMin: 5 * 1000, SupplierID: i64(2), SupplierName: str("zeta")},
+		{ItemID: "b", Code: "B", StockCurrent: 1 * 1000, StockMin: 5 * 1000},
+		{ItemID: "c", Code: "C", StockCurrent: 1 * 1000, StockMin: 5 * 1000, SupplierID: i64(1), SupplierName: str("Alfa")},
+		{ItemID: "d", Code: "D", StockCurrent: 1 * 1000, StockMin: 5 * 1000, PendingOrdered: 9 * 1000}, // covered: omitted
+		{ItemID: "e", Code: "E", StockCurrent: 0 * 1000, StockMin: 3 * 1000, SupplierID: i64(2), SupplierName: str("zeta")},
 	}
 	got := domain.BuildReorderGroups(cands)
 	if len(got) != 3 {
@@ -45,7 +46,7 @@ func TestBuildReorderGroups(t *testing.T) {
 	if got[2].SupplierID != nil || len(got[2].Lines) != 1 || got[2].Lines[0].ItemID != "b" {
 		t.Errorf("unassigned group must be last: %+v", got[2])
 	}
-	if got[0].Lines[0].SuggestedQty != 9 || got[1].Lines[1].SuggestedQty != 6 {
+	if got[0].Lines[0].SuggestedQty != 9*1000 || got[1].Lines[1].SuggestedQty != 6*1000 {
 		t.Errorf("suggested quantities wrong: %+v", got)
 	}
 }

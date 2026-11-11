@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	qtyval "github.com/edgar/inventario/backend/internal/platform/quantity"
 	"log/slog"
 	"net/http"
 	"time"
@@ -41,23 +42,23 @@ func (h *Handler) Register(r chi.Router) {
 }
 
 type lowStockItemDTO struct {
-	ID           string `json:"id"`
-	Code         string `json:"code"`
-	Description  string `json:"description"`
-	Unit         string `json:"unit"`
-	StockCurrent int    `json:"stock_current"`
-	StockMin     int    `json:"stock_min"`
+	ID           string          `json:"id"`
+	Code         string          `json:"code"`
+	Description  string          `json:"description"`
+	Unit         string          `json:"unit"`
+	StockCurrent qtyval.Quantity `json:"stock_current"`
+	StockMin     qtyval.Quantity `json:"stock_min"`
 	// PendingOrdered is the quantity still to arrive on open purchase orders.
-	PendingOrdered int     `json:"pending_ordered"`
-	LocationName   *string `json:"location_name"`
+	PendingOrdered qtyval.Quantity `json:"pending_ordered"`
+	LocationName   *string         `json:"location_name"`
 	// Stocks is the per-location breakdown behind StockCurrent.
 	Stocks []stockLocationDTO `json:"stocks"`
 }
 
 type stockLocationDTO struct {
-	LocationID   int64  `json:"location_id"`
-	LocationName string `json:"location_name"`
-	Quantity     int    `json:"quantity"`
+	LocationID   int64           `json:"location_id"`
+	LocationName string          `json:"location_name"`
+	Quantity     qtyval.Quantity `json:"quantity"`
 }
 
 type overdueLoanDTO struct {
@@ -144,16 +145,16 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 }
 
 type reorderLineDTO struct {
-	ItemID            string  `json:"item_id"`
-	Code              string  `json:"code"`
-	Description       string  `json:"description"`
-	Unit              string  `json:"unit"`
-	StockCurrent      int     `json:"stock_current"`
-	StockMin          int     `json:"stock_min"`
-	PendingOrdered    int     `json:"pending_ordered"`
-	SuggestedQty      int     `json:"suggested_qty"`
-	LastUnitCostMinor *int64  `json:"last_unit_cost_minor"`
-	LastCurrency      *string `json:"last_currency"`
+	ItemID            string          `json:"item_id"`
+	Code              string          `json:"code"`
+	Description       string          `json:"description"`
+	Unit              string          `json:"unit"`
+	StockCurrent      qtyval.Quantity `json:"stock_current"`
+	StockMin          qtyval.Quantity `json:"stock_min"`
+	PendingOrdered    qtyval.Quantity `json:"pending_ordered"`
+	SuggestedQty      qtyval.Quantity `json:"suggested_qty"`
+	LastUnitCostMinor *int64          `json:"last_unit_cost_minor"`
+	LastCurrency      *string         `json:"last_currency"`
 }
 
 type reorderGroupDTO struct {
