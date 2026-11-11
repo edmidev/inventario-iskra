@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge } from "../components/atoms/Badge";
 import { Button } from "../components/atoms/Button";
 import { Icon } from "../components/atoms/Icon";
@@ -8,7 +8,7 @@ import { PagedList } from "../components/molecules/PagedList";
 import { SearchInput } from "../components/molecules/SearchInput";
 import { useSession } from "../features/auth/session";
 import { useCustomers } from "../features/customers/api/customers";
-import { CreateCustomerSheet, DeleteCustomerSheet, EditCustomerSheet, useToggleCustomerActive } from "../features/customers/components/CustomerSheets";
+import { DeleteCustomerSheet, useToggleCustomerActive } from "../features/customers/components/CustomerSheets";
 import { describeError } from "../lib/api/errors";
 import type { Customer } from "../features/customers/schemas";
 const activeOptions = [{
@@ -53,6 +53,9 @@ function CustomerRow({
     </li>;
 }
 export function CustomersPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = location.pathname + location.search;
   const {
     state
   } = useSession();
@@ -71,8 +74,6 @@ export function CustomersPage() {
     q,
     active
   });
-  const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<Customer | null>(null);
   const [deleting, setDeleting] = useState<Customer | null>(null);
   const customers = query.data?.pages.flatMap(page => page.data) ?? [];
   return <div className="flex flex-col gap-4">
@@ -82,7 +83,7 @@ export function CustomersPage() {
         </Link>
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-2xl font-bold">Clientes</h1>
-          {canOperate && <Button variant="primary" onClick={() => setCreating(true)}>
+          {canOperate && <Button variant="primary" onClick={() => navigate("/clientes/nuevo", { state: { returnTo } })}>
               <Icon name="plus" className="size-4" /> Nuevo
             </Button>}
         </div>
@@ -94,11 +95,9 @@ export function CustomersPage() {
       </div>
 
       <PagedList label="Clientes" status={query.status} errorMessage={query.error ? describeError(query.error) : undefined} isEmpty={customers.length === 0} emptyTitle="Sin clientes" emptyDescription={q || active ? "Prueba con otra búsqueda o quita filtros." : "Registra los clientes para vincularlos a las ejecuciones."} hasMore={query.hasNextPage} isFetchingMore={query.isFetchingNextPage} onLoadMore={() => void query.fetchNextPage()} onRetry={() => void query.refetch()}>
-        {customers.map(customer => <CustomerRow key={customer.id} customer={customer} canOperate={canOperate} onEdit={() => setEditing(customer)} onDelete={() => setDeleting(customer)} />)}
+        {customers.map(customer => <CustomerRow key={customer.id} customer={customer} canOperate={canOperate} onEdit={() => navigate(`/clientes/${customer.id}/editar`, { state: { returnTo } })} onDelete={() => setDeleting(customer)} />)}
       </PagedList>
 
-      {canOperate && <CreateCustomerSheet open={creating} onOpenChange={setCreating} />}
-      {editing && <EditCustomerSheet customer={editing} open onOpenChange={open => !open && setEditing(null)} />}
       {deleting && <DeleteCustomerSheet customer={deleting} open onOpenChange={open => !open && setDeleting(null)} />}
     </div>;
 }

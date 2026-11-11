@@ -30,6 +30,7 @@ const ResolveCodePage = lazy(() => import("./pages/ResolveCodePage").then((m) =>
 const RolesPage = lazy(() => import("./pages/RolesPage").then((m) => ({ default: m.RolesPage })));
 
 const CustomersPage = lazy(() => import("./pages/CustomersPage").then((m) => ({ default: m.CustomersPage })));
+const CustomerFormPage = lazy(() => import("./pages/CustomerFormPage").then((m) => ({ default: m.CustomerFormPage })));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 const ProjectDetailPage = lazy(() => import("./pages/ProjectDetailPage").then((m) => ({ default: m.ProjectDetailPage })));
 const ExecutionsPage = lazy(() => import("./pages/ExecutionsPage").then((m) => ({ default: m.ExecutionsPage })));
@@ -64,6 +65,8 @@ export function App() {
               </Route>
               <Route element={<RequireRole check={(p) => p.canReadCustomers} />}>
                 <Route path="clientes" element={<CustomersPage />} />
+                <Route path="clientes/nuevo" element={<CustomerFormPage />} />
+                <Route path="clientes/:id/editar" element={<CustomerFormPage />} />
               </Route>
               <Route element={<RequireRole check={(p) => p.canReadProjects} />}>
                 <Route path="proyectos" element={<ProjectsPage />} />

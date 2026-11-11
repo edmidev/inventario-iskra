@@ -1,13 +1,14 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { AppProviders, createQueryClient } from "../providers";
 import { session } from "../test/fixtures";
 import { api } from "../test/api";
 import { server } from "../test/server";
 import { CustomersPage } from "./CustomersPage";
+import { CustomerFormPage } from "./CustomerFormPage";
 const customer = {
   id: 1,
   name: "Acero SA",
@@ -32,7 +33,7 @@ function setup(grants: string[]) {
     offset: 0
   })));
   const client = createQueryClient();
-  return render(<AppProviders client={client}><MemoryRouter><CustomersPage /></MemoryRouter></AppProviders>);
+  return render(<AppProviders client={client}><MemoryRouter initialEntries={["/clientes"]}><Routes><Route path="/clientes" element={<CustomersPage />} /><Route path="/clientes/nuevo" element={<CustomerFormPage />} /><Route path="/clientes/:id/editar" element={<CustomerFormPage />} /></Routes></MemoryRouter></AppProviders>);
 }
 describe("customers", () => {
   it("shows customer identity but hides writes without the explicit grant", async () => {
@@ -62,13 +63,11 @@ describe("customers", () => {
     await user.click(await screen.findByRole("button", {
       name: "Nuevo"
     }));
-    const dialog = screen.getByRole("dialog", {
-      name: "Nuevo cliente"
-    });
-    await user.type(within(dialog).getByLabelText(/Nombre/), "Metal SA");
-    await user.type(within(dialog).getByLabelText("Identificación"), "J456");
-    await user.type(within(dialog).getByLabelText("Contacto"), "Luis");
-    await user.click(within(dialog).getByRole("button", {
+    expect(await screen.findByRole("heading", { name: "Nuevo cliente" })).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/Nombre/), "Metal SA");
+    await user.type(screen.getByLabelText("Identificación"), "J456");
+    await user.type(screen.getByLabelText("Contacto"), "Luis");
+    await user.click(screen.getByRole("button", {
       name: "Crear cliente"
     }));
     expect(await screen.findByText("Cliente Metal SA creado.")).toBeInTheDocument();

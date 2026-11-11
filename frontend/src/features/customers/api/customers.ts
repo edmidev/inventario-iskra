@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../../../lib/api/errors";
 import { request } from "../../../lib/api/client";
 import { usePagedQuery } from "../../../lib/api/paged";
@@ -11,6 +11,12 @@ function localizedConflict(error: unknown): never {
 }
 
 export const customersKey = ["customers"] as const;
+export function useCustomer(id: number, enabled = true) {
+  return useQuery({
+    queryKey: [...customersKey, "detail", id], enabled: enabled && Number.isInteger(id) && id > 0,
+    queryFn: ({ signal }) => request(`/customers/${id}`, customerSchema, { signal }),
+  });
+}
 export interface CustomerFilters {
   q: string;
   /** "true" | "false" | "" (all). */
