@@ -1,3 +1,4 @@
+import { lineCostMinor } from "../lib/quantity";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge } from "../components/atoms/Badge";
@@ -158,7 +159,7 @@ export function PurchaseOrderDetailPage() {
                     <p className="text-ink-soft">
                       {line.new_item && !line.item_id && <Badge tone="accent">Ítem nuevo</Badge>}{" "}
                       Recibido {line.received_qty} de {line.quantity} · {formatMinor(line.unit_cost_minor, order.currency)} c/u ·{" "}
-                      {formatMinor(line.quantity * line.unit_cost_minor, order.currency)}
+                      {formatMinor(lineCostMinor(String(line.quantity), line.unit_cost_minor) ?? 0, order.currency)}
                     </p>
                     {line.item_id && (
                       <Link to={`/materiales/${line.item_id}`} className="inline-flex min-h-11 items-center font-semibold text-accent">
