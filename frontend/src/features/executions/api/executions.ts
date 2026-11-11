@@ -21,6 +21,10 @@ const finishedStockSchema = z.object({
   id: z.number().int(), code: z.string(), execution_id: z.number().int(), project_name: z.string(), produced_at: z.string(),
   status: z.enum(["available", "delivered"]), receipt: z.string().optional(), customer_name: z.string().optional(), delivered_at: z.string().optional(),
 });
+const executionEventSchema = z.object({
+  id: z.number().int(), execution_id: z.number().int(), type: z.string(), message: z.string(),
+  actor_id: z.string().optional(), actor_name: z.string(), occurred_at: z.string(),
+});
 export const executionSchema = z.object({
   id: z.number(),
   project_id: z.number(),
@@ -48,6 +52,7 @@ export type MaterialAllocation = z.infer<typeof allocationSchema>;
 export type FinishedUnit = z.infer<typeof finishedUnitSchema>;
 export type DeliveryReceipt = z.infer<typeof deliveryReceiptSchema>;
 export type FinishedStockRow = z.infer<typeof finishedStockSchema>;
+export type ExecutionEvent = z.infer<typeof executionEventSchema>;
 export type ExecutionCreate = {
   project_id: number;
   units: number;
@@ -143,6 +148,22 @@ export function useExecutionDeliveries(executionID: number, enabled: boolean) {
 export function useFinishedStock(status: "" | "available" | "delivered", q: string) {
   return usePagedQuery([...executionsKey, "finished-stock", status, q], "/finished-products", finishedStockSchema, {
     status: status || undefined, q: q.trim() || undefined,
+  });
+}
+
+export function useExecutionEvents(executionID: number, enabled: boolean) {
+  return useQuery({
+    queryKey: [...executionsKey, executionID, "events"], enabled,
+    queryFn: ({ signal }) => request(`/executions/${executionID}/events`, z.object({ data: z.array(executionEventSchema) }), { signal }).then((response) => response.data),
+  });
+}
+
+export function useRecordExecutionIncident(executionID: number) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { request_id: string; type: "positive" | "negative"; message: string }) =>
+      request(`/executions/${executionID}/events`, executionEventSchema, { method: "POST", body: input }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: [...executionsKey, executionID, "events"] }),
   });
 }
 

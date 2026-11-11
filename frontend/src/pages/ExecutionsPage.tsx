@@ -9,7 +9,7 @@ import { PrintArea } from "../components/organisms/PrintArea";
 import { useToast } from "../components/molecules/Toast";
 import { useSession } from "../features/auth/session";
 import { useAllCustomers, useCustomers } from "../features/customers/api/customers";
-import { useAddExecutionMaterial, useAddExecutionTool, useAssignableUsers, useCreateExecution, useDeliverFinishedUnits, useExecutionDeliveries, useExecutionUnits, useExecutions, useLinkExecutionPurchaseLine, useMoveExecutionMaterial, useProduceExecution, useTransitionExecution, type DeliveryReceipt, type Execution, type FinishedUnit, type MaterialAllocation } from "../features/executions/api/executions";
+import { useAddExecutionMaterial, useAddExecutionTool, useAssignableUsers, useCreateExecution, useDeliverFinishedUnits, useExecutionDeliveries, useExecutionEvents, useExecutionUnits, useExecutions, useLinkExecutionPurchaseLine, useMoveExecutionMaterial, useProduceExecution, useRecordExecutionIncident, useTransitionExecution, type DeliveryReceipt, type Execution, type FinishedUnit, type MaterialAllocation } from "../features/executions/api/executions";
 import { usePurchaseOrders } from "../features/purchasing/api/purchaseOrders";
 import { useLocations } from "../features/catalog/api/catalog";
 import { useProjects, useTemplateItems, type Project } from "../features/projects/api/projects";
@@ -329,6 +329,52 @@ function FinishedUnitsPanel({ execution, canWrite, onReceipt }: { execution: Exe
   </section>;
 }
 
+function ExecutionTimeline({ executionID, canWrite }: { executionID: number; canWrite: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [type, setType] = useState<"positive" | "negative">("positive");
+  const [message, setMessage] = useState("");
+  const [requestID, setRequestID] = useState<string | null>(null);
+  const events = useExecutionEvents(executionID, open);
+  const record = useRecordExecutionIncident(executionID);
+  const toast = useToast();
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const id = requestID ?? crypto.randomUUID();
+    if (!requestID) setRequestID(id);
+    try {
+      await record.mutateAsync({ request_id: id, type, message: message.trim() });
+      setMessage("");
+      setRequestID(null);
+      toast.success("Incidencia registrada en la bitácora.");
+    } catch (error) {
+      toast.error(describeError(error));
+    }
+  }
+
+  return <details className="rounded-xl bg-sunken p-3 text-sm" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className="cursor-pointer font-semibold">Ver bitácora</summary>
+    {open && <div className="mt-3 space-y-3">
+      {events.isLoading && <p className="text-ink-soft">Cargando eventos…</p>}
+      {events.isError && <p className="text-bad">No se pudo cargar la bitácora.</p>}
+      {events.data?.length === 0 && <p className="text-ink-soft">Todavía no hay eventos.</p>}
+      {events.data && events.data.length > 0 && <ol className="space-y-2">{events.data.map((event) => <li key={event.id} className="rounded-lg border border-line bg-surface p-3">
+        <div className="flex items-center justify-between gap-2"><Badge tone={event.type === "negative" ? "bad" : event.type === "positive" ? "ok" : "neutral"}>{event.type === "negative" ? "Incidencia negativa" : event.type === "positive" ? "Incidencia positiva" : event.type}</Badge><time className="text-xs text-ink-soft">{new Date(event.occurred_at).toLocaleString("es-VE", { timeZone: "America/Caracas" })}</time></div>
+        <p className="mt-2">{event.message}</p><p className="mt-1 text-xs text-ink-soft">{event.actor_name}</p>
+      </li>)}</ol>}
+      {canWrite && <form onSubmit={submit} className="grid gap-2 rounded-lg border border-line bg-surface p-3">
+        <label className="flex flex-col gap-1 text-xs font-medium">Tipo de incidencia
+          <select value={type} onChange={(event) => { setType(event.target.value as "positive" | "negative"); setRequestID(null); }} className="min-h-10 rounded-lg border border-line bg-surface px-2 text-sm"><option value="positive">Positiva</option><option value="negative">Negativa</option></select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-medium">Detalle de la incidencia
+          <textarea required maxLength={2000} value={message} onChange={(event) => { setMessage(event.target.value); setRequestID(null); }} className="min-h-20 rounded-lg border border-line bg-surface p-2 text-sm" />
+        </label>
+        <Button type="submit" disabled={record.isPending || !message.trim()}>Registrar incidencia</Button>
+      </form>}
+    </div>}
+  </details>;
+}
+
 function ExecutionCard({ execution, canWrite, onReceipt }: { execution: Execution; canWrite: boolean; onReceipt: (receipt: DeliveryReceipt) => void }) {
   return <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -338,6 +384,7 @@ function ExecutionCard({ execution, canWrite, onReceipt }: { execution: Executio
     <p className="text-sm">{execution.units} {execution.units === 1 ? "unidad" : "unidades"} · {execution.estimated_days} días · {execution.customer_ids.length} {execution.customer_ids.length === 1 ? "cliente" : "clientes"}</p>
     <p className="text-sm text-ink-soft">Responsable principal asignado · {execution.worker_ids.length} trabajadores</p>
     <FinishedUnitsPanel execution={execution} canWrite={canWrite} onReceipt={onReceipt} />
+    <ExecutionTimeline executionID={execution.id} canWrite={canWrite} />
     {execution.shortage_request_id && <p><Badge tone="warn">Solicitud de insumos #{execution.shortage_request_id}</Badge></p>}
     <details className="rounded-xl bg-sunken p-3 text-sm">
       <summary className="cursor-pointer font-semibold">Ver snapshot del proyecto</summary>

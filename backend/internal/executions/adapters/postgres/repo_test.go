@@ -1167,3 +1167,41 @@ func TestFinishedUnitDeliveriesAllocateOnlyToExecutionCustomers(t *testing.T) {
 		t.Fatalf("rejected rollback changed receipts: count=%d err=%v", receiptCount, err)
 	}
 }
+
+func TestExecutionManualIncidentsRetainActorAndReplay(t *testing.T) {
+	pool, ctx := setupExecutions(t)
+	var userID string
+	if err := pool.QueryRow(ctx, `INSERT INTO users(name,email,password_hash,role) VALUES('Recorder','recorder-t8@example.com','x','worker') RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	var customerID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO customers(name) VALUES('Client T8') RETURNING id`).Scan(&customerID); err != nil {
+		t.Fatal(err)
+	}
+	templates := projectpg.New(pool)
+	project := &projectdomain.Project{Input: projectdomain.Input{Name: "Marmita events", Characteristics: []string{}, Consumables: []projectdomain.Material{}, Tools: []string{}, EstimatedDays: 1}}
+	if err := templates.Create(ctx, project); err != nil {
+		t.Fatal(err)
+	}
+	svc := executionapp.NewService(executionpg.New(pool), templates)
+	execution, err := svc.Create(ctx, executiondomain.CreateInput{ProjectID: project.ID, Units: 1, CustomerIDs: []int64{customerID}, PrincipalUserID: userID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := executiondomain.IncidentInput{RequestID: "00000000-0000-4000-8000-000000000201", Type: "negative", Message: "Material defectuoso"}
+	first, err := svc.RecordIncident(ctx, execution.ID, userID, input)
+	if err != nil || first.Type != "negative" || first.ActorID != userID || first.ActorName != "Recorder" || first.Message != input.Message {
+		t.Fatalf("recorded incident = %+v, err=%v", first, err)
+	}
+	replay, err := svc.RecordIncident(ctx, execution.ID, userID, input)
+	if err != nil || replay.ID != first.ID {
+		t.Fatalf("incident replay = %+v, err=%v", replay, err)
+	}
+	if _, err := svc.RecordIncident(ctx, execution.ID, userID, executiondomain.IncidentInput{RequestID: input.RequestID, Type: "positive", Message: "Resuelto"}); !errors.Is(err, executiondomain.ErrIncidentReplay) {
+		t.Fatalf("changed incident replay = %v", err)
+	}
+	events, err := svc.ListEvents(ctx, execution.ID)
+	if err != nil || len(events) != 1 || events[0].ID != first.ID {
+		t.Fatalf("execution events = %+v, err=%v", events, err)
+	}
+}

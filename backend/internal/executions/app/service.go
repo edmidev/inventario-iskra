@@ -36,6 +36,8 @@ type Repository interface {
 	DeliverFinishedUnits(context.Context, int64, string, domain.DeliveryInput, string) (domain.DeliveryReceipt, error)
 	ListDeliveries(context.Context, int64) ([]domain.DeliveryReceipt, error)
 	ListFinishedStock(context.Context, domain.FinishedStockFilter) ([]domain.FinishedStockRow, int, error)
+	RecordIncident(context.Context, int64, string, domain.IncidentInput) (domain.ExecutionEvent, error)
+	ListEvents(context.Context, int64) ([]domain.ExecutionEvent, error)
 	ListAssignableUsers(context.Context) ([]domain.AssignableUser, error)
 }
 
@@ -218,6 +220,24 @@ func (s *Service) ListFinishedStock(ctx context.Context, filter domain.FinishedS
 	}
 	rows, total, err := s.repo.ListFinishedStock(ctx, normalized)
 	return rows, total, normalized, err
+}
+
+func (s *Service) RecordIncident(ctx context.Context, executionID int64, actorID string, input domain.IncidentInput) (domain.ExecutionEvent, error) {
+	if executionID < 1 || strings.TrimSpace(actorID) == "" {
+		return domain.ExecutionEvent{}, &domain.ValidationError{Fields: map[string]string{"execution_id": "execution and authenticated user are required"}}
+	}
+	normalized, err := input.Normalize()
+	if err != nil {
+		return domain.ExecutionEvent{}, err
+	}
+	return s.repo.RecordIncident(ctx, executionID, actorID, normalized)
+}
+
+func (s *Service) ListEvents(ctx context.Context, executionID int64) ([]domain.ExecutionEvent, error) {
+	if executionID < 1 {
+		return nil, domain.ErrNotFound
+	}
+	return s.repo.ListEvents(ctx, executionID)
 }
 
 func (s *Service) ListAssignableUsers(ctx context.Context) ([]domain.AssignableUser, error) {

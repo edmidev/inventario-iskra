@@ -368,4 +368,35 @@ describe("execution registration", () => {
       print.mockRestore();
     }
   });
+
+  it("records a typed incident and shows its actor in the execution timeline", async () => {
+    const user = userEvent.setup();
+    useAuthenticatedApi("admin");
+    const execution = {
+      id: 27, project_id: 4, project_name: "Marmita", description: "", characteristics: [], consumables: [], tools: [],
+      template_estimated_days: 12, estimated_days: 12, units: 1, produced_units: 0, materials: [], customer_ids: [8],
+      principal_user_id: "u-1", worker_ids: [], status: "in_progress", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    const incident = { id: 1, execution_id: 27, type: "negative", message: "Falta una lámina", actor_id: "u-1", actor_name: "Ana Pérez", occurred_at: "2026-01-02T12:00:00Z" };
+    let recorded = false;
+    server.use(
+      http.get(api("/executions"), () => HttpResponse.json({ data: [execution], total: 1, limit: 25, offset: 0 })),
+      http.get(api("/executions/27/events"), () => HttpResponse.json({ data: recorded ? [incident] : [] })),
+      http.post(api("/executions/27/events"), async ({ request }) => {
+        const body = await request.json() as { type: string; message: string; request_id: string };
+        expect(body.type).toBe("negative");
+        expect(body.message).toBe(incident.message);
+        expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
+        recorded = true;
+        return HttpResponse.json(incident, { status: 201 });
+      }),
+    );
+    renderApp("/ejecuciones");
+    await user.click(await screen.findByText("Ver bitácora"));
+    await user.selectOptions(screen.getByLabelText("Tipo de incidencia"), "negative");
+    await user.type(screen.getByLabelText("Detalle de la incidencia"), incident.message);
+    await user.click(screen.getByRole("button", { name: "Registrar incidencia" }));
+    expect(await screen.findByText(incident.message)).toBeInTheDocument();
+    expect(screen.getAllByText("Ana Pérez").length).toBeGreaterThan(0);
+  });
 });

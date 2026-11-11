@@ -40,6 +40,7 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/{id}", h.get)
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/{id}/units", h.listUnits)
 			r.With(httpx.RequirePermission(h.perms.Read)).Get("/{id}/deliveries", h.listDeliveries)
+			r.With(httpx.RequirePermission(h.perms.Read)).Get("/{id}/events", h.listEvents)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/", h.create)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/start", h.start)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/pause", h.pause)
@@ -48,6 +49,7 @@ func (h *Handler) Register(r chi.Router) {
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/cancel", h.cancel)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/produce", h.produce)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/deliveries", h.deliverUnits)
+			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/events", h.recordIncident)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/materials", h.addMaterial)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/tools", h.addTool)
 			r.With(httpx.RequirePermission(h.perms.Write)).Post("/{id}/purchase-lines", h.linkPurchaseLine)
@@ -147,6 +149,8 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "request_id_reused", "request_id was already used for a different production batch")
 	case errors.Is(err, domain.ErrDeliveryReplay):
 		httpx.WriteError(w, http.StatusConflict, "request_id_reused", "request_id was already used for a different finished-product delivery")
+	case errors.Is(err, domain.ErrIncidentReplay):
+		httpx.WriteError(w, http.StatusConflict, "request_id_reused", "request_id was already used for a different incident")
 	case errors.Is(err, domain.ErrCustomerNotAssigned):
 		httpx.WriteFieldErrors(w, map[string]string{"customer_id": "customer is not assigned to this execution"})
 	case errors.Is(err, domain.ErrUnitUnavailable):
@@ -223,6 +227,41 @@ func (h *Handler) listDeliveries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": receipts})
+}
+
+func (h *Handler) listEvents(w http.ResponseWriter, r *http.Request) {
+	id, ok := executionID(w, r)
+	if !ok {
+		return
+	}
+	events, err := h.svc.ListEvents(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"data": events})
+}
+
+func (h *Handler) recordIncident(w http.ResponseWriter, r *http.Request) {
+	id, ok := executionID(w, r)
+	if !ok {
+		return
+	}
+	principal, ok := httpx.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "authentication required")
+		return
+	}
+	var input domain.IncidentInput
+	if !decode(w, r, &input) {
+		return
+	}
+	event, err := h.svc.RecordIncident(r.Context(), id, principal.UserID, input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, event)
 }
 
 func (h *Handler) deliverUnits(w http.ResponseWriter, r *http.Request) {

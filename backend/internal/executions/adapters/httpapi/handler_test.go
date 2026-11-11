@@ -56,6 +56,12 @@ func (routeRepo) ListDeliveries(context.Context, int64) ([]domain.DeliveryReceip
 func (routeRepo) ListFinishedStock(context.Context, domain.FinishedStockFilter) ([]domain.FinishedStockRow, int, error) {
 	return []domain.FinishedStockRow{}, 0, nil
 }
+func (routeRepo) RecordIncident(context.Context, int64, string, domain.IncidentInput) (domain.ExecutionEvent, error) {
+	return domain.ExecutionEvent{}, nil
+}
+func (routeRepo) ListEvents(context.Context, int64) ([]domain.ExecutionEvent, error) {
+	return []domain.ExecutionEvent{}, nil
+}
 func (routeRepo) ListAssignableUsers(context.Context) ([]domain.AssignableUser, error) {
 	return []domain.AssignableUser{{ID: "active-user", Name: "Active User"}}, nil
 }
@@ -116,6 +122,27 @@ func TestFinishedStockListRequiresReadPermissionAndValidFilter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			res := httptest.NewRecorder()
 			routeHandler(tt.permissions).ServeHTTP(res, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if res.Code != tt.want {
+				t.Fatalf("status = %d, want %d; body=%s", res.Code, tt.want, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestExecutionEventRoutesRequireRespectivePermissions(t *testing.T) {
+	for _, tt := range []struct {
+		name, method, path, body string
+		permissions              []string
+		want                     int
+	}{
+		{name: "timeline denied", method: http.MethodGet, path: "/executions/1/events", want: http.StatusForbidden},
+		{name: "timeline readable", method: http.MethodGet, path: "/executions/1/events", permissions: []string{"executions:read"}, want: http.StatusOK},
+		{name: "incident denied", method: http.MethodPost, path: "/executions/1/events", permissions: []string{"executions:read"}, want: http.StatusForbidden},
+		{name: "incident validates body", method: http.MethodPost, path: "/executions/1/events", body: `{}`, permissions: []string{"executions:write"}, want: http.StatusUnprocessableEntity},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			res := httptest.NewRecorder()
+			routeHandler(tt.permissions).ServeHTTP(res, httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body)))
 			if res.Code != tt.want {
 				t.Fatalf("status = %d, want %d; body=%s", res.Code, tt.want, res.Body.String())
 			}

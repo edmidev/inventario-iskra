@@ -88,6 +88,12 @@ func (f *executionRepoFake) ListDeliveries(context.Context, int64) ([]domain.Del
 func (f *executionRepoFake) ListFinishedStock(context.Context, domain.FinishedStockFilter) ([]domain.FinishedStockRow, int, error) {
 	return []domain.FinishedStockRow{}, 0, nil
 }
+func (f *executionRepoFake) RecordIncident(context.Context, int64, string, domain.IncidentInput) (domain.ExecutionEvent, error) {
+	return domain.ExecutionEvent{}, nil
+}
+func (f *executionRepoFake) ListEvents(context.Context, int64) ([]domain.ExecutionEvent, error) {
+	return []domain.ExecutionEvent{}, nil
+}
 
 func (f *executionRepoFake) ListAssignableUsers(context.Context) ([]domain.AssignableUser, error) {
 	return nil, nil
