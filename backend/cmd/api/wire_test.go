@@ -238,11 +238,11 @@ func TestRealPortsReportSaveTimeErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = svc.Create(ctx, e.userID, purchasingdomain.Input{SupplierID: e.supplier, Currency: purchasingdomain.USD, Lines: []purchasingdomain.LineInput{
-		{ItemID: asset.ID, Quantity: 1},
-		{ItemID: "00000000-0000-0000-0000-000000000000", Quantity: 1},
-		{NewItem: &purchasingdomain.NewItem{Description: "x", CategoryID: 9999, Kind: "asset"}, Quantity: 1},
-		{NewItem: &purchasingdomain.NewItem{Description: "y", CategoryID: e.conCat, Kind: "consumable"}, Quantity: 1},
-		{NewItem: &purchasingdomain.NewItem{Description: "z", CategoryID: e.lapCat, Kind: "asset", Unit: "u"}, Quantity: 1},
+		{ItemID: asset.ID, Quantity: 1 * 1000},
+		{ItemID: "00000000-0000-0000-0000-000000000000", Quantity: 1 * 1000},
+		{NewItem: &purchasingdomain.NewItem{Description: "x", CategoryID: 9999, Kind: "asset"}, Quantity: 1 * 1000},
+		{NewItem: &purchasingdomain.NewItem{Description: "y", CategoryID: e.conCat, Kind: "consumable"}, Quantity: 1 * 1000},
+		{NewItem: &purchasingdomain.NewItem{Description: "z", CategoryID: e.lapCat, Kind: "asset", Unit: "u"}, Quantity: 1 * 1000},
 	}})
 	var ve *purchasingdomain.ValidationError
 	if !errors.As(err, &ve) {
